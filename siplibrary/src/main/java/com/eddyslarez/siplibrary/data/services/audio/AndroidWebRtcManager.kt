@@ -1052,14 +1052,14 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
     /**
      * Registra un listener para capturar audio durante llamadas
      */
-    fun addAudioCaptureListener(listener: (ByteArray) -> Unit) {
+    override fun addAudioCaptureListener(listener: (ByteArray) -> Unit) {
         audioCaptureListeners.add(listener)
     }
 
     /**
      * Remueve un listener de captura de audio
      */
-    fun removeAudioCaptureListener(listener: (ByteArray) -> Unit) {
+    override fun removeAudioCaptureListener(listener: (ByteArray) -> Unit) {
         audioCaptureListeners.remove(listener)
     }
 
@@ -1119,7 +1119,7 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
     /**
      * Inyecta audio traducido al stream de la llamada
      */
-    suspend fun injectTranslatedAudio(audioData: ByteArray) {
+    override fun injectTranslatedAudio(audioData: ByteArray) {
         if (!audioInjectionEnabled.get()) return
 
         try {
@@ -1151,14 +1151,14 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
     /**
      * Habilita/deshabilita la inyección de audio traducido
      */
-    fun setAudioInjectionEnabled(enabled: Boolean) {
+    override fun setAudioInjectionEnabled(enabled: Boolean) {
         audioInjectionEnabled.set(enabled)
     }
 
     /**
      * Obtiene el estado actual de la inyección de audio
      */
-    fun isAudioInjectionEnabled(): Boolean {
+    override fun isAudioInjectionEnabled(): Boolean {
         return audioInjectionEnabled.get()
     }
 }

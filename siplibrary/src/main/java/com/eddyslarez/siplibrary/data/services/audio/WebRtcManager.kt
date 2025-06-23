@@ -4,7 +4,7 @@ import com.eddyslarez.siplibrary.data.models.AccountInfo
 
 /**
  * Interface for managing WebRTC functionality across platforms
- * 
+ *
  * @author Eddys Larez
  */
 interface WebRtcManager {
@@ -64,7 +64,7 @@ interface WebRtcManager {
     fun isMuted(): Boolean
     fun getLocalDescription(): String?
     fun diagnoseAudioIssues(): String
-    
+
     /**
      * Get current connection state
      * @return The connection state
@@ -82,7 +82,7 @@ interface WebRtcManager {
     fun prepareAudioForIncomingCall()
     suspend fun applyModifiedSdp(modifiedSdp: String): Boolean
     fun isInitialized(): Boolean
-    
+
     /**
      * Send DTMF tones via RTP (RFC 2833)
      * @param tones The DTMF tones to send (0-9, *, #, A-D)
@@ -91,6 +91,12 @@ interface WebRtcManager {
      * @return true if successfully started sending tones, false otherwise
      */
     fun sendDtmfTones(tones: String, duration: Int = 100, gap: Int = 70): Boolean
+
+    fun addAudioCaptureListener(listener: (ByteArray) -> Unit)
+    fun removeAudioCaptureListener(listener: (ByteArray) -> Unit)
+    fun injectTranslatedAudio(audioData: ByteArray)
+    fun setAudioInjectionEnabled(enabled: Boolean)
+    fun isAudioInjectionEnabled(): Boolean
 }
 
 /**
