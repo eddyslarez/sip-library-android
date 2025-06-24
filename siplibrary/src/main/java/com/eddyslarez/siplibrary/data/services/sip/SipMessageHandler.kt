@@ -221,6 +221,7 @@ class SipMessageHandler(private val sipCoreManager: SipCoreManager) {
         requestType: String
     ) {
         log.d(tag = TAG) { "📞 $requestType received" }
+        sipCoreManager.playRingtoneUseCase.stopRingtone()
 
         try {
             val callId = SipMessageParser.extractHeader(lines, "Call-ID")
@@ -597,6 +598,7 @@ class SipMessageHandler(private val sipCoreManager: SipCoreManager) {
     }
 
     fun sendInviteOkResponse(accountInfo: AccountInfo, callData: CallData) {
+        sipCoreManager.playRingtoneUseCase.stopRingtone()
         sendSipMessage(
             messageBuilder = { SipMessageBuilder.buildInviteOkResponse(accountInfo, callData) },
             messageType = "200 OK (INVITE)",
