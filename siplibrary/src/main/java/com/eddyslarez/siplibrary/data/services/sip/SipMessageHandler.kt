@@ -19,7 +19,7 @@ import kotlinx.datetime.Clock
  *
  * @author Eddys Larez
  */
-class SipMessageHandler(private val sipCoreManager: SipCoreManager) {
+class SipMessageHandler internal constructor(private val sipCoreManager: SipCoreManager) {
 
     private var callInitiationTimeout: Job? = null
     private val inviteRetryMap = mutableMapOf<String, Int>()
