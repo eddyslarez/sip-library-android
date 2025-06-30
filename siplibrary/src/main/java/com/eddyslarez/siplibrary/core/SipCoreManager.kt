@@ -68,9 +68,7 @@ class SipCoreManager private constructor(
     val webRtcManager = WebRtcManagerFactory.createWebRtcManager(application)
     private val platformRegistration = PlatformRegistration(application)
     private val callHoldManager = CallHoldManager(webRtcManager)
-    private val messageHandler = SipMessageHandler(this).apply {
-        onCallTerminated = ::handleCallTermination
-    }
+
 
     companion object {
         private const val TAG = "SipCoreManager"
@@ -91,6 +89,7 @@ class SipCoreManager private constructor(
             )
         }
     }
+    private val messageHandler = SipMessageHandler(this)
 
     fun userAgent(): String = config.userAgent
 
