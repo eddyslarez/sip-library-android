@@ -1,9 +1,7 @@
 package com.eddyslarez.siplibrary.data.services.audio
 
-import androidx.compose.runtime.Immutable
 
 
-@Immutable
 data class AudioUnit(
     val type: AudioUnitTypes,
     val capability: AudioUnitCompatibilities,
@@ -30,7 +28,6 @@ enum class AudioUnitCompatibilities {
     PLAY, RECORD, ALL, UNKNOWN
 }
 
-@Immutable
 data class AudioDevice(
     val name: String,                    // Display name
     val descriptor: String,              // Native identifier
