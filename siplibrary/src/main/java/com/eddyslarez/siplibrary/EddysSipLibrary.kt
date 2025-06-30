@@ -371,6 +371,33 @@ class EddysSipLibrary private constructor() {
     }
 
     // === MÉTODOS EXISTENTES (mantener compatibilidad) ===
+    /**
+     * Cambia el dispositivo de audio (entrada o salida) durante una llamada.
+     */
+    fun changeAudioDevice(device: AudioDevice) {
+        sipCoreManager?.changeAudioDevice(device)
+    }
+
+    /**
+     * Refresca la lista de dispositivos de audio disponibles.
+     */
+    fun refreshAudioDevices() {
+        sipCoreManager?.refreshAudioDevices()
+    }
+
+    /**
+     * Devuelve el par de dispositivos de audio actuales (input, output).
+     */
+    fun getCurrentAudioDevices(): Pair<AudioDevice?, AudioDevice?> {
+        return sipCoreManager?.getCurrentDevices() ?: Pair(null, null)
+    }
+
+    /**
+     * Devuelve todos los dispositivos de audio disponibles (inputs, outputs).
+     */
+    fun getAvailableAudioDevices(): Pair<List<AudioDevice>, List<AudioDevice>> {
+        return sipCoreManager?.getAudioDevices() ?: Pair(emptyList(), emptyList())
+    }
 
     fun registerAccount(
         username: String,

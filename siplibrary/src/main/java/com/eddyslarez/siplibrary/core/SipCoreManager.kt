@@ -5,6 +5,7 @@ import android.content.Context
 import com.eddyslarez.siplibrary.EddysSipLibrary
 import com.eddyslarez.siplibrary.data.models.*
 import com.eddyslarez.siplibrary.data.services.audio.AudioDevice
+import com.eddyslarez.siplibrary.data.services.audio.AudioDeviceManager
 import com.eddyslarez.siplibrary.data.services.audio.CallHoldManager
 import com.eddyslarez.siplibrary.data.services.audio.PlayRingtoneUseCase
 import com.eddyslarez.siplibrary.data.services.audio.WebRtcConnectionState
@@ -29,7 +30,7 @@ import kotlin.random.Random
 
 /**
  * Gestor principal del core SIP - Adaptado para Android
- * 
+ *
  * @author Eddys Larez
  */
 class SipCoreManager private constructor(
@@ -64,17 +65,19 @@ class SipCoreManager private constructor(
     private var registrationCallbackForCall: ((AccountInfo, Boolean) -> Unit)? = null
     private var connectionRetryCount = 0
     private val maxRetryAttempts = 5
+
     // WebRTC manager and other managers
     val webRtcManager = WebRtcManagerFactory.createWebRtcManager(application)
     private val platformRegistration = PlatformRegistration(application)
     private val callHoldManager = CallHoldManager(webRtcManager)
+    private val audioDeviceManager = AudioDeviceManager()
 
 
     companion object {
         private const val TAG = "SipCoreManager"
         private const val WEBSOCKET_PROTOCOL = "sip"
         private const val REGISTRATION_CHECK_INTERVAL_MS = 30 * 1000L
-        
+
         fun createInstance(
             application: Application,
             config: EddysSipLibrary.SipConfig
@@ -89,6 +92,7 @@ class SipCoreManager private constructor(
             )
         }
     }
+
     private val messageHandler = SipMessageHandler(this)
 
     fun userAgent(): String = config.userAgent
@@ -99,7 +103,7 @@ class SipCoreManager private constructor(
 
     fun initialize() {
         log.d(tag = TAG) { "Initializing SIP Core" }
-        
+
         webRtcManager.initialize()
         setupWebRtcEventListener()
         setupPlatformLifecycleObservers()
@@ -134,6 +138,55 @@ class SipCoreManager private constructor(
         })
     }
 
+    /**
+     * Get available audio devices
+     */
+    fun getAudioDevices(): Pair<List<AudioDevice>, List<AudioDevice>> {
+        return webRtcManager.getAllAudioDevices()
+    }
+
+    /**
+     * Get current audio devices
+     */
+    fun getCurrentDevices(): Pair<AudioDevice?, AudioDevice?> {
+        return Pair(
+            webRtcManager.getCurrentInputDevice(),
+            webRtcManager.getCurrentOutputDevice()
+        )
+    }
+
+    /**
+     * Refresh the list of available audio devices
+     */
+    fun refreshAudioDevices() {
+        val (inputs, outputs) = webRtcManager.getAllAudioDevices()
+        audioDeviceManager.updateDevices(inputs, outputs)
+    }
+
+    /**
+     * Change audio device during call
+     */
+    fun changeAudioDevice(device: AudioDevice) {
+        CoroutineScope(Dispatchers.IO).launch {
+            val isInput = audioDeviceManager.inputDevices.value.contains(device)
+
+            val success = if (isInput) {
+                webRtcManager.changeAudioInputDeviceDuringCall(device)
+            } else {
+                webRtcManager.changeAudioOutputDeviceDuringCall(device)
+            }
+
+            if (success) {
+                if (isInput) {
+                    audioDeviceManager.selectInputDevice(device)
+                } else {
+                    audioDeviceManager.selectOutputDevice(device)
+                }
+            }
+        }
+    }
+
+
     private fun setupPlatformLifecycleObservers() {
         platformRegistration.setupNotificationObservers(object : AppLifecycleListener {
             override fun onEvent(event: AppLifecycleEvent) {
@@ -142,10 +195,12 @@ class SipCoreManager private constructor(
                         isAppInBackground = true
                         refreshAllRegistrationsWithNewUserAgent()
                     }
+
                     AppLifecycleEvent.EnterForeground -> {
                         isAppInBackground = false
                         refreshAllRegistrationsWithNewUserAgent()
                     }
+
                     else -> {}
                 }
             }
@@ -175,7 +230,7 @@ class SipCoreManager private constructor(
         if (callState != CallState.NONE && callState != CallState.ENDED) {
             return
         }
-        
+
         activeAccounts.values.forEach { accountInfo ->
             if (accountInfo.isRegistered) {
                 accountInfo.userAgent = userAgent()
@@ -206,7 +261,7 @@ class SipCoreManager private constructor(
 
     private fun reconnectAccount(accountInfo: AccountInfo) {
         if (reconnectionInProgress) return
-        
+
         reconnectionInProgress = true
         try {
             accountInfo.webSocketClient?.close()
@@ -361,7 +416,7 @@ class SipCoreManager private constructor(
         connectionRetryCount++
         val delayMs = calculateBackoffDelay(connectionRetryCount)
 
-        log.d(tag =TAG) { "Scheduling reconnection attempt $connectionRetryCount/$maxRetryAttempts in ${delayMs}ms" }
+        log.d(tag = TAG) { "Scheduling reconnection attempt $connectionRetryCount/$maxRetryAttempts in ${delayMs}ms" }
 
         CoroutineScope(Dispatchers.IO).launch {
             delay(delayMs)
@@ -457,6 +512,7 @@ class SipCoreManager private constructor(
             error.message?.contains("timeout") == true -> {
                 forceReconnectAccount(accountInfo)
             }
+
             else -> {
                 reconnectAccount(accountInfo)
             }
@@ -466,6 +522,7 @@ class SipCoreManager private constructor(
     private fun forceReconnectAccount(accountInfo: AccountInfo) {
         reconnectAccount(accountInfo)
     }
+
     fun unregisterAllAccounts() {
         log.d(tag = TAG) { "Starting complete unregister and shutdown of all accounts" }
 
@@ -624,10 +681,12 @@ class SipCoreManager private constructor(
                 messageHandler.sendBye(accountInfo, callData)
                 callHistoryManager.addCallLog(callData, CallTypes.SUCCESS, endTime)
             }
+
             CallState.CALLING, CallState.RINGING, CallState.OUTGOING -> {
                 messageHandler.sendCancel(accountInfo, callData)
                 callHistoryManager.addCallLog(callData, CallTypes.ABORTED, endTime)
             }
+
             else -> {}
         }
 
@@ -643,8 +702,9 @@ class SipCoreManager private constructor(
         val accountInfo = currentAccountInfo ?: return
         val callData = accountInfo.currentCallData ?: return
 
-        if (callData.direction != CallDirections.INCOMING || 
-            (callState != CallState.INCOMING && callState != CallState.RINGING)) {
+        if (callData.direction != CallDirections.INCOMING ||
+            (callState != CallState.INCOMING && callState != CallState.RINGING)
+        ) {
             return
         }
 
@@ -680,7 +740,8 @@ class SipCoreManager private constructor(
         val callData = accountInfo.currentCallData ?: return
 
         if (callData.direction != CallDirections.INCOMING ||
-            (callState != CallState.INCOMING && callState != CallState.RINGING)) {
+            (callState != CallState.INCOMING && callState != CallState.RINGING)
+        ) {
             return
         }
 
@@ -726,11 +787,11 @@ class SipCoreManager private constructor(
 
     fun sendDtmfSequence(digits: String, duration: Int = 160): Boolean {
         if (digits.isEmpty()) return false
-        
+
         digits.forEach { digit ->
             sendDtmf(digit, duration)
         }
-        
+
         return true
     }
 
@@ -827,7 +888,7 @@ class SipCoreManager private constructor(
     fun callLogs(): List<CallLog> = callHistoryManager.getAllCallLogs()
     fun getCallStatistics() = callHistoryManager.getCallStatistics()
     fun getMissedCalls(): List<CallLog> = callHistoryManager.getMissedCalls()
-    fun getCallLogsForNumber(phoneNumber: String): List<CallLog> = 
+    fun getCallLogsForNumber(phoneNumber: String): List<CallLog> =
         callHistoryManager.getCallLogsForNumber(phoneNumber)
 
     fun getRegistrationState(): RegistrationState = registrationState
@@ -836,9 +897,9 @@ class SipCoreManager private constructor(
 
     fun isSipCoreManagerHealthy(): Boolean {
         return try {
-            webRtcManager.isInitialized() && 
-            activeAccounts.isNotEmpty() &&
-            !reconnectionInProgress
+            webRtcManager.isInitialized() &&
+                    activeAccounts.isNotEmpty() &&
+                    !reconnectionInProgress
         } catch (e: Exception) {
             false
         }
