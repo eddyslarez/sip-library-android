@@ -129,7 +129,7 @@ class SipCoreManager private constructor(
             }
 
             override fun onAudioDeviceChanged(device: AudioDevice?) {
-                log.d(tag = TAG) { "Audio device changed: ${device.name}" }
+                log.d(tag = TAG) { "Audio device changed: ${device?.name}" }
             }
         })
     }
