@@ -1,6 +1,7 @@
 package com.eddyslarez.siplibrary.data.services.audio
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.app.Application
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothClass
@@ -103,11 +104,13 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
     private fun setupAudioDeviceMonitoring() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             audioDeviceCallback = object : AudioDeviceCallback() {
+                @RequiresPermission(allOf = [Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.RECORD_AUDIO])
                 override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>) {
                     log.d(TAG) { "Audio devices added: ${addedDevices.size}" }
                     notifyDeviceChange()
                 }
 
+                @RequiresPermission(allOf = [Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.RECORD_AUDIO])
                 override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>) {
                     log.d(TAG) { "Audio devices removed: ${removedDevices.size}" }
                     notifyDeviceChange()
@@ -120,6 +123,7 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
     /**
      * Notify listeners about device changes
      */
+    @RequiresPermission(allOf = [Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.RECORD_AUDIO])
     private fun notifyDeviceChange() {
         try {
             val (inputs, outputs) = getAllAudioDevices()
@@ -971,7 +975,7 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     private fun hasBluetoothProfile(device: BluetoothDevice, profile: Int): Boolean {
         return try {
-            bluetoothAdapter?.getProfileConnectionState(profile) == BluetoothProfile.STATE_CONNECTED
+            bluetoothAdapter?.getProfileConnectionState(profile) == BluetoothAdapter.STATE_CONNECTED
         } catch (e: Exception) {
             false
         }
@@ -1975,6 +1979,7 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
     /**
      * Enhanced audio diagnostics
      */
+    @SuppressLint("MissingPermission")
     override fun diagnoseAudioIssues(): String {
         return buildString {
             appendLine("=== ENHANCED AUDIO DIAGNOSIS ===")
@@ -2134,6 +2139,7 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
     /**
      * Get devices by quality score
      */
+    @RequiresPermission(allOf = [Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.RECORD_AUDIO])
     fun getAudioDevicesByQuality(): Pair<List<AudioDevice>, List<AudioDevice>> {
         val (inputs, outputs) = getAllAudioDevices()
         return Pair(
@@ -2145,6 +2151,7 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
     /**
      * Get recommended device for optimal call quality
      */
+    @RequiresPermission(allOf = [Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.RECORD_AUDIO])
     fun getRecommendedAudioDevice(isOutput: Boolean): AudioDevice? {
         val (inputs, outputs) = getAudioDevicesByQuality()
         val devices = if (isOutput) outputs else inputs

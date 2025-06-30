@@ -24,6 +24,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.datetime.Clock
+import kotlin.math.pow
 import kotlin.random.Random
 
 /**
@@ -39,8 +40,12 @@ class SipCoreManager private constructor(
     val platformInfo: PlatformInfo,
     val settingsDataStore: SettingsDataStore,
 ) {
+    private var isRegistrationInProgress = false
+    private var healthCheckJob: Job? = null
+    private val registrationTimeout = 30000L
+    private var lastRegistrationAttempt = 0L
     private var sipCallbacks: EddysSipLibrary.SipCallbacks? = null
-
+    private var isShuttingDown = false
     val callHistoryManager = CallHistoryManager()
     private var registrationState = RegistrationState.NONE
     private val activeAccounts = HashMap<String, AccountInfo>()
@@ -56,7 +61,9 @@ class SipCoreManager private constructor(
     private val dtmfMutex = Mutex()
     var onCallTerminated: (() -> Unit)? = null
     var isCallFromPush = false
-
+    private var registrationCallbackForCall: ((AccountInfo, Boolean) -> Unit)? = null
+    private var connectionRetryCount = 0
+    private val maxRetryAttempts = 5
     // WebRTC manager and other managers
     val webRtcManager = WebRtcManagerFactory.createWebRtcManager(application)
     private val platformRegistration = PlatformRegistration(application)
@@ -161,7 +168,7 @@ class SipCoreManager private constructor(
         }
     }
 
-    private fun handleCallTermination() {
+    internal fun handleCallTermination() {
         onCallTerminated?.invoke()
     }
 
@@ -328,6 +335,114 @@ class SipCoreManager private constructor(
         })
     }
 
+    fun handleRegistrationError(accountInfo: AccountInfo, reason: String) {
+        log.e(tag = TAG) { "Registration failed for ${accountInfo.username}@${accountInfo.domain}: $reason" }
+
+        accountInfo.isRegistered = false
+        updateRegistrationState(RegistrationState.FAILED)
+
+        // Si hay un callback pendiente para llamada, ejecutarlo con fallo
+        registrationCallbackForCall?.invoke(accountInfo, false)
+
+        // Manejar reintento de registro normal
+        handleRegistrationFailure()
+    }
+
+    private fun handleRegistrationFailure() {
+        if (isShuttingDown) {
+            log.d(tag = TAG) { "Skipping registration failure handling - shutting down" }
+            return
+        }
+
+        if (connectionRetryCount >= maxRetryAttempts) {
+            log.e(tag = TAG) { "Max retry attempts reached - stopping automatic reconnection" }
+            return
+        }
+
+        connectionRetryCount++
+        val delayMs = calculateBackoffDelay(connectionRetryCount)
+
+        log.d(tag =TAG) { "Scheduling reconnection attempt $connectionRetryCount/$maxRetryAttempts in ${delayMs}ms" }
+
+        CoroutineScope(Dispatchers.IO).launch {
+            delay(delayMs)
+            attemptReconnectionForAllAccounts()
+        }
+    }
+
+    private fun attemptReconnectionForAllAccounts() {
+        if (isShuttingDown) {
+            log.d(tag = TAG) { "Skipping reconnection - shutting down" }
+            return
+        }
+        log.d(tag = TAG) { "Attempting reconnection for all accounts" }
+
+        activeAccounts.values.forEach { accountInfo ->
+            if (!accountInfo.isRegistered || accountInfo.webSocketClient?.isConnected() != true) {
+                log.d(tag = TAG) { "Reconnecting account: ${accountInfo.username}" }
+                reconnectAccountImproved(accountInfo)
+            }
+        }
+    }
+
+    private fun reconnectAccountImproved(accountInfo: AccountInfo) {
+        if (isShuttingDown) {
+            log.d(tag = TAG) { "Skipping reconnection - shutting down" }
+            return
+        }
+
+        if (reconnectionInProgress) {
+            log.d(tag = TAG) { "Reconnection already in progress for ${accountInfo.username}" }
+            return
+        }
+
+        reconnectionInProgress = true
+        updateRegistrationState(RegistrationState.IN_PROGRESS)
+
+        log.d(tag = TAG) { "Starting improved reconnection for: ${accountInfo.username}" }
+
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                // 1. Cerrar conexión existente limpiamente
+                accountInfo.webSocketClient?.close()
+                accountInfo.isRegistered = false
+
+                // 2. Esperar un momento para que se liberen recursos
+                delay(1000)
+
+                // 3. Actualizar información de la cuenta
+                accountInfo.userAgent = userAgent()
+
+                // 4. Crear nueva conexión WebSocket
+                val headers = createHeaders()
+                val newWebSocketClient = createWebSocketClient(accountInfo, headers)
+                accountInfo.webSocketClient = newWebSocketClient
+
+                log.d(tag = TAG) { "Reconnection initiated for ${accountInfo.username}" }
+
+            } catch (e: Exception) {
+                log.e(tag = TAG) { "Error during improved reconnection: ${e.message}" }
+                updateRegistrationState(RegistrationState.FAILED)
+                reconnectionInProgress = false
+
+                // Programar otro intento si no hemos alcanzado el máximo
+                if (connectionRetryCount < maxRetryAttempts) {
+                    CoroutineScope(Dispatchers.IO).launch {
+                        delay(5000) // Esperar 5 segundos antes del siguiente intento
+                        reconnectAccountImproved(accountInfo)
+                    }
+                }
+            }
+        }
+    }
+
+    private fun calculateBackoffDelay(attempt: Int): Long {
+        val baseDelay = 2000L // 2 segundos base
+        val maxDelay = 30000L // máximo 30 segundos
+        val delay = (2.0.pow((attempt - 1).toDouble()) * baseDelay).toLong()
+        return minOf(delay, maxDelay)
+    }
+
     private fun handleUnexpectedDisconnection(accountInfo: AccountInfo) {
         if (!reconnectionInProgress) {
             CoroutineScope(Dispatchers.IO).launch {
@@ -351,6 +466,111 @@ class SipCoreManager private constructor(
 
     private fun forceReconnectAccount(accountInfo: AccountInfo) {
         reconnectAccount(accountInfo)
+    }
+    fun unregisterAllAccounts() {
+        log.d(tag = TAG) { "Starting complete unregister and shutdown of all accounts" }
+
+        // CRÍTICO: Marcar como shutting down PRIMERO
+        isShuttingDown = true
+
+        try {
+            // 1. Detener health check inmediatamente
+            healthCheckJob?.cancel()
+            healthCheckJob = null
+            log.d(tag = TAG) { "Health check stopped" }
+
+            // 3. Terminar llamada activa si existe
+            if (callState != CallState.NONE && callState != CallState.ENDED) {
+                log.d(tag = TAG) { "Terminating active call during unregister" }
+                try {
+                    webRtcManager.dispose()
+                    callState = CallState.ENDED
+                    CallStateManager.updateCallState(CallState.ENDED)
+                } catch (e: Exception) {
+                    log.e(tag = TAG) { "Error terminating call: ${e.message}" }
+                }
+            }
+
+            // 4. Unregister todas las cuentas
+            if (activeAccounts.isNotEmpty()) {
+                log.d(tag = TAG) { "Unregistering ${activeAccounts.size} accounts" }
+
+                val accountsToUnregister = activeAccounts.toMap()
+
+                accountsToUnregister.values.forEach { accountInfo ->
+                    try {
+                        log.d(tag = TAG) { "Unregistering account: ${accountInfo.username}@${accountInfo.domain}" }
+
+                        // Detener timers del WebSocket
+                        accountInfo.webSocketClient?.let { webSocket ->
+                            webSocket.stopPingTimer()
+                            webSocket.stopRegistrationRenewalTimer()
+                        }
+
+                        // Enviar unregister si está registrada
+                        if (accountInfo.isRegistered && accountInfo.webSocketClient?.isConnected() == true) {
+                            messageHandler.sendUnregister(accountInfo)
+                            // Dar tiempo para que se envíe el mensaje
+//                            Thread.sleep(500)
+                        }
+
+                        // Cerrar WebSocket
+                        accountInfo.webSocketClient?.close(1000, "User logout")
+                        accountInfo.webSocketClient = null
+
+                        // Marcar como no registrada
+                        accountInfo.isRegistered = false
+                        accountInfo.resetCallState()
+
+                        log.d(tag = TAG) { "Successfully unregistered: ${accountInfo.username}@${accountInfo.domain}" }
+
+                    } catch (e: Exception) {
+                        log.e(tag = TAG) { "Error unregistering account ${accountInfo.username}@${accountInfo.domain}: ${e.message}" }
+                    }
+                }
+            }
+
+            // 5. Limpiar todas las estructuras de datos
+            activeAccounts.clear()
+            currentAccountInfo = null
+
+            // 6. Limpiar WebRTC completamente
+            try {
+                webRtcManager.setListener(null)
+                webRtcManager.dispose()
+                log.d(tag = TAG) { "WebRTC disposed" }
+            } catch (e: Exception) {
+                log.e(tag = TAG) { "Error disposing WebRTC: ${e.message}" }
+            }
+
+            // 7. Resetear todos los estados
+            callState = CallState.NONE
+            callStartTimeMillis = 0
+            isAppInBackground = false
+            reconnectionInProgress = false
+            isRegistrationInProgress = false
+            connectionRetryCount = 0
+            lastConnectionCheck = 0L
+            lastRegistrationAttempt = 0L
+
+            // 8. Limpiar colas
+            clearDtmfQueue()
+
+            // 9. Actualizar estados
+            updateRegistrationState(RegistrationState.CLEARED)
+            CallStateManager.updateCallState(CallState.NONE)
+
+            // 10. Limpiar callbacks
+//            ackListener = null
+//            onCallTerminated = null
+
+            log.d(tag = TAG) { "Complete unregister and shutdown successful" }
+
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error during complete unregister: ${e.message}" }
+        }
+
+        // IMPORTANTE: NO llamar shutdown() aquí ya que ya hicimos todo
     }
 
     fun makeCall(phoneNumber: String, sipName: String, domain: String) {
