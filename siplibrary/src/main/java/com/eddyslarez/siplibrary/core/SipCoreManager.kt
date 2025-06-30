@@ -6,7 +6,7 @@ import com.eddyslarez.siplibrary.data.models.*
 import com.eddyslarez.siplibrary.data.services.audio.AudioDevice
 import com.eddyslarez.siplibrary.data.services.audio.AudioDeviceManager
 import com.eddyslarez.siplibrary.data.services.audio.CallHoldManager
-import com.eddyslarez.siplibrary.data.services.audio.PlayRingtoneUseCase
+import com.eddyslarez.siplibrary.data.services.audio.AudioManager
 import com.eddyslarez.siplibrary.data.services.audio.WebRtcConnectionState
 import com.eddyslarez.siplibrary.data.services.audio.WebRtcEventListener
 import com.eddyslarez.siplibrary.data.services.audio.WebRtcManagerFactory
@@ -32,7 +32,7 @@ import kotlin.math.pow
 class SipCoreManager private constructor(
     private val application: Application,
     private val config: EddysSipLibrary.SipConfig,
-    val playRingtoneUseCase: PlayRingtoneUseCase,
+    val audioManager: AudioManager,
     val windowManager: WindowManager,
     val platformInfo: PlatformInfo,
     val settingsDataStore: SettingsDataStore,
@@ -81,7 +81,7 @@ class SipCoreManager private constructor(
             return SipCoreManager(
                 application = application,
                 config = config,
-                playRingtoneUseCase = PlayRingtoneUseCase(application),
+                audioManager = AudioManager(application),
                 windowManager = WindowManager(),
                 platformInfo = PlatformInfo(),
                 settingsDataStore = SettingsDataStore(application)

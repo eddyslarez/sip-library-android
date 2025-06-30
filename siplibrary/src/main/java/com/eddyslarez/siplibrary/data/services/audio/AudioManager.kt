@@ -5,29 +5,52 @@ import android.media.AudioAttributes
 import android.media.AudioManager
 import android.media.MediaPlayer
 import android.media.RingtoneManager
+import android.net.Uri
+import android.os.Build
+import com.eddyslarez.siplibrary.R
 import com.eddyslarez.siplibrary.utils.log
+import androidx.core.net.toUri
 
 /**
  * Use case for playing ringtones during calls
- * 
+ *
  * @author Eddys Larez
  */
-class PlayRingtoneUseCase(private val application: Application) {
-    
-    private val TAG = "PlayRingtoneUseCase"
+class AudioManager(private val application: Application) {
+
+    private val TAG = "AudioManager"
     private var incomingRingtone: MediaPlayer? = null
     private var outgoingRingtone: MediaPlayer? = null
+
+    private var incomingRingtoneUri: Uri? = null
+    private var outgoingRingtoneUri: Uri? = null
+
+    init {
+        // Valores por defecto (archivos locales en res/raw)
+        incomingRingtoneUri = "android.resource://${application.packageName}/${R.raw.call}".toUri()
+        outgoingRingtoneUri =
+            "android.resource://${application.packageName}/${R.raw.ringback}".toUri()
+    }
+
+    fun setIncomingRingtone(uri: Uri) {
+        incomingRingtoneUri = uri
+    }
+
+    fun setOutgoingRingtone(uri: Uri) {
+        outgoingRingtoneUri = uri
+    }
 
     fun playRingtone() {
         try {
             stopRingtone()
-            
-            val ringtoneUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
-            
+
+            val uri =
+                incomingRingtoneUri ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
+
             incomingRingtone = MediaPlayer().apply {
-                setDataSource(application, ringtoneUri)
-                
-                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
+                setDataSource(application, uri)
+
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                     setAudioAttributes(
                         AudioAttributes.Builder()
                             .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
@@ -36,14 +59,14 @@ class PlayRingtoneUseCase(private val application: Application) {
                     )
                 } else {
                     @Suppress("DEPRECATION")
-                    setAudioStreamType(AudioManager.STREAM_RING)
+                    setAudioStreamType(android.media.AudioManager.STREAM_RING)
                 }
-                
+
                 isLooping = true
                 prepare()
                 start()
             }
-            
+
             log.d(tag = TAG) { "Incoming ringtone started" }
         } catch (e: Exception) {
             log.e(tag = TAG) { "Error playing incoming ringtone: ${e.message}" }
@@ -53,10 +76,14 @@ class PlayRingtoneUseCase(private val application: Application) {
     fun playOutgoingRingtone() {
         try {
             stopOutgoingRingtone()
-            
-            // Use a simple beep tone for outgoing calls
+
+            val uri = outgoingRingtoneUri
+                ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+
             outgoingRingtone = MediaPlayer().apply {
-                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
+                setDataSource(application, uri)
+
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                     setAudioAttributes(
                         AudioAttributes.Builder()
                             .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
@@ -65,19 +92,14 @@ class PlayRingtoneUseCase(private val application: Application) {
                     )
                 } else {
                     @Suppress("DEPRECATION")
-                    setAudioStreamType(AudioManager.STREAM_VOICE_CALL)
+                    setAudioStreamType(android.media.AudioManager.STREAM_VOICE_CALL)
                 }
-                
-                // You can set a custom outgoing ringtone here
-                // For now, we'll use the default notification sound
-                val notificationUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
-                setDataSource(application, notificationUri)
-                
+
                 isLooping = true
                 prepare()
                 start()
             }
-            
+
             log.d(tag = TAG) { "Outgoing ringtone started" }
         } catch (e: Exception) {
             log.e(tag = TAG) { "Error playing outgoing ringtone: ${e.message}" }
@@ -86,11 +108,9 @@ class PlayRingtoneUseCase(private val application: Application) {
 
     fun stopRingtone() {
         try {
-            incomingRingtone?.let { player ->
-                if (player.isPlaying) {
-                    player.stop()
-                }
-                player.release()
+            incomingRingtone?.let {
+                if (it.isPlaying) it.stop()
+                it.release()
             }
             incomingRingtone = null
             log.d(tag = TAG) { "Incoming ringtone stopped" }
@@ -101,11 +121,9 @@ class PlayRingtoneUseCase(private val application: Application) {
 
     fun stopOutgoingRingtone() {
         try {
-            outgoingRingtone?.let { player ->
-                if (player.isPlaying) {
-                    player.stop()
-                }
-                player.release()
+            outgoingRingtone?.let {
+                if (it.isPlaying) it.stop()
+                it.release()
             }
             outgoingRingtone = null
             log.d(tag = TAG) { "Outgoing ringtone stopped" }

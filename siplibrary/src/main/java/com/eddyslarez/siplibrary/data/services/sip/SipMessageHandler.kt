@@ -26,6 +26,7 @@ class SipMessageHandler(private val sipCoreManager: SipCoreManager) {
     private val retryJobs = mutableMapOf<String, Job>()
 
     private fun terminateCall() {
+        sipCoreManager.audioManager.stopAllRingtones()
         sipCoreManager.handleCallTermination()
     }
 
@@ -240,7 +241,7 @@ class SipMessageHandler(private val sipCoreManager: SipCoreManager) {
         sipCoreManager.callState = CallState.INCOMING
 
         CoroutineScope(Dispatchers.IO).launch {
-            sipCoreManager. playRingtoneUseCase.playRingtone()
+            sipCoreManager. audioManager.playRingtone()
         }
 
         sipCoreManager.windowManager.bringToFront()
@@ -305,7 +306,7 @@ class SipMessageHandler(private val sipCoreManager: SipCoreManager) {
                     sipCoreManager.callHistoryManager.addCallLog(currentCallData, callType, endTime)
                 }
             }
-            sipCoreManager.playRingtoneUseCase.stopRingtone()
+            sipCoreManager.audioManager.stopAllRingtones()
 
             // Common termination cleanup
             CallStateManager.updateCallState(CallState.ENDED)
@@ -342,7 +343,7 @@ class SipMessageHandler(private val sipCoreManager: SipCoreManager) {
                 log.d(tag = TAG) { "ACK received for non-active call, ignoring" }
                 return
             }
-sipCoreManager.playRingtoneUseCase.stopRingtone()
+sipCoreManager.audioManager.stopAllRingtones()
             //    if (sipCoreManager.callState == CallState.ACCEPTING) {
             sipCoreManager.callState = CallState.CONNECTED
             CallStateManager.updateCallState(CallState.CONNECTED)
@@ -402,7 +403,7 @@ sipCoreManager.playRingtoneUseCase.stopRingtone()
                     clearRetryData(callId)
                 }
                 handleInviteOk(message, accountInfo, lines)
-                sipCoreManager.playRingtoneUseCase.stopRingtone()
+                sipCoreManager.audioManager.stopAllRingtones()
             }
 
             CODE_UNAUTHORIZED -> handleAuthenticationChallenge(accountInfo, message, lines)
@@ -623,7 +624,7 @@ sipCoreManager.playRingtoneUseCase.stopRingtone()
         }
 
         sendAck(accountInfo, callData)
-        sipCoreManager.playRingtoneUseCase.stopRingtone()
+        sipCoreManager.audioManager.stopAllRingtones()
         CallStateManager.updateCallState(CallState.CONNECTED)
         sipCoreManager.callStartTimeMillis = Clock.System.now().toEpochMilliseconds()
     }
@@ -636,7 +637,7 @@ sipCoreManager.playRingtoneUseCase.stopRingtone()
             val ackMessage = SipMessageBuilder.buildAckFor487Response(accountInfo, callData, lines)
             accountInfo.webSocketClient?.send(ackMessage)
         }
-        sipCoreManager.playRingtoneUseCase.stopRingtone()
+        sipCoreManager.audioManager.stopAllRingtones()
         CallStateManager.updateCallState(CallState.ENDED)
         accountInfo.resetCallState()
     }
@@ -649,7 +650,7 @@ sipCoreManager.playRingtoneUseCase.stopRingtone()
     private fun handleRinging() {
         CallStateManager.updateCallState(CallState.OUTGOING)
         sipCoreManager.callState = CallState.OUTGOING
-        sipCoreManager.playRingtoneUseCase.playOutgoingRingtone()
+        sipCoreManager.audioManager.playOutgoingRingtone()
         log.d(tag = TAG) { "Call established - Ringing/Session Progress (180/183)" }
     }
 
