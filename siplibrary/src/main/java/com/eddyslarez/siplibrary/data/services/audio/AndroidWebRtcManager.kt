@@ -557,27 +557,37 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
         currentOutputDescriptor: String?
     ) {
         try {
-            val audioDevices = audioManager?.getDevices(AudioManager.GET_DEVICES_ALL) ?: return
+            val audioDevices = audioManager?.getDevices(
+                AudioManager.GET_DEVICES_INPUTS or AudioManager.GET_DEVICES_OUTPUTS
+            ) ?: return
 
             audioDevices.forEach { deviceInfo ->
                 when (deviceInfo.type) {
                     AudioDeviceInfo.TYPE_USB_ACCESSORY,
                     AudioDeviceInfo.TYPE_USB_DEVICE,
                     AudioDeviceInfo.TYPE_USB_HEADSET -> {
-                        addUsbDevice(deviceInfo, inputDevices, outputDevices,
-                            currentInputDescriptor, currentOutputDescriptor)
+                        addUsbDevice(
+                            deviceInfo, inputDevices, outputDevices,
+                            currentInputDescriptor, currentOutputDescriptor
+                        )
                     }
                     AudioDeviceInfo.TYPE_DOCK -> {
-                        addDockDevice(deviceInfo, inputDevices, outputDevices,
-                            currentInputDescriptor, currentOutputDescriptor)
+                        addDockDevice(
+                            deviceInfo, inputDevices, outputDevices,
+                            currentInputDescriptor, currentOutputDescriptor
+                        )
                     }
                     AudioDeviceInfo.TYPE_AUX_LINE -> {
-                        addAuxDevice(deviceInfo, inputDevices, outputDevices,
-                            currentInputDescriptor, currentOutputDescriptor)
+                        addAuxDevice(
+                            deviceInfo, inputDevices, outputDevices,
+                            currentInputDescriptor, currentOutputDescriptor
+                        )
                     }
                     AudioDeviceInfo.TYPE_HEARING_AID -> {
-                        addHearingAidDevice(deviceInfo, inputDevices, outputDevices,
-                            currentInputDescriptor, currentOutputDescriptor)
+                        addHearingAidDevice(
+                            deviceInfo, inputDevices, outputDevices,
+                            currentInputDescriptor, currentOutputDescriptor
+                        )
                     }
                 }
             }
@@ -1962,7 +1972,7 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
      * Set a listener for WebRTC events
      * @param listener The WebRTC event listener
      */
-    override fun setListener(listener: Any) {
+    override fun setListener(listener: Any?) {
         if (listener is WebRtcEventListener) {
             webRtcEventListener = listener
             log.d(TAG) { "WebRTC event listener set" }
