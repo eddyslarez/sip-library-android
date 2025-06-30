@@ -305,6 +305,7 @@ class SipMessageHandler(private val sipCoreManager: SipCoreManager) {
                     sipCoreManager.callHistoryManager.addCallLog(currentCallData, callType, endTime)
                 }
             }
+            sipCoreManager.playRingtoneUseCase.stopRingtone()
 
             // Common termination cleanup
             CallStateManager.updateCallState(CallState.ENDED)
@@ -341,7 +342,7 @@ class SipMessageHandler(private val sipCoreManager: SipCoreManager) {
                 log.d(tag = TAG) { "ACK received for non-active call, ignoring" }
                 return
             }
-
+sipCoreManager.playRingtoneUseCase.stopRingtone()
             //    if (sipCoreManager.callState == CallState.ACCEPTING) {
             sipCoreManager.callState = CallState.CONNECTED
             CallStateManager.updateCallState(CallState.CONNECTED)
@@ -395,12 +396,13 @@ class SipMessageHandler(private val sipCoreManager: SipCoreManager) {
                 handleRinging()
             }
 
-            Companion.CODE_OK -> {
+            CODE_OK -> {
                 // Limpiar reintentos en caso de éxito
                 accountInfo.currentCallData?.callId?.let { callId ->
                     clearRetryData(callId)
                 }
                 handleInviteOk(message, accountInfo, lines)
+                sipCoreManager.playRingtoneUseCase.stopRingtone()
             }
 
             CODE_UNAUTHORIZED -> handleAuthenticationChallenge(accountInfo, message, lines)
@@ -621,6 +623,7 @@ class SipMessageHandler(private val sipCoreManager: SipCoreManager) {
         }
 
         sendAck(accountInfo, callData)
+        sipCoreManager.playRingtoneUseCase.stopRingtone()
         CallStateManager.updateCallState(CallState.CONNECTED)
         sipCoreManager.callStartTimeMillis = Clock.System.now().toEpochMilliseconds()
     }
@@ -633,7 +636,7 @@ class SipMessageHandler(private val sipCoreManager: SipCoreManager) {
             val ackMessage = SipMessageBuilder.buildAckFor487Response(accountInfo, callData, lines)
             accountInfo.webSocketClient?.send(ackMessage)
         }
-
+        sipCoreManager.playRingtoneUseCase.stopRingtone()
         CallStateManager.updateCallState(CallState.ENDED)
         accountInfo.resetCallState()
     }
