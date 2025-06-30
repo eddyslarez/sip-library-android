@@ -132,5 +132,5 @@ interface WebRtcEventListener {
      */
     fun onRemoteAudioTrack()
 
-    fun onAudioDeviceChanged(device: AudioDevice)
+    fun onAudioDeviceChanged(device: AudioDevice?)
 }

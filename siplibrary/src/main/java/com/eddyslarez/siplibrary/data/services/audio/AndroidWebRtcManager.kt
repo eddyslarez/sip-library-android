@@ -3,12 +3,17 @@ package com.eddyslarez.siplibrary.data.services.audio
 import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Application
+import android.bluetooth.BluetoothA2dp
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothClass
 import android.bluetooth.BluetoothDevice
+import android.bluetooth.BluetoothHeadset
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothProfile
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.media.AudioAttributes
 import android.media.AudioDeviceCallback
@@ -44,9 +49,11 @@ import com.shepeliev.webrtckmp.onTrack
 import com.shepeliev.webrtckmp.MediaDevices
 import com.shepeliev.webrtckmp.MediaDeviceInfo
 import com.shepeliev.webrtckmp.MediaStreamTrackKind
+import kotlinx.coroutines.delay
 
 /**
  * Enhanced Android implementation of WebRtcManager interface with comprehensive audio device support
+ * FIXED: Bluetooth audio routing issues
  *
  * @author Eddys Larez
  */
@@ -70,6 +77,10 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
     private var currentInputDevice: AudioDevice? = null
     private var currentOutputDevice: AudioDevice? = null
 
+    // FIXED: Add Bluetooth SCO state tracking
+    private var isBluetoothScoRequested = false
+    private var bluetoothScoReceiver: BroadcastReceiver? = null
+
     // Audio state management
     private var savedAudioMode = AudioManager.MODE_NORMAL
     private var savedIsSpeakerPhoneOn = false
@@ -82,6 +93,52 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
     init {
         initializeBluetoothComponents()
         setupAudioDeviceMonitoring()
+        setupBluetoothScoReceiver() // FIXED: Add Bluetooth SCO monitoring
+    }
+
+    /**
+     * FIXED: Setup Bluetooth SCO state monitoring
+     */
+    private fun setupBluetoothScoReceiver() {
+        bluetoothScoReceiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                when (intent?.action) {
+                    AudioManager.ACTION_SCO_AUDIO_STATE_UPDATED -> {
+                        val state = intent.getIntExtra(AudioManager.EXTRA_SCO_AUDIO_STATE, -1)
+                        handleBluetoothScoStateChange(state)
+                    }
+                }
+            }
+        }
+
+        val filter = IntentFilter(AudioManager.ACTION_SCO_AUDIO_STATE_UPDATED)
+        context.registerReceiver(bluetoothScoReceiver, filter)
+        log.d(TAG) { "Bluetooth SCO receiver registered" }
+    }
+
+    /**
+     * FIXED: Handle Bluetooth SCO state changes
+     */
+    private fun handleBluetoothScoStateChange(state: Int) {
+        when (state) {
+            AudioManager.SCO_AUDIO_STATE_CONNECTED -> {
+                log.d(TAG) { "Bluetooth SCO connected" }
+                isBluetoothScoRequested = false
+                // Notify success if we were trying to connect
+                webRtcEventListener?.onAudioDeviceChanged(currentOutputDevice)
+            }
+            AudioManager.SCO_AUDIO_STATE_DISCONNECTED -> {
+                log.d(TAG) { "Bluetooth SCO disconnected" }
+                isBluetoothScoRequested = false
+            }
+            AudioManager.SCO_AUDIO_STATE_CONNECTING -> {
+                log.d(TAG) { "Bluetooth SCO connecting..." }
+            }
+            AudioManager.SCO_AUDIO_STATE_ERROR -> {
+                log.e(TAG) { "Bluetooth SCO error" }
+                isBluetoothScoRequested = false
+            }
+        }
     }
 
     /**
@@ -914,17 +971,163 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
     }
 
     /**
-     * Check if Bluetooth device is connected
+     * Check if Bluetooth device is connected - FIXED VERSION
      */
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     private fun isBluetoothDeviceConnected(device: BluetoothDevice): Boolean {
         return try {
-            // Use reflection to check connection state since there's no direct API
-            val isConnectedMethod = BluetoothDevice::class.java.getMethod("isConnected")
-            isConnectedMethod.invoke(device) as? Boolean ?: false
+            // Method 1: Using BluetoothManager (API 18+)
+            val bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
+            val connectionState = bluetoothManager?.getConnectionState(device, BluetoothProfile.HEADSET)
+
+            when (connectionState) {
+                BluetoothProfile.STATE_CONNECTED -> return true
+                BluetoothProfile.STATE_CONNECTING -> return false
+                BluetoothProfile.STATE_DISCONNECTED -> return false
+                BluetoothProfile.STATE_DISCONNECTING -> return false
+                else -> {
+                    // Method 2: Alternative check using reflection (fallback)
+                    return checkBluetoothConnectionViaReflection(device)
+                }
+            }
         } catch (e: Exception) {
-            // Fallback: assume bonded devices are connected if Bluetooth audio is available
-            audioManager?.isBluetoothScoAvailableOffCall == true
+            log.w(TAG) { "Error checking Bluetooth connection state: ${e.message}" }
+            // Method 3: Fallback - assume bonded devices are connected if Bluetooth audio is available
+            device.bondState == BluetoothDevice.BOND_BONDED &&
+                    audioManager?.isBluetoothScoAvailableOffCall == true
+        }
+    }
+
+    /**
+     * Alternative method using BluetoothProfile service listener (more reliable)
+     */
+    @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
+    private fun checkBluetoothConnectionWithProfile(device: BluetoothDevice, callback: (Boolean) -> Unit) {
+        val profileListener = object : BluetoothProfile.ServiceListener {
+            @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
+            override fun onServiceConnected(profile: Int, proxy: BluetoothProfile?) {
+                try {
+                    val isConnected = when (profile) {
+                        BluetoothProfile.HEADSET -> {
+                            val headsetProxy = proxy as? BluetoothHeadset
+                            headsetProxy?.getConnectionState(device) == BluetoothProfile.STATE_CONNECTED
+                        }
+                        BluetoothProfile.A2DP -> {
+                            val a2dpProxy = proxy as? BluetoothA2dp
+                            a2dpProxy?.getConnectionState(device) == BluetoothProfile.STATE_CONNECTED
+                        }
+                        else -> false
+                    }
+                    callback(isConnected)
+                    bluetoothAdapter?.closeProfileProxy(profile, proxy)
+                } catch (e: Exception) {
+                    log.e(TAG) { "Error in profile service connected: ${e.message}" }
+                    callback(false)
+                }
+            }
+
+            override fun onServiceDisconnected(profile: Int) {
+                callback(false)
+            }
+        }
+
+        // Try to get headset profile first, then A2DP
+        val headsetConnected = bluetoothAdapter?.getProfileProxy(
+            context,
+            profileListener,
+            BluetoothProfile.HEADSET
+        ) ?: false
+
+        if (!headsetConnected) {
+            bluetoothAdapter?.getProfileProxy(
+                context,
+                profileListener,
+                BluetoothProfile.A2DP
+            )
+        }
+    }
+
+    /**
+     * Fallback method using reflection (use with caution)
+     */
+    @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
+    private fun checkBluetoothConnectionViaReflection(device: BluetoothDevice): Boolean {
+        return try {
+            val method = device.javaClass.getMethod("isConnected")
+            method.invoke(device) as Boolean
+        } catch (e: Exception) {
+            log.w(TAG) { "Reflection method failed: ${e.message}" }
+            // Final fallback
+            device.bondState == BluetoothDevice.BOND_BONDED
+        }
+    }
+
+    /**
+     * Enhanced method to get all connected Bluetooth devices with proper state checking
+     */
+    @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
+    private fun getConnectedBluetoothDevicesEnhanced(): List<BluetoothDevice> {
+        val connectedDevices = mutableListOf<BluetoothDevice>()
+
+        try {
+            // Get bonded devices first
+            val bondedDevices = bluetoothAdapter?.bondedDevices ?: emptySet()
+
+            // Filter for audio-capable devices
+            val audioDevices = bondedDevices.filter { device ->
+                device.bluetoothClass?.hasService(BluetoothClass.Service.AUDIO) == true ||
+                        device.bluetoothClass?.deviceClass == BluetoothClass.Device.AUDIO_VIDEO_HEADPHONES ||
+                        device.bluetoothClass?.deviceClass == BluetoothClass.Device.AUDIO_VIDEO_WEARABLE_HEADSET ||
+                        device.bluetoothClass?.deviceClass == BluetoothClass.Device.AUDIO_VIDEO_HANDSFREE ||
+                        device.bluetoothClass?.deviceClass == BluetoothClass.Device.AUDIO_VIDEO_CAR_AUDIO
+            }
+
+            // Check connection state for each audio device
+            audioDevices.forEach { device ->
+                if (isBluetoothDeviceConnected(device)) {
+                    connectedDevices.add(device)
+                }
+            }
+
+            log.d(TAG) { "Found ${connectedDevices.size} connected Bluetooth audio devices" }
+
+        } catch (e: SecurityException) {
+            log.w(TAG) { "Bluetooth permission not granted for getting connected devices" }
+        } catch (e: Exception) {
+            log.e(TAG) { "Error getting connected Bluetooth devices: ${e.message}" }
+        }
+
+        return connectedDevices
+    }
+
+    /**
+     * Simplified synchronous check for immediate use
+     */
+    @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
+    private fun isBluetoothAudioDeviceConnected(): Boolean {
+        return try {
+            // Quick check using AudioManager
+            audioManager?.isBluetoothScoOn == true ||
+                    audioManager?.isBluetoothA2dpOn == true ||
+                    (audioManager?.isBluetoothScoAvailableOffCall == true && hasConnectedBluetoothAudioDevice())
+        } catch (e: Exception) {
+            log.w(TAG) { "Error checking Bluetooth audio connection: ${e.message}" }
+            false
+        }
+    }
+
+    /**
+     * Check if there's any connected Bluetooth audio device
+     */
+    @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
+    private fun hasConnectedBluetoothAudioDevice(): Boolean {
+        return try {
+            bluetoothAdapter?.bondedDevices?.any { device ->
+                device.bluetoothClass?.hasService(BluetoothClass.Service.AUDIO) == true &&
+                        device.bondState == BluetoothDevice.BOND_BONDED
+            } ?: false
+        } catch (e: Exception) {
+            false
         }
     }
 
@@ -1033,7 +1236,6 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
         }
     }
 
-
     /**
      * Extract vendor information from wired device
      */
@@ -1080,7 +1282,7 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
     }
 
     /**
-     * Enhanced device change during call with improved error handling
+     * FIXED: Enhanced device change during call with improved error handling
      */
     override fun changeAudioOutputDeviceDuringCall(device: AudioDevice): Boolean {
         log.d(TAG) { "Changing audio output to: ${device.name} (${device.descriptor})" }
@@ -1092,6 +1294,14 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
 
         return try {
             val am = audioManager ?: return false
+
+            // FIXED: Stop any previous Bluetooth SCO if switching to non-Bluetooth device
+            if (!device.descriptor.startsWith("bluetooth_") && am.isBluetoothScoOn) {
+                log.d(TAG) { "Stopping Bluetooth SCO for non-Bluetooth device" }
+                am.stopBluetoothSco()
+                isBluetoothScoRequested = false
+            }
+
             val success = when {
                 device.descriptor.startsWith("bluetooth_") -> {
                     switchToBluetoothOutput(device, am)
@@ -1116,8 +1326,24 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
 
             if (success) {
                 currentOutputDevice = device
-                webRtcEventListener?.onAudioDeviceChanged(device)
                 log.d(TAG) { "Successfully changed audio output to: ${device.name}" }
+
+                // FIXED: Notify only after connection is established
+                if (device.descriptor.startsWith("bluetooth_")) {
+                    // For Bluetooth, wait for SCO connection to be established
+                    coroutineScope.launch {
+                        var attempts = 0
+                        while (attempts < 10 && !am.isBluetoothScoOn) {
+                            delay(200)
+                            attempts++
+                        }
+                        if (am.isBluetoothScoOn) {
+                            webRtcEventListener?.onAudioDeviceChanged(device)
+                        }
+                    }
+                } else {
+                    webRtcEventListener?.onAudioDeviceChanged(device)
+                }
             }
 
             success
@@ -1174,34 +1400,92 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
 
     // Audio switching methods
 
+    /**
+     * FIXED: Enhanced Bluetooth output switching with proper SCO handling
+     */
     private fun switchToBluetoothOutput(device: AudioDevice, am: AudioManager): Boolean {
         return try {
-            // Reset other outputs
+            log.d(TAG) { "Switching to Bluetooth output: ${device.name}" }
+
+            // Verify if Bluetooth SCO is available
+            if (!am.isBluetoothScoAvailableOffCall) {
+                log.w(TAG) { "Bluetooth SCO not available for off-call use" }
+                return false
+            }
+
+            // Check permissions
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                if (!hasPermission(Manifest.permission.BLUETOOTH_CONNECT)) {
+                    log.w(TAG) { "BLUETOOTH_CONNECT permission not granted" }
+                    return false
+                }
+            }
+
+            // FIXED: Proper sequence for Bluetooth audio routing
+
+            // 1. First, stop other audio modes
             am.isSpeakerphoneOn = false
 
-            // Start Bluetooth SCO
-            if (!am.isBluetoothScoOn) {
-                am.startBluetoothSco()
+            // 2. Ensure we're in communication mode
+            am.mode = AudioManager.MODE_IN_COMMUNICATION
+
+            // 3. Check if SCO is already connected
+            if (am.isBluetoothScoOn) {
+                log.d(TAG) { "Bluetooth SCO already connected" }
+                return true
             }
-            am.isBluetoothScoOn = true
+
+            // 4. Verify that the specific Bluetooth device is connected
+            val bluetoothDevice = device.nativeDevice as? BluetoothDevice
+            if (bluetoothDevice != null && !isBluetoothDeviceConnected(bluetoothDevice)) {
+                log.w(TAG) { "Bluetooth device not connected: ${device.name}" }
+                return false
+            }
+
+            // 5. Start Bluetooth SCO if not already requested
+            if (!isBluetoothScoRequested && !am.isBluetoothScoOn) {
+                log.d(TAG) { "Starting Bluetooth SCO..." }
+                isBluetoothScoRequested = true
+                am.startBluetoothSco()
+
+                // FIXED: Wait a bit for SCO connection to establish
+                // In a real environment, this should be handled asynchronously
+                coroutineScope.launch {
+                    delay(1000) // Wait 1 second
+                    if (!am.isBluetoothScoOn) {
+                        log.w(TAG) { "Bluetooth SCO failed to connect after timeout" }
+                        isBluetoothScoRequested = false
+                    }
+                }
+            }
 
             true
+        } catch (e: SecurityException) {
+            log.e(TAG) { "Security error switching to Bluetooth: ${e.message}" }
+            false
         } catch (e: Exception) {
             log.e(TAG) { "Error switching to Bluetooth output: ${e.message}" }
             false
         }
     }
 
+    /**
+     * FIXED: Enhanced speaker switching
+     */
     private fun switchToSpeaker(am: AudioManager): Boolean {
         return try {
-            // Stop Bluetooth if active
+            // FIXED: Stop Bluetooth SCO if active
             if (am.isBluetoothScoOn) {
+                log.d(TAG) { "Stopping Bluetooth SCO for speaker" }
                 am.stopBluetoothSco()
-                am.isBluetoothScoOn = false
+                isBluetoothScoRequested = false
             }
 
             // Enable speaker
             am.isSpeakerphoneOn = true
+            am.mode = AudioManager.MODE_IN_COMMUNICATION
+
+            log.d(TAG) { "Switched to speaker successfully" }
             true
         } catch (e: Exception) {
             log.e(TAG) { "Error switching to speaker: ${e.message}" }
@@ -1209,14 +1493,21 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
         }
     }
 
+    /**
+     * FIXED: Enhanced wired headset switching
+     */
     private fun switchToWiredHeadset(am: AudioManager): Boolean {
         return try {
-            // Reset other outputs
+            // FIXED: Stop other audio modes
             am.isSpeakerphoneOn = false
             if (am.isBluetoothScoOn) {
+                log.d(TAG) { "Stopping Bluetooth SCO for wired headset" }
                 am.stopBluetoothSco()
-                am.isBluetoothScoOn = false
+                isBluetoothScoRequested = false
             }
+
+            am.mode = AudioManager.MODE_IN_COMMUNICATION
+            log.d(TAG) { "Switched to wired headset successfully" }
             true
         } catch (e: Exception) {
             log.e(TAG) { "Error switching to wired headset: ${e.message}" }
@@ -1224,14 +1515,21 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
         }
     }
 
+    /**
+     * FIXED: Enhanced earpiece switching
+     */
     private fun switchToEarpiece(am: AudioManager): Boolean {
         return try {
-            // Reset all other outputs
+            // FIXED: Reset all other output modes
             am.isSpeakerphoneOn = false
             if (am.isBluetoothScoOn) {
+                log.d(TAG) { "Stopping Bluetooth SCO for earpiece" }
                 am.stopBluetoothSco()
-                am.isBluetoothScoOn = false
+                isBluetoothScoRequested = false
             }
+
+            am.mode = AudioManager.MODE_IN_COMMUNICATION
+            log.d(TAG) { "Switched to earpiece successfully" }
             true
         } catch (e: Exception) {
             log.e(TAG) { "Error switching to earpiece: ${e.message}" }
@@ -1260,12 +1558,44 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
         }
     }
 
+    /**
+     * FIXED: Enhanced Bluetooth input switching
+     */
     private fun switchToBluetoothInput(device: AudioDevice, am: AudioManager): Boolean {
         return try {
-            if (!am.isBluetoothScoOn) {
-                am.startBluetoothSco()
+            log.d(TAG) { "Switching to Bluetooth input: ${device.name}" }
+
+            // Verify Bluetooth SCO availability
+            if (!am.isBluetoothScoAvailableOffCall) {
+                log.w(TAG) { "Bluetooth SCO not available for input" }
+                return false
             }
-            am.isBluetoothScoOn = true
+
+            // Check permissions
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                if (!hasPermission(Manifest.permission.BLUETOOTH_CONNECT)) {
+                    log.w(TAG) { "BLUETOOTH_CONNECT permission not granted" }
+                    return false
+                }
+            }
+
+            // FIXED: Proper Bluetooth input routing
+            am.mode = AudioManager.MODE_IN_COMMUNICATION
+
+            if (!am.isBluetoothScoOn && !isBluetoothScoRequested) {
+                log.d(TAG) { "Starting Bluetooth SCO for input..." }
+                isBluetoothScoRequested = true
+                am.startBluetoothSco()
+
+                coroutineScope.launch {
+                    delay(1000)
+                    if (!am.isBluetoothScoOn) {
+                        log.w(TAG) { "Bluetooth SCO failed to connect for input" }
+                        isBluetoothScoRequested = false
+                    }
+                }
+            }
+
             true
         } catch (e: Exception) {
             log.e(TAG) { "Error switching to Bluetooth input: ${e.message}" }
@@ -1541,7 +1871,7 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
     }
 
     /**
-     * Clean up and release WebRTC resources
+     * FIXED: Enhanced cleanup with Bluetooth SCO handling
      */
     override fun dispose() {
         log.d(TAG) { "Disposing Enhanced WebRtcManager resources..." }
@@ -1549,6 +1879,23 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
         try {
             // Clear listeners
             deviceChangeListeners.clear()
+
+            // FIXED: Unregister Bluetooth SCO receiver
+            bluetoothScoReceiver?.let { receiver ->
+                try {
+                    context.unregisterReceiver(receiver)
+                } catch (e: Exception) {
+                    log.w(TAG) { "Error unregistering Bluetooth SCO receiver: ${e.message}" }
+                }
+            }
+
+            // FIXED: Stop Bluetooth SCO if active
+            audioManager?.let { am ->
+                if (am.isBluetoothScoOn) {
+                    am.stopBluetoothSco()
+                }
+            }
+            isBluetoothScoRequested = false
 
             // Unregister audio device callback
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {

@@ -1,7 +1,6 @@
 package com.eddyslarez.siplibrary.core
 
 import android.app.Application
-import android.content.Context
 import com.eddyslarez.siplibrary.EddysSipLibrary
 import com.eddyslarez.siplibrary.data.models.*
 import com.eddyslarez.siplibrary.data.services.audio.AudioDevice
@@ -10,7 +9,6 @@ import com.eddyslarez.siplibrary.data.services.audio.CallHoldManager
 import com.eddyslarez.siplibrary.data.services.audio.PlayRingtoneUseCase
 import com.eddyslarez.siplibrary.data.services.audio.WebRtcConnectionState
 import com.eddyslarez.siplibrary.data.services.audio.WebRtcEventListener
-import com.eddyslarez.siplibrary.data.services.audio.WebRtcManager
 import com.eddyslarez.siplibrary.data.services.audio.WebRtcManagerFactory
 import com.eddyslarez.siplibrary.data.services.sip.SipMessageHandler
 import com.eddyslarez.siplibrary.data.services.websocket.MultiplatformWebSocket
@@ -21,12 +19,10 @@ import com.eddyslarez.siplibrary.platform.PlatformRegistration
 import com.eddyslarez.siplibrary.platform.WindowManager
 import com.eddyslarez.siplibrary.utils.*
 import kotlinx.coroutines.*
-import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.datetime.Clock
 import kotlin.math.pow
-import kotlin.random.Random
 
 /**
  * Gestor principal del core SIP - Adaptado para Android
@@ -132,7 +128,7 @@ class SipCoreManager private constructor(
                 log.d(tag = TAG) { "Remote audio track received" }
             }
 
-            override fun onAudioDeviceChanged(device: AudioDevice) {
+            override fun onAudioDeviceChanged(device: AudioDevice?) {
                 log.d(tag = TAG) { "Audio device changed: ${device.name}" }
             }
         })
