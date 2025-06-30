@@ -29,7 +29,7 @@ import kotlin.math.pow
  *
  * @author Eddys Larez
  */
-class SipCoreManager private constructor(
+internal class SipCoreManager private constructor(
     private val application: Application,
     private val config: EddysSipLibrary.SipConfig,
     val audioManager: AudioManager,
