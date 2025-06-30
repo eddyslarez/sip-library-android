@@ -60,7 +60,9 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
     private var isInitialized = false
     private var isLocalAudioReady = false
     private var context: Context = application.applicationContext
-
+    private val remoteAudioBuffer = mutableListOf<ByteArray>()
+    private val audioProcessingListeners = mutableListOf<(ByteArray, Boolean) -> Unit>()
+    private var audioProcessingJob: Job? = null
     // Audio management fields
     private var audioManager: AudioManager? = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
     private var savedAudioMode = AudioManager.MODE_NORMAL
@@ -966,7 +968,32 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
             }
         }.launchIn(coroutineScope)
     }
-
+//    /**
+//     * Intercepta audio remoto directamente desde WebRTC
+//     */
+//    private fun setupRemoteAudioInterception() {
+//        audioProcessingJob = coroutineScope.launch {
+//            while (isActive && getConnectionState() == WebRtcConnectionState.CONNECTED) {
+//                try {
+//                    // Procesar buffer de audio remoto
+//                    synchronized(remoteAudioBuffer) {
+//                        if (remoteAudioBuffer.isNotEmpty()) {
+//                            val audioData = combineAudioBuffers(remoteAudioBuffer.toList())
+//                            remoteAudioBuffer.clear()
+//
+//                            // Notificar a listeners (false = audio remoto)
+//                            audioProcessingListeners.forEach { listener ->
+//                                listener(audioData, false)
+//                            }
+//                        }
+//                    }
+//                    delay(50) // Procesar cada 50ms
+//                } catch (e: Exception) {
+//                    Log.e(TAG, "Error procesando audio remoto", e)
+//                }
+//            }
+//        }
+//    }
     private suspend fun ensureLocalAudioTrack(): Boolean {
         return try {
             val peerConn = peerConnection ?: run {
