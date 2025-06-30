@@ -1,7 +1,6 @@
 plugins {
     id("com.android.library")
     id("org.jetbrains.kotlin.android")
-    id("org.jetbrains.kotlin.plugin.compose")
     id("kotlin-parcelize")
     id("maven-publish")
     id("org.jetbrains.kotlin.plugin.serialization")
@@ -38,24 +37,13 @@ android {
         jvmTarget = "11"
     }
 
-    buildFeatures {
-        compose = true
-    }
-
 }
 
 dependencies {
     implementation("androidx.core:core-ktx:1.16.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.9.1")
-    implementation("androidx.activity:activity-compose:1.10.1")
     implementation("androidx.lifecycle:lifecycle-process:2.9.1")
-
-    implementation(platform("androidx.compose:compose-bom:2025.06.00"))
-    implementation("androidx.compose.ui:ui")
-    implementation("androidx.compose.ui:ui-tooling-preview")
-    implementation("androidx.compose.material3:material3")
-    implementation("org.jetbrains.kotlin:kotlin-stdlib:2.1.0")
-
+    implementation("org.jetbrains.kotlin:kotlin-stdlib:2.1.10")
     implementation("com.shepeliev:webrtc-kmp:0.125.9")
     implementation("org.java-websocket:Java-WebSocket:1.5.4")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
@@ -63,7 +51,6 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-datetime:0.6.1")
     implementation("androidx.datastore:datastore-preferences:1.1.7")
     implementation("androidx.bluetooth:bluetooth:1.0.0-alpha02")
-
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.6.1")
