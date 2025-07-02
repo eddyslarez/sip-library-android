@@ -671,7 +671,7 @@ class SipMessageHandler(private val sipCoreManager: SipCoreManager) {
 
         accountInfo.isRegistered = true
 
-        // IMPORTANTE: Usar el nuevo método que actualiza por cuenta
+        // CORREGIDO: Usar el nuevo método que actualiza por cuenta
         sipCoreManager.handleRegistrationSuccess(accountInfo)
 
         // Configure renewal
@@ -680,14 +680,21 @@ class SipMessageHandler(private val sipCoreManager: SipCoreManager) {
         val expirationTime = Clock.System.now().toEpochMilliseconds() + expiresMs
         accountInfo.webSocketClient?.setRegistrationExpiration(accountKey, expirationTime)
 
+        sipCoreManager.updateRegistrationState(accountKey, RegistrationState.OK)
+
         log.d(tag = TAG) { "Registration renewal configured for ${accountInfo.username}" }
     }
 
     private fun handleRegisterError(message: String, accountInfo: AccountInfo, lines: List<String>) {
-        log.d(TAG) { "registration Error" }
-        val reason =  SipMessageParser.extractStatusReason(message)
+        log.d(TAG) { "Registration Error" }
+        val reason = SipMessageParser.extractStatusReason(message)
+
+        val accountKey = "${accountInfo.username}@${accountInfo.domain}"
+        sipCoreManager.updateRegistrationState(accountKey, RegistrationState.FAILED)
+
         sipCoreManager.handleRegistrationError(accountInfo, reason)
     }
+
 
 
     private fun handleBusy() {

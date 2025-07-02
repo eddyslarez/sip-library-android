@@ -11,8 +11,11 @@ import com.eddyslarez.siplibrary.data.services.audio.AudioDevice
 import com.eddyslarez.siplibrary.utils.CallStateManager
 import com.eddyslarez.siplibrary.utils.RegistrationStateManager
 import com.eddyslarez.siplibrary.utils.log
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.launch
 
 /**
  * EddysSipLibrary - Biblioteca SIP/VoIP para Android (Versión Mejorada Multi-Cuenta)
@@ -179,14 +182,18 @@ class EddysSipLibrary private constructor() {
     private fun setupInternalListeners() {
         sipCoreManager?.let { manager ->
 
+            log.d(tag = TAG) { "Setting up internal listeners" }
+
             // Configurar callback para eventos principales
             manager.setCallbacks(object : SipCallbacks {
                 override fun onCallTerminated() {
+                    log.d(tag = TAG) { "Internal callback: Call terminated" }
                     val callInfo = getCurrentCallInfo()
                     notifyCallEnded(callInfo, CallEndReason.NORMAL_HANGUP)
                 }
 
                 override fun onCallStateChanged(state: CallState) {
+                    log.d(tag = TAG) { "Internal callback: Call state changed to $state" }
                     val callInfo = getCurrentCallInfo()
                     notifyCallStateChanged(state, callInfo)
 
@@ -194,16 +201,24 @@ class EddysSipLibrary private constructor() {
                         CallState.CONNECTED -> callInfo?.let { notifyCallConnected(it) }
                         CallState.RINGING, CallState.OUTGOING -> callInfo?.let { notifyCallRinging(it) }
                         CallState.INCOMING -> handleIncomingCall()
+                        CallState.ENDED -> callInfo?.let { notifyCallEnded(it, CallEndReason.NORMAL_HANGUP) }
+                        CallState.ERROR -> callInfo?.let { notifyCallFailed("Call failed", it) }
                         else -> {}
                     }
                 }
 
                 override fun onRegistrationStateChanged(state: RegistrationState) {
-                    // Este callback se ejecutará para cada cuenta
-                    // La información específica de la cuenta se maneja en updateRegistrationState
+                    log.d(tag = TAG) { "Internal callback: Registration state changed to $state" }
+                    // Este se maneja en onAccountRegistrationStateChanged
+                }
+
+                override fun onAccountRegistrationStateChanged(username: String, domain: String, state: RegistrationState) {
+                    log.d(tag = TAG) { "Internal callback: Account registration state changed for $username@$domain to $state" }
+                    notifyRegistrationStateChanged(state, username, domain)
                 }
 
                 override fun onIncomingCall(callerNumber: String, callerName: String?) {
+                    log.d(tag = TAG) { "Internal callback: Incoming call from $callerNumber" }
                     val callInfo = IncomingCallInfo(
                         callId = generateCallId(),
                         callerNumber = callerNumber,
@@ -215,16 +230,21 @@ class EddysSipLibrary private constructor() {
                 }
 
                 override fun onCallConnected() {
+                    log.d(tag = TAG) { "Internal callback: Call connected" }
                     getCurrentCallInfo()?.let { notifyCallConnected(it) }
                 }
 
                 override fun onCallFailed(error: String) {
+                    log.d(tag = TAG) { "Internal callback: Call failed - $error" }
                     val callInfo = getCurrentCallInfo()
                     notifyCallFailed(error, callInfo)
                 }
             })
+
+            log.d(tag = TAG) { "Internal listeners configured successfully" }
         }
     }
+
 
     // === MÉTODOS PARA CONFIGURAR LISTENERS ===
 
@@ -273,24 +293,27 @@ class EddysSipLibrary private constructor() {
     private fun notifyRegistrationStateChanged(state: RegistrationState, username: String, domain: String) {
         log.d(tag = TAG) { "Notifying registration state change: $state for $username@$domain to ${listeners.size} listeners" }
 
-        listeners.forEach { listener ->
-            try {
-                listener.onRegistrationStateChanged(state, username, domain)
-            } catch (e: Exception) {
-                log.e(tag = TAG) { "Error in listener onRegistrationStateChanged: ${e.message}" }
-            }
-        }
-
-        registrationListener?.let { listener ->
-            try {
-                when (state) {
-                    RegistrationState.OK -> listener.onRegistrationSuccessful(username, domain)
-                    RegistrationState.FAILED -> listener.onRegistrationFailed(username, domain, "Registration failed")
-                    RegistrationState.NONE, RegistrationState.CLEARED -> listener.onUnregistered(username, domain)
-                    else -> {}
+        // CORREGIDO: Ejecutar en hilo principal para UI
+        CoroutineScope(Dispatchers.Main).launch {
+            listeners.forEach { listener ->
+                try {
+                    listener.onRegistrationStateChanged(state, username, domain)
+                } catch (e: Exception) {
+                    log.e(tag = TAG) { "Error in listener onRegistrationStateChanged: ${e.message}" }
                 }
-            } catch (e: Exception) {
-                log.e(tag = TAG) { "Error in RegistrationListener: ${e.message}" }
+            }
+
+            registrationListener?.let { listener ->
+                try {
+                    when (state) {
+                        RegistrationState.OK -> listener.onRegistrationSuccessful(username, domain)
+                        RegistrationState.FAILED -> listener.onRegistrationFailed(username, domain, "Registration failed")
+                        RegistrationState.NONE, RegistrationState.CLEARED -> listener.onUnregistered(username, domain)
+                        else -> {}
+                    }
+                } catch (e: Exception) {
+                    log.e(tag = TAG) { "Error in RegistrationListener: ${e.message}" }
+                }
             }
         }
     }
@@ -298,14 +321,18 @@ class EddysSipLibrary private constructor() {
     private fun notifyCallStateChanged(state: CallState, callInfo: CallInfo?) {
         log.d(tag = TAG) { "Notifying call state change: $state to ${listeners.size} listeners" }
 
-        listeners.forEach { listener ->
-            try {
-                listener.onCallStateChanged(state, callInfo)
-            } catch (e: Exception) {
-                log.e(tag = TAG) { "Error in listener onCallStateChanged: ${e.message}" }
+        // CORREGIDO: Ejecutar en hilo principal para UI
+        CoroutineScope(Dispatchers.Main).launch {
+            listeners.forEach { listener ->
+                try {
+                    listener.onCallStateChanged(state, callInfo)
+                } catch (e: Exception) {
+                    log.e(tag = TAG) { "Error in listener onCallStateChanged: ${e.message}" }
+                }
             }
         }
     }
+
 
     private fun notifyCallConnected(callInfo: CallInfo) {
         log.d(tag = TAG) { "Notifying call connected to ${listeners.size} listeners" }
@@ -699,6 +726,27 @@ class EddysSipLibrary private constructor() {
             throw SipLibraryException("Library not initialized. Call initialize() first.")
         }
     }
+    fun diagnoseListeners(): String {
+        return buildString {
+            appendLine("=== LISTENERS DIAGNOSTIC ===")
+            appendLine("Library initialized: $isInitialized")
+            appendLine("SipCoreManager: ${sipCoreManager != null}")
+            appendLine("General listeners count: ${listeners.size}")
+            appendLine("Registration listener: ${registrationListener != null}")
+            appendLine("Call listener: ${callListener != null}")
+            appendLine("Incoming call listener: ${incomingCallListener != null}")
+
+            appendLine("\n--- Current States ---")
+            appendLine("Current call state: ${getCurrentCallState()}")
+            appendLine("Registration states: ${getAllRegistrationStates()}")
+
+            appendLine("\n--- Active Accounts ---")
+            sipCoreManager?.let { manager ->
+                appendLine("Current account: ${manager.getCurrentUsername()}")
+                appendLine("Core manager healthy: ${manager.isSipCoreManagerHealthy()}")
+            }
+        }
+    }
 
     fun dispose() {
         if (isInitialized) {
@@ -723,7 +771,9 @@ class EddysSipLibrary private constructor() {
         fun onIncomingCall(callerNumber: String, callerName: String?) {}
         fun onCallConnected() {}
         fun onCallFailed(error: String) {}
+        fun onAccountRegistrationStateChanged(username: String, domain: String, state: RegistrationState) {}
     }
+
 
     class SipLibraryException(message: String, cause: Throwable? = null) : Exception(message, cause)
 }

@@ -48,12 +48,16 @@ class SipCoreManager private constructor(
     private var isShuttingDown = false
     val callHistoryManager = CallHistoryManager()
 
+
     // NUEVO: Estados de registro por cuenta
     private val _registrationStates = MutableStateFlow<Map<String, RegistrationState>>(emptyMap())
-    val registrationStatesFlow: StateFlow<Map<String, RegistrationState>> = _registrationStates.asStateFlow()
+    val registrationStatesFlow: StateFlow<Map<String, RegistrationState>> =
+        _registrationStates.asStateFlow()
+
 
     // Mantener compatibilidad con el estado global
     private var globalRegistrationState = RegistrationState.NONE
+
 
     private val activeAccounts = HashMap<String, AccountInfo>()
     var callState = CallState.NONE
@@ -72,16 +76,19 @@ class SipCoreManager private constructor(
     private var connectionRetryCount = 0
     private val maxRetryAttempts = 5
 
+
     // WebRTC manager and other managers
     val webRtcManager = WebRtcManagerFactory.createWebRtcManager(application)
     private val platformRegistration = PlatformRegistration()
     private val callHoldManager = CallHoldManager(webRtcManager)
     private val audioDeviceManager = AudioDeviceManager()
 
+
     companion object {
         private const val TAG = "SipCoreManager"
         private const val WEBSOCKET_PROTOCOL = "sip"
         private const val REGISTRATION_CHECK_INTERVAL_MS = 30 * 1000L
+
 
         fun createInstance(
             application: Application,
@@ -98,16 +105,22 @@ class SipCoreManager private constructor(
         }
     }
 
+
     private val messageHandler = SipMessageHandler(this)
+
 
     fun userAgent(): String = config.userAgent
 
+
     fun getDefaultDomain(): String? = currentAccountInfo?.domain
+
 
     fun getCurrentUsername(): String? = currentAccountInfo?.username
 
+
     fun initialize() {
         log.d(tag = TAG) { "Initializing SIP Core" }
+
 
         webRtcManager.initialize()
         setupWebRtcEventListener()
@@ -115,15 +128,21 @@ class SipCoreManager private constructor(
         startConnectionHealthCheck()
     }
 
+
     internal fun setCallbacks(callbacks: EddysSipLibrary.SipCallbacks) {
         this.sipCallbacks = callbacks
+        log.d(tag = TAG) { "SipCallbacks configured in SipCoreManager" }
     }
+
 
     /**
      * NUEVO: Actualiza el estado de registro para una cuenta específica
      */
     fun updateRegistrationState(accountKey: String, newState: RegistrationState) {
+        log.d(tag = TAG) { "Updating registration state for $accountKey: $newState" }
+
         val currentStates = _registrationStates.value.toMutableMap()
+        val previousState = currentStates[accountKey]
         currentStates[accountKey] = newState
         _registrationStates.value = currentStates
 
@@ -131,17 +150,32 @@ class SipCoreManager private constructor(
         globalRegistrationState = newState
         RegistrationStateManager.updateCallState(newState)
 
-        // Notificar a través de callbacks
-        val account = activeAccounts[accountKey]
-        if (account != null) {
-            sipCallbacks?.onRegistrationStateChanged(newState)
+        // CORREGIDO: Notificar solo si el estado cambió
+        if (previousState != newState) {
+            val account = activeAccounts[accountKey]
+            if (account != null) {
+                log.d(tag = TAG) { "Notifying registration state change from $previousState to $newState for $accountKey" }
 
-            // Llamar al callback específico con información de la cuenta
-            notifyRegistrationStateChanged(newState, account.username, account.domain)
+                // Notificar a través de callbacks con información de cuenta
+                sipCallbacks?.onAccountRegistrationStateChanged(
+                    account.username,
+                    account.domain,
+                    newState
+                )
+                sipCallbacks?.onRegistrationStateChanged(newState)
+
+                // Llamar al método de notificación
+                notifyRegistrationStateChanged(newState, account.username, account.domain)
+            } else {
+                log.w(tag = TAG) { "Account not found for key: $accountKey" }
+            }
+        } else {
+            log.d(tag = TAG) { "Registration state unchanged for $accountKey: $newState" }
         }
 
         log.d(tag = TAG) { "Updated registration state for $accountKey: $newState" }
     }
+
 
     /**
      * NUEVO: Método de conveniencia para mantener compatibilidad
@@ -153,12 +187,14 @@ class SipCoreManager private constructor(
         }
     }
 
+
     /**
      * NUEVO: Obtiene el estado de registro para una cuenta específica
      */
     fun getRegistrationState(accountKey: String): RegistrationState {
         return _registrationStates.value[accountKey] ?: RegistrationState.NONE
     }
+
 
     /**
      * NUEVO: Obtiene todos los estados de registro
@@ -167,23 +203,73 @@ class SipCoreManager private constructor(
         return _registrationStates.value
     }
 
+
     /**
-     * NUEVO: Notifica cambios de estado a los listeners
+     * CORREGIDO: Método para notificar cambios de estado de registro
      */
-    private fun notifyRegistrationStateChanged(state: RegistrationState, username: String, domain: String) {
+    private fun notifyRegistrationStateChanged(
+        state: RegistrationState,
+        username: String,
+        domain: String
+    ) {
         try {
+            log.d(tag = TAG) { "Notifying registration state change: $state for $username@$domain" }
+
+            // Notificar a través del callback principal
             sipCallbacks?.onRegistrationStateChanged(state)
-            log.d(tag = TAG) { "Notified registration state change: $state for $username@$domain" }
+
+            // NUEVO: Notificar con información específica de la cuenta
+            sipCallbacks?.onAccountRegistrationStateChanged(username, domain, state)
+
+            log.d(tag = TAG) { "Registration state notification sent successfully" }
         } catch (e: Exception) {
             log.e(tag = TAG) { "Error notifying registration state change: ${e.message}" }
         }
     }
+
+
+    /**
+     * CORREGIDO: Método para notificar estados de llamada
+     */
+    private fun notifyCallStateChanged(state: CallState) {
+        try {
+            log.d(tag = TAG) { "Notifying call state change: $state" }
+
+            sipCallbacks?.onCallStateChanged(state)
+
+            // Notificar cambios específicos
+            when (state) {
+                CallState.INCOMING -> {
+                    currentAccountInfo?.currentCallData?.let { callData ->
+                        sipCallbacks?.onIncomingCall(callData.from, callData.remoteDisplayName)
+                    }
+                }
+
+                CallState.CONNECTED -> {
+                    sipCallbacks?.onCallConnected()
+                }
+
+                CallState.ENDED -> {
+                    sipCallbacks?.onCallTerminated()
+                }
+
+                else -> { /* otros estados */
+                }
+            }
+
+            log.d(tag = TAG) { "Call state notification sent successfully" }
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error notifying call state change: ${e.message}" }
+        }
+    }
+
 
     private fun setupWebRtcEventListener() {
         webRtcManager.setListener(object : WebRtcEventListener {
             override fun onIceCandidate(candidate: String, sdpMid: String, sdpMLineIndex: Int) {
                 // Implementar envío de ICE candidate
             }
+
 
             override fun onConnectionStateChange(state: WebRtcConnectionState) {
                 when (state) {
@@ -193,9 +279,11 @@ class SipCoreManager private constructor(
                 }
             }
 
+
             override fun onRemoteAudioTrack() {
                 log.d(tag = TAG) { "Remote audio track received" }
             }
+
 
             override fun onAudioDeviceChanged(device: AudioDevice?) {
                 log.d(tag = TAG) { "Audio device changed: ${device?.name}" }
@@ -203,12 +291,14 @@ class SipCoreManager private constructor(
         })
     }
 
+
     /**
      * Get available audio devices
      */
     fun getAudioDevices(): Pair<List<AudioDevice>, List<AudioDevice>> {
         return webRtcManager.getAllAudioDevices()
     }
+
 
     /**
      * Get current audio devices
@@ -220,6 +310,7 @@ class SipCoreManager private constructor(
         )
     }
 
+
     /**
      * Refresh the list of available audio devices
      */
@@ -228,6 +319,7 @@ class SipCoreManager private constructor(
         audioDeviceManager.updateDevices(inputs, outputs)
     }
 
+
     /**
      * Change audio device during call
      */
@@ -235,11 +327,13 @@ class SipCoreManager private constructor(
         CoroutineScope(Dispatchers.IO).launch {
             val isInput = audioDeviceManager.inputDevices.value.contains(device)
 
+
             val success = if (isInput) {
                 webRtcManager.changeAudioInputDeviceDuringCall(device)
             } else {
                 webRtcManager.changeAudioOutputDeviceDuringCall(device)
             }
+
 
             if (success) {
                 if (isInput) {
@@ -251,6 +345,7 @@ class SipCoreManager private constructor(
         }
     }
 
+
     private fun setupPlatformLifecycleObservers() {
         platformRegistration.setupNotificationObservers(object : AppLifecycleListener {
             override fun onEvent(event: AppLifecycleEvent) {
@@ -260,10 +355,12 @@ class SipCoreManager private constructor(
                         refreshAllRegistrationsWithNewUserAgent()
                     }
 
+
                     AppLifecycleEvent.EnterForeground -> {
                         isAppInBackground = false
                         refreshAllRegistrationsWithNewUserAgent()
                     }
+
 
                     else -> {}
                 }
@@ -271,17 +368,25 @@ class SipCoreManager private constructor(
         })
     }
 
+
     private fun handleWebRtcConnected() {
         callStartTimeMillis = Clock.System.now().toEpochMilliseconds()
         CallStateManager.updateCallState(CallState.CONNECTED)
         callState = CallState.CONNECTED
 
-        // Notificar conexión de llamada
-        sipCallbacks?.onCallConnected()
+
+        // CORREGIDO: Notificar conexión de llamada usando el método interno
+        notifyCallStateChanged(CallState.CONNECTED)
     }
+
 
     private fun handleWebRtcClosed() {
         callState = CallState.ENDED
+        CallStateManager.updateCallState(CallState.ENDED)
+
+        // CORREGIDO: Notificar finalización de llamada
+        notifyCallStateChanged(CallState.ENDED)
+
         currentAccountInfo?.currentCallData?.let { callData ->
             val endTime = Clock.System.now().toEpochMilliseconds()
             val callType = determineCallType(callData, callState)
@@ -289,15 +394,18 @@ class SipCoreManager private constructor(
         }
     }
 
+
     internal fun handleCallTermination() {
         onCallTerminated?.invoke()
         sipCallbacks?.onCallTerminated()
     }
 
+
     private fun refreshAllRegistrationsWithNewUserAgent() {
         if (callState != CallState.NONE && callState != CallState.ENDED) {
             return
         }
+
 
         activeAccounts.values.forEach { accountInfo ->
             if (accountInfo.isRegistered) {
@@ -307,6 +415,7 @@ class SipCoreManager private constructor(
         }
     }
 
+
     private fun startConnectionHealthCheck() {
         CoroutineScope(Dispatchers.IO).launch {
             while (true) {
@@ -315,6 +424,7 @@ class SipCoreManager private constructor(
             }
         }
     }
+
 
     private fun checkConnectionHealth() {
         activeAccounts.values.forEach { accountInfo ->
@@ -327,8 +437,10 @@ class SipCoreManager private constructor(
         }
     }
 
+
     private fun reconnectAccount(accountInfo: AccountInfo) {
         if (reconnectionInProgress) return
+
 
         reconnectionInProgress = true
         try {
@@ -344,6 +456,7 @@ class SipCoreManager private constructor(
         }
     }
 
+
     fun register(
         username: String,
         password: String,
@@ -356,12 +469,15 @@ class SipCoreManager private constructor(
             val accountInfo = AccountInfo(username, password, domain)
             activeAccounts[accountKey] = accountInfo
 
+
             accountInfo.token = token
             accountInfo.provider = provider
             accountInfo.userAgent = userAgent()
 
+
             // Inicializar estado de registro para esta cuenta
             updateRegistrationState(accountKey, RegistrationState.IN_PROGRESS)
+
 
             connectWebSocketAndRegister(accountInfo)
         } catch (e: Exception) {
@@ -371,27 +487,33 @@ class SipCoreManager private constructor(
         }
     }
 
+
     fun unregister(username: String, domain: String) {
         val accountKey = "$username@$domain"
         val accountInfo = activeAccounts[accountKey] ?: return
+
 
         try {
             messageHandler.sendUnregister(accountInfo)
             accountInfo.webSocketClient?.close()
             activeAccounts.remove(accountKey)
 
+
             // Actualizar estado
             updateRegistrationState(accountKey, RegistrationState.NONE)
+
 
             // Remover del mapa de estados
             val currentStates = _registrationStates.value.toMutableMap()
             currentStates.remove(accountKey)
             _registrationStates.value = currentStates
 
+
         } catch (e: Exception) {
             log.d(tag = TAG) { "Error unregistering account: ${e.message}" }
         }
     }
+
 
     private fun connectWebSocketAndRegister(accountInfo: AccountInfo) {
         try {
@@ -404,6 +526,7 @@ class SipCoreManager private constructor(
         }
     }
 
+
     private fun createHeaders(): HashMap<String, String> {
         return hashMapOf(
             "User-Agent" to userAgent(),
@@ -411,6 +534,7 @@ class SipCoreManager private constructor(
             "Sec-WebSocket-Protocol" to WEBSOCKET_PROTOCOL
         )
     }
+
 
     private fun createWebSocketClient(
         accountInfo: AccountInfo,
@@ -424,6 +548,7 @@ class SipCoreManager private constructor(
         return websocket
     }
 
+
     private fun setupWebSocketListeners(websocket: WebSocket, accountInfo: AccountInfo) {
         websocket.setListener(object : MultiplatformWebSocket.Listener {
             override fun onOpen() {
@@ -432,9 +557,11 @@ class SipCoreManager private constructor(
                 messageHandler.sendRegister(accountInfo, isAppInBackground)
             }
 
+
             override fun onMessage(message: String) {
                 messageHandler.handleSipMessage(message, accountInfo)
             }
+
 
             override fun onClose(code: Int, reason: String) {
                 val accountKey = "${accountInfo.username}@${accountInfo.domain}"
@@ -445,6 +572,7 @@ class SipCoreManager private constructor(
                 }
             }
 
+
             override fun onError(error: Exception) {
                 val accountKey = "${accountInfo.username}@${accountInfo.domain}"
                 accountInfo.isRegistered = false
@@ -452,9 +580,11 @@ class SipCoreManager private constructor(
                 handleConnectionError(accountInfo, error)
             }
 
+
             override fun onPong(timeMs: Long) {
                 lastConnectionCheck = Clock.System.now().toEpochMilliseconds()
             }
+
 
             override fun onRegistrationRenewalRequired(accountKey: String) {
                 val account = activeAccounts[accountKey]
@@ -467,30 +597,38 @@ class SipCoreManager private constructor(
         })
     }
 
+
     fun handleRegistrationError(accountInfo: AccountInfo, reason: String) {
         val accountKey = "${accountInfo.username}@${accountInfo.domain}"
         log.e(tag = TAG) { "Registration failed for $accountKey: $reason" }
 
+
         accountInfo.isRegistered = false
         updateRegistrationState(accountKey, RegistrationState.FAILED)
 
+
         // Si hay un callback pendiente para llamada, ejecutarlo con fallo
         registrationCallbackForCall?.invoke(accountInfo, false)
+
 
         // Manejar reintento de registro normal
         handleRegistrationFailure()
     }
 
+
     fun handleRegistrationSuccess(accountInfo: AccountInfo) {
         val accountKey = "${accountInfo.username}@${accountInfo.domain}"
         log.d(tag = TAG) { "Registration successful for $accountKey" }
 
+
         accountInfo.isRegistered = true
         updateRegistrationState(accountKey, RegistrationState.OK)
+
 
         // Reset retry count on success
         connectionRetryCount = 0
     }
+
 
     private fun handleRegistrationFailure() {
         if (isShuttingDown) {
@@ -498,15 +636,19 @@ class SipCoreManager private constructor(
             return
         }
 
+
         if (connectionRetryCount >= maxRetryAttempts) {
             log.e(tag = TAG) { "Max retry attempts reached - stopping automatic reconnection" }
             return
         }
 
+
         connectionRetryCount++
         val delayMs = calculateBackoffDelay(connectionRetryCount)
 
+
         log.d(tag = TAG) { "Scheduling reconnection attempt $connectionRetryCount/$maxRetryAttempts in ${delayMs}ms" }
+
 
         CoroutineScope(Dispatchers.IO).launch {
             delay(delayMs)
@@ -514,12 +656,14 @@ class SipCoreManager private constructor(
         }
     }
 
+
     private fun attemptReconnectionForAllAccounts() {
         if (isShuttingDown) {
             log.d(tag = TAG) { "Skipping reconnection - shutting down" }
             return
         }
         log.d(tag = TAG) { "Attempting reconnection for all accounts" }
+
 
         activeAccounts.values.forEach { accountInfo ->
             if (!accountInfo.isRegistered || accountInfo.webSocketClient?.isConnected() != true) {
@@ -529,22 +673,27 @@ class SipCoreManager private constructor(
         }
     }
 
+
     private fun reconnectAccountImproved(accountInfo: AccountInfo) {
         if (isShuttingDown) {
             log.d(tag = TAG) { "Skipping reconnection - shutting down" }
             return
         }
 
+
         if (reconnectionInProgress) {
             log.d(tag = TAG) { "Reconnection already in progress for ${accountInfo.username}" }
             return
         }
 
+
         val accountKey = "${accountInfo.username}@${accountInfo.domain}"
         reconnectionInProgress = true
         updateRegistrationState(accountKey, RegistrationState.IN_PROGRESS)
 
+
         log.d(tag = TAG) { "Starting improved reconnection for: ${accountInfo.username}" }
+
 
         CoroutineScope(Dispatchers.IO).launch {
             try {
@@ -552,23 +701,29 @@ class SipCoreManager private constructor(
                 accountInfo.webSocketClient?.close()
                 accountInfo.isRegistered = false
 
+
                 // 2. Esperar un momento para que se liberen recursos
                 delay(1000)
 
+
                 // 3. Actualizar información de la cuenta
                 accountInfo.userAgent = userAgent()
+
 
                 // 4. Crear nueva conexión WebSocket
                 val headers = createHeaders()
                 val newWebSocketClient = createWebSocketClient(accountInfo, headers)
                 accountInfo.webSocketClient = newWebSocketClient
 
+
                 log.d(tag = TAG) { "Reconnection initiated for ${accountInfo.username}" }
+
 
             } catch (e: Exception) {
                 log.e(tag = TAG) { "Error during improved reconnection: ${e.message}" }
                 updateRegistrationState(accountKey, RegistrationState.FAILED)
                 reconnectionInProgress = false
+
 
                 // Programar otro intento si no hemos alcanzado el máximo
                 if (connectionRetryCount < maxRetryAttempts) {
@@ -581,12 +736,14 @@ class SipCoreManager private constructor(
         }
     }
 
+
     private fun calculateBackoffDelay(attempt: Int): Long {
         val baseDelay = 2000L // 2 segundos base
         val maxDelay = 30000L // máximo 30 segundos
         val delay = (2.0.pow((attempt - 1).toDouble()) * baseDelay).toLong()
         return minOf(delay, maxDelay)
     }
+
 
     private fun handleUnexpectedDisconnection(accountInfo: AccountInfo) {
         if (!reconnectionInProgress) {
@@ -597,6 +754,7 @@ class SipCoreManager private constructor(
         }
     }
 
+
     private fun handleConnectionError(accountInfo: AccountInfo, error: Exception) {
         lastConnectionCheck = 0L
         when {
@@ -604,27 +762,33 @@ class SipCoreManager private constructor(
                 forceReconnectAccount(accountInfo)
             }
 
+
             else -> {
                 reconnectAccount(accountInfo)
             }
         }
     }
 
+
     private fun forceReconnectAccount(accountInfo: AccountInfo) {
         reconnectAccount(accountInfo)
     }
 
+
     fun unregisterAllAccounts() {
         log.d(tag = TAG) { "Starting complete unregister and shutdown of all accounts" }
 
+
         // CRÍTICO: Marcar como shutting down PRIMERO
         isShuttingDown = true
+
 
         try {
             // 1. Detener health check inmediatamente
             healthCheckJob?.cancel()
             healthCheckJob = null
             log.d(tag = TAG) { "Health check stopped" }
+
 
             // 3. Terminar llamada activa si existe
             if (callState != CallState.NONE && callState != CallState.ENDED) {
@@ -633,21 +797,26 @@ class SipCoreManager private constructor(
                     webRtcManager.dispose()
                     callState = CallState.ENDED
                     CallStateManager.updateCallState(CallState.ENDED)
+                    notifyCallStateChanged(CallState.ENDED)
                 } catch (e: Exception) {
                     log.e(tag = TAG) { "Error terminating call: ${e.message}" }
                 }
             }
 
+
             // 4. Unregister todas las cuentas
             if (activeAccounts.isNotEmpty()) {
                 log.d(tag = TAG) { "Unregistering ${activeAccounts.size} accounts" }
 
+
                 val accountsToUnregister = activeAccounts.toMap()
+
 
                 accountsToUnregister.values.forEach { accountInfo ->
                     try {
                         val accountKey = "${accountInfo.username}@${accountInfo.domain}"
                         log.d(tag = TAG) { "Unregistering account: $accountKey" }
+
 
                         // Detener timers del WebSocket
                         accountInfo.webSocketClient?.let { webSocket ->
@@ -655,23 +824,29 @@ class SipCoreManager private constructor(
                             webSocket.stopRegistrationRenewalTimer()
                         }
 
+
                         // Enviar unregister si está registrada
                         if (accountInfo.isRegistered && accountInfo.webSocketClient?.isConnected() == true) {
                             messageHandler.sendUnregister(accountInfo)
                         }
 
+
                         // Cerrar WebSocket
                         accountInfo.webSocketClient?.close(1000, "User logout")
                         accountInfo.webSocketClient = null
+
 
                         // Marcar como no registrada
                         accountInfo.isRegistered = false
                         accountInfo.resetCallState()
 
+
                         // Actualizar estado
                         updateRegistrationState(accountKey, RegistrationState.CLEARED)
 
+
                         log.d(tag = TAG) { "Successfully unregistered: $accountKey" }
+
 
                     } catch (e: Exception) {
                         log.e(tag = TAG) { "Error unregistering account ${accountInfo.username}@${accountInfo.domain}: ${e.message}" }
@@ -679,12 +854,15 @@ class SipCoreManager private constructor(
                 }
             }
 
+
             // 5. Limpiar todas las estructuras de datos
             activeAccounts.clear()
             currentAccountInfo = null
 
+
             // Limpiar estados de registro
             _registrationStates.value = emptyMap()
+
 
             // 6. Limpiar WebRTC completamente
             try {
@@ -694,6 +872,7 @@ class SipCoreManager private constructor(
             } catch (e: Exception) {
                 log.e(tag = TAG) { "Error disposing WebRTC: ${e.message}" }
             }
+
 
             // 7. Resetear todos los estados
             callState = CallState.NONE
@@ -706,24 +885,30 @@ class SipCoreManager private constructor(
             lastRegistrationAttempt = 0L
             globalRegistrationState = RegistrationState.CLEARED
 
+
             // 8. Limpiar colas
             clearDtmfQueue()
+
 
             // 9. Actualizar estados globales
             CallStateManager.updateCallState(CallState.NONE)
             RegistrationStateManager.updateCallState(RegistrationState.CLEARED)
 
+
             log.d(tag = TAG) { "Complete unregister and shutdown successful" }
+
 
         } catch (e: Exception) {
             log.e(tag = TAG) { "Error during complete unregister: ${e.message}" }
         }
     }
 
+
     fun makeCall(phoneNumber: String, sipName: String, domain: String) {
         val accountKey = "$sipName@$domain"
         val accountInfo = activeAccounts[accountKey] ?: return
         currentAccountInfo = accountInfo
+
 
         if (!accountInfo.isRegistered) {
             log.d(tag = TAG) { "Error: Not registered with SIP server" }
@@ -731,10 +916,12 @@ class SipCoreManager private constructor(
             return
         }
 
+
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 webRtcManager.setAudioEnabled(true)
                 val sdp = webRtcManager.createOffer()
+
 
                 val callId = generateId()
                 val callData = CallData(
@@ -746,13 +933,16 @@ class SipCoreManager private constructor(
                     localSdp = sdp
                 )
 
+
                 accountInfo.currentCallData = callData
                 CallStateManager.updateCallState(CallState.CALLING)
                 callState = CallState.CALLING
                 CallStateManager.callerNumber(phoneNumber)
 
-                // Notificar cambio de estado
-                sipCallbacks?.onCallStateChanged(callState)
+
+                // CORREGIDO: Notificar cambio de estado usando método interno
+                notifyCallStateChanged(CallState.CALLING)
+
 
                 messageHandler.sendInvite(accountInfo, callData)
             } catch (e: Exception) {
@@ -762,15 +952,19 @@ class SipCoreManager private constructor(
         }
     }
 
+
     fun endCall() {
         val accountInfo = currentAccountInfo ?: return
         val callData = accountInfo.currentCallData ?: return
+
 
         if (callState == CallState.NONE || callState == CallState.ENDED) {
             return
         }
 
+
         val endTime = Clock.System.now().toEpochMilliseconds()
+
 
         when (callState) {
             CallState.CONNECTED, CallState.HOLDING, CallState.ACCEPTING -> {
@@ -778,31 +972,38 @@ class SipCoreManager private constructor(
                 callHistoryManager.addCallLog(callData, CallTypes.SUCCESS, endTime)
             }
 
+
             CallState.CALLING, CallState.RINGING, CallState.OUTGOING -> {
                 messageHandler.sendCancel(accountInfo, callData)
                 callHistoryManager.addCallLog(callData, CallTypes.ABORTED, endTime)
             }
 
+
             else -> {}
         }
 
+
         CallStateManager.updateCallState(CallState.ENDED)
         callState = CallState.ENDED
+        notifyCallStateChanged(CallState.ENDED)
         webRtcManager.dispose()
         clearDtmfQueue()
         accountInfo.resetCallState()
         handleCallTermination()
     }
 
+
     fun acceptCall() {
         val accountInfo = currentAccountInfo ?: return
         val callData = accountInfo.currentCallData ?: return
+
 
         if (callData.direction != CallDirections.INCOMING ||
             (callState != CallState.INCOMING && callState != CallState.RINGING)
         ) {
             return
         }
+
 
         CoroutineScope(Dispatchers.IO).launch {
             try {
@@ -811,20 +1012,25 @@ class SipCoreManager private constructor(
                     delay(1000)
                 }
 
+
                 webRtcManager.prepareAudioForIncomingCall()
                 delay(1000)
+
 
                 val sdp = webRtcManager.createAnswer(accountInfo, callData.remoteSdp ?: "")
                 callData.localSdp = sdp
 
+
                 messageHandler.sendInviteOkResponse(accountInfo, callData)
                 delay(500)
+
 
                 webRtcManager.setAudioEnabled(true)
                 webRtcManager.setMuted(false)
 
+
                 callState = CallState.ACCEPTING
-                sipCallbacks?.onCallStateChanged(callState)
+                notifyCallStateChanged(CallState.ACCEPTING)
             } catch (e: Exception) {
                 log.e(tag = TAG) { "Error accepting call: ${e.message}" }
                 rejectCall()
@@ -832,9 +1038,11 @@ class SipCoreManager private constructor(
         }
     }
 
+
     fun declineCall() {
         val accountInfo = currentAccountInfo ?: return
         val callData = accountInfo.currentCallData ?: return
+
 
         if (callData.direction != CallDirections.INCOMING ||
             (callState != CallState.INCOMING && callState != CallState.RINGING)
@@ -842,25 +1050,32 @@ class SipCoreManager private constructor(
             return
         }
 
+
         if (callData.toTag?.isEmpty() == true) {
             callData.toTag = generateId()
         }
 
+
         messageHandler.sendDeclineResponse(accountInfo, callData)
+
 
         val endTime = Clock.System.now().toEpochMilliseconds()
         callHistoryManager.addCallLog(callData, CallTypes.DECLINED, endTime)
 
+
         CallStateManager.updateCallState(CallState.DECLINED)
         callState = CallState.DECLINED
-        sipCallbacks?.onCallStateChanged(callState)
+        notifyCallStateChanged(CallState.DECLINED)
     }
 
+
     fun rejectCall() = declineCall()
+
 
     fun mute() {
         webRtcManager.setMuted(!webRtcManager.isMuted())
     }
+
 
     fun sendDtmf(digit: Char, duration: Int = 160): Boolean {
         val validDigits = setOf(
@@ -868,9 +1083,11 @@ class SipCoreManager private constructor(
             '*', '#', 'A', 'B', 'C', 'D', 'a', 'b', 'c', 'd'
         )
 
+
         if (!validDigits.contains(digit)) {
             return false
         }
+
 
         val request = DtmfRequest(digit, duration)
         CoroutineScope(Dispatchers.IO).launch {
@@ -880,18 +1097,23 @@ class SipCoreManager private constructor(
             processDtmfQueue()
         }
 
+
         return true
     }
 
+
     fun sendDtmfSequence(digits: String, duration: Int = 160): Boolean {
         if (digits.isEmpty()) return false
+
 
         digits.forEach { digit ->
             sendDtmf(digit, duration)
         }
 
+
         return true
     }
+
 
     private suspend fun processDtmfQueue() = withContext(Dispatchers.IO) {
         dtmfMutex.withLock {
@@ -900,6 +1122,7 @@ class SipCoreManager private constructor(
             }
             isDtmfProcessing = true
         }
+
 
         try {
             while (true) {
@@ -911,7 +1134,9 @@ class SipCoreManager private constructor(
                     }
                 }
 
+
                 if (request == null) break
+
 
                 val success = sendSingleDtmf(request.digit, request.duration)
                 if (success) {
@@ -925,13 +1150,16 @@ class SipCoreManager private constructor(
         }
     }
 
+
     private suspend fun sendSingleDtmf(digit: Char, duration: Int): Boolean {
         val currentAccount = currentAccountInfo
         val callData = currentAccount?.currentCallData
 
+
         if (currentAccount == null || callData == null || callState != CallState.CONNECTED) {
             return false
         }
+
 
         return try {
             // Usar WebRTC para DTMF en Android
@@ -945,6 +1173,7 @@ class SipCoreManager private constructor(
         }
     }
 
+
     fun clearDtmfQueue() {
         CoroutineScope(Dispatchers.IO).launch {
             dtmfMutex.withLock {
@@ -954,9 +1183,11 @@ class SipCoreManager private constructor(
         }
     }
 
+
     fun holdCall() {
         val accountInfo = currentAccountInfo ?: return
         val callData = accountInfo.currentCallData ?: return
+
 
         CoroutineScope(Dispatchers.IO).launch {
             callHoldManager.holdCall()?.let { holdSdp ->
@@ -964,14 +1195,16 @@ class SipCoreManager private constructor(
                 callData.isOnHold = true
                 messageHandler.sendReInvite(accountInfo, callData, holdSdp)
                 callState = CallState.HOLDING
-                sipCallbacks?.onCallStateChanged(callState)
+                notifyCallStateChanged(CallState.HOLDING)
             }
         }
     }
 
+
     fun resumeCall() {
         val accountInfo = currentAccountInfo ?: return
         val callData = accountInfo.currentCallData ?: return
+
 
         CoroutineScope(Dispatchers.IO).launch {
             callHoldManager.resumeCall()?.let { resumeSdp ->
@@ -979,10 +1212,11 @@ class SipCoreManager private constructor(
                 callData.isOnHold = false
                 messageHandler.sendReInvite(accountInfo, callData, resumeSdp)
                 callState = CallState.CONNECTED
-                sipCallbacks?.onCallStateChanged(callState)
+                notifyCallStateChanged(CallState.CONNECTED)
             }
         }
     }
+
 
     fun clearCallLogs() = callHistoryManager.clearCallLogs()
     fun callLogs(): List<CallLog> = callHistoryManager.getAllCallLogs()
@@ -991,9 +1225,11 @@ class SipCoreManager private constructor(
     fun getCallLogsForNumber(phoneNumber: String): List<CallLog> =
         callHistoryManager.getCallLogsForNumber(phoneNumber)
 
+
     fun getRegistrationState(): RegistrationState = globalRegistrationState
     fun currentCall(): Boolean = callState != CallState.NONE && callState != CallState.ENDED
     fun currentCallConnected(): Boolean = callState == CallState.CONNECTED
+
 
     fun isSipCoreManagerHealthy(): Boolean {
         return try {
@@ -1004,6 +1240,7 @@ class SipCoreManager private constructor(
             false
         }
     }
+
 
     fun getSystemHealthReport(): String {
         return buildString {
@@ -1020,6 +1257,7 @@ class SipCoreManager private constructor(
         }
     }
 
+
     fun enterPushMode(token: String? = null) {
         token?.let { newToken ->
             activeAccounts.values.forEach { accountInfo ->
@@ -1027,6 +1265,7 @@ class SipCoreManager private constructor(
             }
         }
     }
+
 
     private fun determineCallType(callData: CallData, finalState: CallState): CallTypes {
         return when (finalState) {
@@ -1041,11 +1280,13 @@ class SipCoreManager private constructor(
         }
     }
 
+
     fun dispose() {
         webRtcManager.dispose()
         activeAccounts.clear()
         _registrationStates.value = emptyMap()
     }
+
 
     fun getMessageHandler(): SipMessageHandler = messageHandler
 }
