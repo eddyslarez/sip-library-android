@@ -21,6 +21,7 @@ import com.eddyslarez.siplibrary.utils.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.datetime.Clock
@@ -114,7 +115,7 @@ class SipCoreManager private constructor(
         startConnectionHealthCheck()
     }
 
-    fun setCallbacks(callbacks: EddysSipLibrary.SipCallbacks) {
+    internal fun setCallbacks(callbacks: EddysSipLibrary.SipCallbacks) {
         this.sipCallbacks = callbacks
     }
 
