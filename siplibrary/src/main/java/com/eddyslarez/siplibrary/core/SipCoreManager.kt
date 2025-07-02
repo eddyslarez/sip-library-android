@@ -51,8 +51,7 @@ class SipCoreManager private constructor(
 
     // NUEVO: Estados de registro por cuenta
     private val _registrationStates = MutableStateFlow<Map<String, RegistrationState>>(emptyMap())
-    val registrationStatesFlow: StateFlow<Map<String, RegistrationState>> =
-        _registrationStates.asStateFlow()
+    val registrationStatesFlow: StateFlow<Map<String, RegistrationState>> = _registrationStates.asStateFlow()
 
 
     // Mantener compatibilidad con el estado global
@@ -157,11 +156,7 @@ class SipCoreManager private constructor(
                 log.d(tag = TAG) { "Notifying registration state change from $previousState to $newState for $accountKey" }
 
                 // Notificar a través de callbacks con información de cuenta
-                sipCallbacks?.onAccountRegistrationStateChanged(
-                    account.username,
-                    account.domain,
-                    newState
-                )
+                sipCallbacks?.onAccountRegistrationStateChanged(account.username, account.domain, newState)
                 sipCallbacks?.onRegistrationStateChanged(newState)
 
                 // Llamar al método de notificación
@@ -207,11 +202,7 @@ class SipCoreManager private constructor(
     /**
      * CORREGIDO: Método para notificar cambios de estado de registro
      */
-    private fun notifyRegistrationStateChanged(
-        state: RegistrationState,
-        username: String,
-        domain: String
-    ) {
+    private fun notifyRegistrationStateChanged(state: RegistrationState, username: String, domain: String) {
         try {
             log.d(tag = TAG) { "Notifying registration state change: $state for $username@$domain" }
 
@@ -244,17 +235,13 @@ class SipCoreManager private constructor(
                         sipCallbacks?.onIncomingCall(callData.from, callData.remoteDisplayName)
                     }
                 }
-
                 CallState.CONNECTED -> {
                     sipCallbacks?.onCallConnected()
                 }
-
                 CallState.ENDED -> {
                     sipCallbacks?.onCallTerminated()
                 }
-
-                else -> { /* otros estados */
-                }
+                else -> { /* otros estados */ }
             }
 
             log.d(tag = TAG) { "Call state notification sent successfully" }
