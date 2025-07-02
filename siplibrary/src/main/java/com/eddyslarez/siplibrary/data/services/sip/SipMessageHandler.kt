@@ -1,5 +1,6 @@
 package com.eddyslarez.siplibrary.data.services.sip
 
+import com.eddyslarez.siplibrary.EddysSipLibrary
 import com.eddyslarez.siplibrary.core.SipCoreManager
 import com.eddyslarez.siplibrary.data.models.*
 import com.eddyslarez.siplibrary.data.services.audio.SdpType
@@ -12,10 +13,9 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.datetime.Clock
-
 /**
  * Handles SIP message processing and generation
- * Optimized version with better organization and reduced duplication
+ * Versión mejorada con mejor soporte para callbacks
  *
  * @author Eddys Larez
  */
@@ -240,8 +240,19 @@ class SipMessageHandler(private val sipCoreManager: SipCoreManager) {
         CallStateManager.updateCallState(CallState.INCOMING)
         sipCoreManager.callState = CallState.INCOMING
 
+        // IMPORTANTE: Notificar la llamada entrante a través de callbacks
+        sipCoreManager.setCallbacks(object : EddysSipLibrary.SipCallbacks {
+            override fun onIncomingCall(callerNumber: String, callerName: String?) {
+                // Este callback será propagado a los listeners de la biblioteca
+            }
+
+            override fun onCallStateChanged(state: CallState) {
+                // Propagar cambio de estado
+            }
+        })
+
         CoroutineScope(Dispatchers.IO).launch {
-            sipCoreManager. audioManager.playRingtone()
+            sipCoreManager.audioManager.playRingtone()
         }
 
         sipCoreManager.windowManager.bringToFront()
@@ -343,15 +354,14 @@ class SipMessageHandler(private val sipCoreManager: SipCoreManager) {
                 log.d(tag = TAG) { "ACK received for non-active call, ignoring" }
                 return
             }
-sipCoreManager.audioManager.stopAllRingtones()
-            //    if (sipCoreManager.callState == CallState.ACCEPTING) {
+            sipCoreManager.audioManager.stopAllRingtones()
+
             sipCoreManager.callState = CallState.CONNECTED
             CallStateManager.updateCallState(CallState.CONNECTED)
             log.d(tag = TAG) { "🟢 Call connected after receiving ACK" }
             sipCoreManager.callStartTimeMillis = Clock.System.now().toEpochMilliseconds()
             accountInfo.isCallConnected = true
             accountInfo.callStartTime = sipCoreManager.callStartTimeMillis
-            // }
         } catch (e: Exception) {
             log.e(tag = TAG) { "Error handling incoming ACK: ${e.stackTraceToString()}" }
         }
@@ -384,7 +394,7 @@ sipCoreManager.audioManager.stopAllRingtones()
         callInitiationTimeout?.cancel()
 
         when (statusCode) {
-           CODE_TRYING -> {
+            CODE_TRYING -> {
                 handleTrying()
                 startCallInitiationTimeout(accountInfo)
             }
@@ -420,7 +430,7 @@ sipCoreManager.audioManager.stopAllRingtones()
                 handleRetryableError(statusCode, message, accountInfo, lines)
             }
 
-           CODE_REQUEST_TERMINATED -> handleRequestTerminated(accountInfo, lines)
+            CODE_REQUEST_TERMINATED -> handleRequestTerminated(accountInfo, lines)
             else -> {
                 if (statusCode != null && statusCode >= 400) {
                     // Para otros errores 4xx, 5xx, 6xx también intentar retry
@@ -502,6 +512,7 @@ sipCoreManager.audioManager.stopAllRingtones()
             handleFinalCallFailure(accountInfo)
         }
     }
+
     private fun handleFinalCallFailure(accountInfo: AccountInfo) {
         log.d(tag = TAG) { "Call failed after all retry attempts" }
 
@@ -659,7 +670,9 @@ sipCoreManager.audioManager.stopAllRingtones()
         log.d(tag = TAG) { "Successful registration with expiration: $expires seconds" }
 
         accountInfo.isRegistered = true
-        sipCoreManager.updateRegistrationState(RegistrationState.OK)
+
+        // IMPORTANTE: Usar el nuevo método que actualiza por cuenta
+        sipCoreManager.handleRegistrationSuccess(accountInfo)
 
         // Configure renewal
         val expiresMs = expires * 1000L
@@ -686,7 +699,11 @@ sipCoreManager.audioManager.stopAllRingtones()
         log.d(tag = TAG) { "Unhandled SIP code: $statusCode" }
 
         if (statusCode != null && statusCode >= 400) {
-            sipCoreManager.updateRegistrationState(RegistrationState.FAILED)
+            // Para registration errors, obtener la cuenta actual
+            sipCoreManager.currentAccountInfo?.let { accountInfo ->
+                val accountKey = "${accountInfo.username}@${accountInfo.domain}"
+                sipCoreManager.updateRegistrationState(accountKey, RegistrationState.FAILED)
+            }
             CallStateManager.updateCallState(CallState.ERROR)
         }
     }

@@ -14,7 +14,7 @@ import com.eddyslarez.siplibrary.data.models.AppLifecycleListener
  * 
  * @author Eddys Larez
  */
-class PlatformRegistration(application: Application) {
+class PlatformRegistration() {
     
     fun setupNotificationObservers(listener: AppLifecycleListener) {
         // FinishedLaunching

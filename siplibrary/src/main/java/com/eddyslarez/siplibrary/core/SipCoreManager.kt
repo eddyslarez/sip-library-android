@@ -19,13 +19,15 @@ import com.eddyslarez.siplibrary.platform.PlatformRegistration
 import com.eddyslarez.siplibrary.platform.WindowManager
 import com.eddyslarez.siplibrary.utils.*
 import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.datetime.Clock
 import kotlin.math.pow
 
 /**
- * Gestor principal del core SIP - Adaptado para Android
+ * Gestor principal del core SIP - Adaptado para Android con soporte multi-cuenta mejorado
  *
  * @author Eddys Larez
  */
@@ -44,7 +46,14 @@ class SipCoreManager private constructor(
     private var sipCallbacks: EddysSipLibrary.SipCallbacks? = null
     private var isShuttingDown = false
     val callHistoryManager = CallHistoryManager()
-    private var registrationState = RegistrationState.NONE
+
+    // NUEVO: Estados de registro por cuenta
+    private val _registrationStates = MutableStateFlow<Map<String, RegistrationState>>(emptyMap())
+    val registrationStatesFlow: StateFlow<Map<String, RegistrationState>> = _registrationStates.asStateFlow()
+
+    // Mantener compatibilidad con el estado global
+    private var globalRegistrationState = RegistrationState.NONE
+
     private val activeAccounts = HashMap<String, AccountInfo>()
     var callState = CallState.NONE
     var callStartTimeMillis: Long = 0
@@ -64,10 +73,9 @@ class SipCoreManager private constructor(
 
     // WebRTC manager and other managers
     val webRtcManager = WebRtcManagerFactory.createWebRtcManager(application)
-    private val platformRegistration = PlatformRegistration(application)
+    private val platformRegistration = PlatformRegistration()
     private val callHoldManager = CallHoldManager(webRtcManager)
     private val audioDeviceManager = AudioDeviceManager()
-
 
     companion object {
         private const val TAG = "SipCoreManager"
@@ -108,6 +116,66 @@ class SipCoreManager private constructor(
 
     fun setCallbacks(callbacks: EddysSipLibrary.SipCallbacks) {
         this.sipCallbacks = callbacks
+    }
+
+    /**
+     * NUEVO: Actualiza el estado de registro para una cuenta específica
+     */
+    fun updateRegistrationState(accountKey: String, newState: RegistrationState) {
+        val currentStates = _registrationStates.value.toMutableMap()
+        currentStates[accountKey] = newState
+        _registrationStates.value = currentStates
+
+        // Actualizar estado global para compatibilidad
+        globalRegistrationState = newState
+        RegistrationStateManager.updateCallState(newState)
+
+        // Notificar a través de callbacks
+        val account = activeAccounts[accountKey]
+        if (account != null) {
+            sipCallbacks?.onRegistrationStateChanged(newState)
+
+            // Llamar al callback específico con información de la cuenta
+            notifyRegistrationStateChanged(newState, account.username, account.domain)
+        }
+
+        log.d(tag = TAG) { "Updated registration state for $accountKey: $newState" }
+    }
+
+    /**
+     * NUEVO: Método de conveniencia para mantener compatibilidad
+     */
+    fun updateRegistrationState(newState: RegistrationState) {
+        currentAccountInfo?.let { account ->
+            val accountKey = "${account.username}@${account.domain}"
+            updateRegistrationState(accountKey, newState)
+        }
+    }
+
+    /**
+     * NUEVO: Obtiene el estado de registro para una cuenta específica
+     */
+    fun getRegistrationState(accountKey: String): RegistrationState {
+        return _registrationStates.value[accountKey] ?: RegistrationState.NONE
+    }
+
+    /**
+     * NUEVO: Obtiene todos los estados de registro
+     */
+    fun getAllRegistrationStates(): Map<String, RegistrationState> {
+        return _registrationStates.value
+    }
+
+    /**
+     * NUEVO: Notifica cambios de estado a los listeners
+     */
+    private fun notifyRegistrationStateChanged(state: RegistrationState, username: String, domain: String) {
+        try {
+            sipCallbacks?.onRegistrationStateChanged(state)
+            log.d(tag = TAG) { "Notified registration state change: $state for $username@$domain" }
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error notifying registration state change: ${e.message}" }
+        }
     }
 
     private fun setupWebRtcEventListener() {
@@ -182,7 +250,6 @@ class SipCoreManager private constructor(
         }
     }
 
-
     private fun setupPlatformLifecycleObservers() {
         platformRegistration.setupNotificationObservers(object : AppLifecycleListener {
             override fun onEvent(event: AppLifecycleEvent) {
@@ -207,6 +274,9 @@ class SipCoreManager private constructor(
         callStartTimeMillis = Clock.System.now().toEpochMilliseconds()
         CallStateManager.updateCallState(CallState.CONNECTED)
         callState = CallState.CONNECTED
+
+        // Notificar conexión de llamada
+        sipCallbacks?.onCallConnected()
     }
 
     private fun handleWebRtcClosed() {
@@ -220,6 +290,7 @@ class SipCoreManager private constructor(
 
     internal fun handleCallTermination() {
         onCallTerminated?.invoke()
+        sipCallbacks?.onCallTerminated()
     }
 
     private fun refreshAllRegistrationsWithNewUserAgent() {
@@ -272,11 +343,6 @@ class SipCoreManager private constructor(
         }
     }
 
-    fun updateRegistrationState(newState: RegistrationState) {
-        registrationState = newState
-        RegistrationStateManager.updateCallState(newState)
-    }
-
     fun register(
         username: String,
         password: String,
@@ -293,9 +359,13 @@ class SipCoreManager private constructor(
             accountInfo.provider = provider
             accountInfo.userAgent = userAgent()
 
+            // Inicializar estado de registro para esta cuenta
+            updateRegistrationState(accountKey, RegistrationState.IN_PROGRESS)
+
             connectWebSocketAndRegister(accountInfo)
         } catch (e: Exception) {
-            updateRegistrationState(RegistrationState.FAILED)
+            val accountKey = "$username@$domain"
+            updateRegistrationState(accountKey, RegistrationState.FAILED)
             throw Exception("Registration error: ${e.message}")
         }
     }
@@ -308,6 +378,15 @@ class SipCoreManager private constructor(
             messageHandler.sendUnregister(accountInfo)
             accountInfo.webSocketClient?.close()
             activeAccounts.remove(accountKey)
+
+            // Actualizar estado
+            updateRegistrationState(accountKey, RegistrationState.NONE)
+
+            // Remover del mapa de estados
+            val currentStates = _registrationStates.value.toMutableMap()
+            currentStates.remove(accountKey)
+            _registrationStates.value = currentStates
+
         } catch (e: Exception) {
             log.d(tag = TAG) { "Error unregistering account: ${e.message}" }
         }
@@ -357,16 +436,18 @@ class SipCoreManager private constructor(
             }
 
             override fun onClose(code: Int, reason: String) {
+                val accountKey = "${accountInfo.username}@${accountInfo.domain}"
                 accountInfo.isRegistered = false
-                updateRegistrationState(RegistrationState.NONE)
+                updateRegistrationState(accountKey, RegistrationState.NONE)
                 if (code != 1000) {
                     handleUnexpectedDisconnection(accountInfo)
                 }
             }
 
             override fun onError(error: Exception) {
+                val accountKey = "${accountInfo.username}@${accountInfo.domain}"
                 accountInfo.isRegistered = false
-                updateRegistrationState(RegistrationState.FAILED)
+                updateRegistrationState(accountKey, RegistrationState.FAILED)
                 handleConnectionError(accountInfo, error)
             }
 
@@ -386,16 +467,28 @@ class SipCoreManager private constructor(
     }
 
     fun handleRegistrationError(accountInfo: AccountInfo, reason: String) {
-        log.e(tag = TAG) { "Registration failed for ${accountInfo.username}@${accountInfo.domain}: $reason" }
+        val accountKey = "${accountInfo.username}@${accountInfo.domain}"
+        log.e(tag = TAG) { "Registration failed for $accountKey: $reason" }
 
         accountInfo.isRegistered = false
-        updateRegistrationState(RegistrationState.FAILED)
+        updateRegistrationState(accountKey, RegistrationState.FAILED)
 
         // Si hay un callback pendiente para llamada, ejecutarlo con fallo
         registrationCallbackForCall?.invoke(accountInfo, false)
 
         // Manejar reintento de registro normal
         handleRegistrationFailure()
+    }
+
+    fun handleRegistrationSuccess(accountInfo: AccountInfo) {
+        val accountKey = "${accountInfo.username}@${accountInfo.domain}"
+        log.d(tag = TAG) { "Registration successful for $accountKey" }
+
+        accountInfo.isRegistered = true
+        updateRegistrationState(accountKey, RegistrationState.OK)
+
+        // Reset retry count on success
+        connectionRetryCount = 0
     }
 
     private fun handleRegistrationFailure() {
@@ -446,8 +539,9 @@ class SipCoreManager private constructor(
             return
         }
 
+        val accountKey = "${accountInfo.username}@${accountInfo.domain}"
         reconnectionInProgress = true
-        updateRegistrationState(RegistrationState.IN_PROGRESS)
+        updateRegistrationState(accountKey, RegistrationState.IN_PROGRESS)
 
         log.d(tag = TAG) { "Starting improved reconnection for: ${accountInfo.username}" }
 
@@ -472,7 +566,7 @@ class SipCoreManager private constructor(
 
             } catch (e: Exception) {
                 log.e(tag = TAG) { "Error during improved reconnection: ${e.message}" }
-                updateRegistrationState(RegistrationState.FAILED)
+                updateRegistrationState(accountKey, RegistrationState.FAILED)
                 reconnectionInProgress = false
 
                 // Programar otro intento si no hemos alcanzado el máximo
@@ -551,7 +645,8 @@ class SipCoreManager private constructor(
 
                 accountsToUnregister.values.forEach { accountInfo ->
                     try {
-                        log.d(tag = TAG) { "Unregistering account: ${accountInfo.username}@${accountInfo.domain}" }
+                        val accountKey = "${accountInfo.username}@${accountInfo.domain}"
+                        log.d(tag = TAG) { "Unregistering account: $accountKey" }
 
                         // Detener timers del WebSocket
                         accountInfo.webSocketClient?.let { webSocket ->
@@ -562,8 +657,6 @@ class SipCoreManager private constructor(
                         // Enviar unregister si está registrada
                         if (accountInfo.isRegistered && accountInfo.webSocketClient?.isConnected() == true) {
                             messageHandler.sendUnregister(accountInfo)
-                            // Dar tiempo para que se envíe el mensaje
-//                            Thread.sleep(500)
                         }
 
                         // Cerrar WebSocket
@@ -574,7 +667,10 @@ class SipCoreManager private constructor(
                         accountInfo.isRegistered = false
                         accountInfo.resetCallState()
 
-                        log.d(tag = TAG) { "Successfully unregistered: ${accountInfo.username}@${accountInfo.domain}" }
+                        // Actualizar estado
+                        updateRegistrationState(accountKey, RegistrationState.CLEARED)
+
+                        log.d(tag = TAG) { "Successfully unregistered: $accountKey" }
 
                     } catch (e: Exception) {
                         log.e(tag = TAG) { "Error unregistering account ${accountInfo.username}@${accountInfo.domain}: ${e.message}" }
@@ -585,6 +681,9 @@ class SipCoreManager private constructor(
             // 5. Limpiar todas las estructuras de datos
             activeAccounts.clear()
             currentAccountInfo = null
+
+            // Limpiar estados de registro
+            _registrationStates.value = emptyMap()
 
             // 6. Limpiar WebRTC completamente
             try {
@@ -604,25 +703,20 @@ class SipCoreManager private constructor(
             connectionRetryCount = 0
             lastConnectionCheck = 0L
             lastRegistrationAttempt = 0L
+            globalRegistrationState = RegistrationState.CLEARED
 
             // 8. Limpiar colas
             clearDtmfQueue()
 
-            // 9. Actualizar estados
-            updateRegistrationState(RegistrationState.CLEARED)
+            // 9. Actualizar estados globales
             CallStateManager.updateCallState(CallState.NONE)
-
-            // 10. Limpiar callbacks
-//            ackListener = null
-//            onCallTerminated = null
+            RegistrationStateManager.updateCallState(RegistrationState.CLEARED)
 
             log.d(tag = TAG) { "Complete unregister and shutdown successful" }
 
         } catch (e: Exception) {
             log.e(tag = TAG) { "Error during complete unregister: ${e.message}" }
         }
-
-        // IMPORTANTE: NO llamar shutdown() aquí ya que ya hicimos todo
     }
 
     fun makeCall(phoneNumber: String, sipName: String, domain: String) {
@@ -632,6 +726,7 @@ class SipCoreManager private constructor(
 
         if (!accountInfo.isRegistered) {
             log.d(tag = TAG) { "Error: Not registered with SIP server" }
+            sipCallbacks?.onCallFailed("Not registered with SIP server")
             return
         }
 
@@ -655,9 +750,13 @@ class SipCoreManager private constructor(
                 callState = CallState.CALLING
                 CallStateManager.callerNumber(phoneNumber)
 
+                // Notificar cambio de estado
+                sipCallbacks?.onCallStateChanged(callState)
+
                 messageHandler.sendInvite(accountInfo, callData)
             } catch (e: Exception) {
                 log.e(tag = TAG) { "Error creating call: ${e.stackTraceToString()}" }
+                sipCallbacks?.onCallFailed("Error creating call: ${e.message}")
             }
         }
     }
@@ -691,7 +790,7 @@ class SipCoreManager private constructor(
         webRtcManager.dispose()
         clearDtmfQueue()
         accountInfo.resetCallState()
-        onCallTerminated?.invoke()
+        handleCallTermination()
     }
 
     fun acceptCall() {
@@ -724,6 +823,7 @@ class SipCoreManager private constructor(
                 webRtcManager.setMuted(false)
 
                 callState = CallState.ACCEPTING
+                sipCallbacks?.onCallStateChanged(callState)
             } catch (e: Exception) {
                 log.e(tag = TAG) { "Error accepting call: ${e.message}" }
                 rejectCall()
@@ -752,6 +852,7 @@ class SipCoreManager private constructor(
 
         CallStateManager.updateCallState(CallState.DECLINED)
         callState = CallState.DECLINED
+        sipCallbacks?.onCallStateChanged(callState)
     }
 
     fun rejectCall() = declineCall()
@@ -862,6 +963,7 @@ class SipCoreManager private constructor(
                 callData.isOnHold = true
                 messageHandler.sendReInvite(accountInfo, callData, holdSdp)
                 callState = CallState.HOLDING
+                sipCallbacks?.onCallStateChanged(callState)
             }
         }
     }
@@ -876,6 +978,7 @@ class SipCoreManager private constructor(
                 callData.isOnHold = false
                 messageHandler.sendReInvite(accountInfo, callData, resumeSdp)
                 callState = CallState.CONNECTED
+                sipCallbacks?.onCallStateChanged(callState)
             }
         }
     }
@@ -887,7 +990,7 @@ class SipCoreManager private constructor(
     fun getCallLogsForNumber(phoneNumber: String): List<CallLog> =
         callHistoryManager.getCallLogsForNumber(phoneNumber)
 
-    fun getRegistrationState(): RegistrationState = registrationState
+    fun getRegistrationState(): RegistrationState = globalRegistrationState
     fun currentCall(): Boolean = callState != CallState.NONE && callState != CallState.ENDED
     fun currentCallConnected(): Boolean = callState == CallState.CONNECTED
 
@@ -908,7 +1011,11 @@ class SipCoreManager private constructor(
             appendLine("WebRTC Initialized: ${webRtcManager.isInitialized()}")
             appendLine("Active Accounts: ${activeAccounts.size}")
             appendLine("Current Call State: $callState")
-            appendLine("Registration State: $registrationState")
+            appendLine("Global Registration State: $globalRegistrationState")
+            appendLine("Registration States per Account:")
+            _registrationStates.value.forEach { (account, state) ->
+                appendLine("  - $account: $state")
+            }
         }
     }
 
@@ -936,6 +1043,7 @@ class SipCoreManager private constructor(
     fun dispose() {
         webRtcManager.dispose()
         activeAccounts.clear()
+        _registrationStates.value = emptyMap()
     }
 
     fun getMessageHandler(): SipMessageHandler = messageHandler
