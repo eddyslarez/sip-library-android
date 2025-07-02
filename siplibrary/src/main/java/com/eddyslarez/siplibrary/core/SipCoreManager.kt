@@ -222,26 +222,36 @@ class SipCoreManager private constructor(
     /**
      * CORREGIDO: Método para notificar estados de llamada
      */
-    private fun notifyCallStateChanged(state: CallState) {
+    fun notifyCallStateChanged(state: CallState) {
         try {
             log.d(tag = TAG) { "Notifying call state change: $state" }
 
+            // Actualizar estado interno
+            callState = state
+            CallStateManager.updateCallState(state)
+
+            // Notificar a través de callbacks
             sipCallbacks?.onCallStateChanged(state)
 
             // Notificar cambios específicos
             when (state) {
                 CallState.INCOMING -> {
                     currentAccountInfo?.currentCallData?.let { callData ->
+                        log.d(tag = TAG) { "Notifying incoming call from ${callData.from}" }
                         sipCallbacks?.onIncomingCall(callData.from, callData.remoteDisplayName)
                     }
                 }
                 CallState.CONNECTED -> {
+                    log.d(tag = TAG) { "Notifying call connected" }
                     sipCallbacks?.onCallConnected()
                 }
                 CallState.ENDED -> {
+                    log.d(tag = TAG) { "Notifying call terminated" }
                     sipCallbacks?.onCallTerminated()
                 }
-                else -> { /* otros estados */ }
+                else -> {
+                    log.d(tag = TAG) { "Other call state: $state" }
+                }
             }
 
             log.d(tag = TAG) { "Call state notification sent successfully" }
@@ -358,20 +368,14 @@ class SipCoreManager private constructor(
 
     private fun handleWebRtcConnected() {
         callStartTimeMillis = Clock.System.now().toEpochMilliseconds()
-        CallStateManager.updateCallState(CallState.CONNECTED)
-        callState = CallState.CONNECTED
 
-
-        // CORREGIDO: Notificar conexión de llamada usando el método interno
+        // CORREGIDO: Usar el método de notificación centralizado
         notifyCallStateChanged(CallState.CONNECTED)
     }
 
 
     private fun handleWebRtcClosed() {
-        callState = CallState.ENDED
-        CallStateManager.updateCallState(CallState.ENDED)
-
-        // CORREGIDO: Notificar finalización de llamada
+        // CORREGIDO: Usar el método de notificación centralizado
         notifyCallStateChanged(CallState.ENDED)
 
         currentAccountInfo?.currentCallData?.let { callData ->
@@ -782,8 +786,6 @@ class SipCoreManager private constructor(
                 log.d(tag = TAG) { "Terminating active call during unregister" }
                 try {
                     webRtcManager.dispose()
-                    callState = CallState.ENDED
-                    CallStateManager.updateCallState(CallState.ENDED)
                     notifyCallStateChanged(CallState.ENDED)
                 } catch (e: Exception) {
                     log.e(tag = TAG) { "Error terminating call: ${e.message}" }
@@ -922,12 +924,10 @@ class SipCoreManager private constructor(
 
 
                 accountInfo.currentCallData = callData
-                CallStateManager.updateCallState(CallState.CALLING)
-                callState = CallState.CALLING
                 CallStateManager.callerNumber(phoneNumber)
 
 
-                // CORREGIDO: Notificar cambio de estado usando método interno
+                // CORREGIDO: Usar el método de notificación centralizado
                 notifyCallStateChanged(CallState.CALLING)
 
 
@@ -970,8 +970,7 @@ class SipCoreManager private constructor(
         }
 
 
-        CallStateManager.updateCallState(CallState.ENDED)
-        callState = CallState.ENDED
+        // CORREGIDO: Usar el método de notificación centralizado
         notifyCallStateChanged(CallState.ENDED)
         webRtcManager.dispose()
         clearDtmfQueue()
@@ -1016,7 +1015,7 @@ class SipCoreManager private constructor(
                 webRtcManager.setMuted(false)
 
 
-                callState = CallState.ACCEPTING
+                // CORREGIDO: Usar el método de notificación centralizado
                 notifyCallStateChanged(CallState.ACCEPTING)
             } catch (e: Exception) {
                 log.e(tag = TAG) { "Error accepting call: ${e.message}" }
@@ -1050,8 +1049,7 @@ class SipCoreManager private constructor(
         callHistoryManager.addCallLog(callData, CallTypes.DECLINED, endTime)
 
 
-        CallStateManager.updateCallState(CallState.DECLINED)
-        callState = CallState.DECLINED
+        // CORREGIDO: Usar el método de notificación centralizado
         notifyCallStateChanged(CallState.DECLINED)
     }
 
@@ -1181,7 +1179,8 @@ class SipCoreManager private constructor(
                 callData.localSdp = holdSdp
                 callData.isOnHold = true
                 messageHandler.sendReInvite(accountInfo, callData, holdSdp)
-                callState = CallState.HOLDING
+
+                // CORREGIDO: Usar el método de notificación centralizado
                 notifyCallStateChanged(CallState.HOLDING)
             }
         }
@@ -1198,7 +1197,8 @@ class SipCoreManager private constructor(
                 callData.localSdp = resumeSdp
                 callData.isOnHold = false
                 messageHandler.sendReInvite(accountInfo, callData, resumeSdp)
-                callState = CallState.CONNECTED
+
+                // CORREGIDO: Usar el método de notificación centralizado
                 notifyCallStateChanged(CallState.CONNECTED)
             }
         }

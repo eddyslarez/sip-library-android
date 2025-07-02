@@ -235,21 +235,12 @@ class SipMessageHandler(private val sipCoreManager: SipCoreManager) {
     }
 
     private fun updateUIForIncomingCall(callData: CallData) {
+        log.d(tag = TAG) { "Updating UI for incoming call from ${callData.from}" }
+
         CallStateManager.callerNumber(callData.from)
         CallStateManager.callId(callData.callId)
-        CallStateManager.updateCallState(CallState.INCOMING)
-        sipCoreManager.callState = CallState.INCOMING
 
-        // IMPORTANTE: Notificar la llamada entrante a través de callbacks
-        sipCoreManager.setCallbacks(object : EddysSipLibrary.SipCallbacks {
-            override fun onIncomingCall(callerNumber: String, callerName: String?) {
-                // Este callback será propagado a los listeners de la biblioteca
-            }
-
-            override fun onCallStateChanged(state: CallState) {
-                // Propagar cambio de estado
-            }
-        })
+        sipCoreManager.notifyCallStateChanged(CallState.INCOMING)
 
         CoroutineScope(Dispatchers.IO).launch {
             sipCoreManager.audioManager.playRingtone()
@@ -319,8 +310,7 @@ class SipMessageHandler(private val sipCoreManager: SipCoreManager) {
             }
             sipCoreManager.audioManager.stopAllRingtones()
 
-            // Common termination cleanup
-            CallStateManager.updateCallState(CallState.ENDED)
+            sipCoreManager.notifyCallStateChanged(CallState.ENDED)
             sipCoreManager.webRtcManager.dispose()
             accountInfo.currentCallData = null
             terminateCall()
@@ -356,8 +346,8 @@ class SipMessageHandler(private val sipCoreManager: SipCoreManager) {
             }
             sipCoreManager.audioManager.stopAllRingtones()
 
-            sipCoreManager.callState = CallState.CONNECTED
-            CallStateManager.updateCallState(CallState.CONNECTED)
+            sipCoreManager.notifyCallStateChanged(CallState.CONNECTED)
+
             log.d(tag = TAG) { "🟢 Call connected after receiving ACK" }
             sipCoreManager.callStartTimeMillis = Clock.System.now().toEpochMilliseconds()
             accountInfo.isCallConnected = true
@@ -516,13 +506,10 @@ class SipMessageHandler(private val sipCoreManager: SipCoreManager) {
     private fun handleFinalCallFailure(accountInfo: AccountInfo) {
         log.d(tag = TAG) { "Call failed after all retry attempts" }
 
-        // Limpiar datos de la llamada
         accountInfo.currentCallData = null
         accountInfo.resetCallState()
 
-        // Actualizar estado a ERROR
-        CallStateManager.updateCallState(CallState.ERROR)
-        sipCoreManager.callState = CallState.ERROR
+        sipCoreManager.notifyCallStateChanged(CallState.ERROR)
     }
 
     private fun clearRetryData(callId: String) {
@@ -535,11 +522,11 @@ class SipMessageHandler(private val sipCoreManager: SipCoreManager) {
         callInitiationTimeout = CoroutineScope(Dispatchers.IO).launch {
             delay(30000)
             log.d(tag = TAG) { "Call initiation timeout" }
-            CallStateManager.updateCallState(CallState.ERROR)
-            sipCoreManager.callState = CallState.ERROR
+            sipCoreManager.notifyCallStateChanged(CallState.ERROR)
             accountInfo.currentCallData = null
         }
     }
+
     private fun handleReInviteResponse(
         statusCode: Int?,
         message: String,
@@ -577,7 +564,7 @@ class SipMessageHandler(private val sipCoreManager: SipCoreManager) {
     private fun restorePreviousHoldState(callData: CallData) {
         callData.isOnHold = !callData.isOnHold!!
         val newState = if (callData.isOnHold!!) CallState.HOLDING else CallState.CONNECTED
-        CallStateManager.updateCallState(newState)
+        sipCoreManager.notifyCallStateChanged(newState)
     }
 
     private fun handleByeResponse(
@@ -611,7 +598,7 @@ class SipMessageHandler(private val sipCoreManager: SipCoreManager) {
             else -> {
                 log.d(tag = TAG) { "Unexpected CANCEL response: $statusCode" }
                 terminateCall()
-                CallStateManager.updateCallState(CallState.ENDED)
+                sipCoreManager.notifyCallStateChanged(CallState.ENDED)
                 accountInfo.resetCallState()
             }
         }
@@ -636,7 +623,8 @@ class SipMessageHandler(private val sipCoreManager: SipCoreManager) {
 
         sendAck(accountInfo, callData)
         sipCoreManager.audioManager.stopAllRingtones()
-        CallStateManager.updateCallState(CallState.CONNECTED)
+
+        sipCoreManager.notifyCallStateChanged(CallState.CONNECTED)
         sipCoreManager.callStartTimeMillis = Clock.System.now().toEpochMilliseconds()
     }
 
@@ -649,18 +637,18 @@ class SipMessageHandler(private val sipCoreManager: SipCoreManager) {
             accountInfo.webSocketClient?.send(ackMessage)
         }
         sipCoreManager.audioManager.stopAllRingtones()
-        CallStateManager.updateCallState(CallState.ENDED)
+
+        sipCoreManager.notifyCallStateChanged(CallState.ENDED)
         accountInfo.resetCallState()
     }
 
     private fun handleTrying() {
         log.d(tag = TAG) { "Trying (100)" }
-        CallStateManager.updateCallState(CallState.INITIATING)
+        sipCoreManager.notifyCallStateChanged(CallState.INITIATING)
     }
 
     private fun handleRinging() {
-        CallStateManager.updateCallState(CallState.OUTGOING)
-        sipCoreManager.callState = CallState.OUTGOING
+        sipCoreManager.notifyCallStateChanged(CallState.OUTGOING)
         sipCoreManager.audioManager.playOutgoingRingtone()
         log.d(tag = TAG) { "Call established - Ringing/Session Progress (180/183)" }
     }
@@ -699,7 +687,7 @@ class SipMessageHandler(private val sipCoreManager: SipCoreManager) {
 
     private fun handleBusy() {
         log.d(tag = TAG) { "Call rejected: Busy (486)" }
-        CallStateManager.updateCallState(CallState.DECLINED)
+        sipCoreManager.notifyCallStateChanged(CallState.DECLINED)
     }
 
     private fun handleOtherStatusCodes(statusCode: Int?) {
@@ -711,7 +699,7 @@ class SipMessageHandler(private val sipCoreManager: SipCoreManager) {
                 val accountKey = "${accountInfo.username}@${accountInfo.domain}"
                 sipCoreManager.updateRegistrationState(accountKey, RegistrationState.FAILED)
             }
-            CallStateManager.updateCallState(CallState.ERROR)
+            sipCoreManager.notifyCallStateChanged(CallState.ERROR)
         }
     }
 
