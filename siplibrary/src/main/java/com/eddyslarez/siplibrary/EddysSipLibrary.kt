@@ -245,14 +245,7 @@ class EddysSipLibrary private constructor() {
 
                 override fun onIncomingCall(callerNumber: String, callerName: String?) {
                     log.d(tag = TAG) { "Internal callback: onIncomingCall from $callerNumber" }
-                    val callInfo = IncomingCallInfo(
-                        callId = generateCallId(),
-                        callerNumber = callerNumber,
-                        callerName = callerName,
-                        targetAccount = manager.getCurrentUsername() ?: "",
-                        timestamp = System.currentTimeMillis()
-                    )
-
+                    val callInfo = createIncomingCallInfoFromCurrentCall(callerNumber, callerName)
                     notifyIncomingCall(callInfo)
                 }
 
@@ -499,7 +492,10 @@ class EddysSipLibrary private constructor() {
         notifyIncomingCall(callInfo)
     }
 
-    private fun createIncomingCallInfo(callerNumber: String, callerName: String?): IncomingCallInfo {
+    /**
+     * CORREGIDO: Crear IncomingCallInfo desde los datos actuales de la llamada
+     */
+    private fun createIncomingCallInfoFromCurrentCall(callerNumber: String, callerName: String?): IncomingCallInfo {
         val manager = sipCoreManager ?: return IncomingCallInfo(
             callId = generateCallId(),
             callerNumber = callerNumber,
@@ -508,22 +504,31 @@ class EddysSipLibrary private constructor() {
             timestamp = System.currentTimeMillis()
         )
 
-        notifyIncomingCall(callInfo)
+        val account = manager.currentAccountInfo
+        val callData = account?.currentCallData
 
+        return IncomingCallInfo(
+            callId = callData?.callId ?: generateCallId(),
+            callerNumber = callerNumber,
+            callerName = callerName,
+            targetAccount = account?.username ?: "",
+            timestamp = callData?.startTime ?: System.currentTimeMillis()
+        )
     }
 
 
     // === MÉTODOS AUXILIARES ===
 
 
+    /**
+     * CORREGIDO: Método getCurrentCallInfo() que maneja correctamente los valores null
+     */
     private fun getCurrentCallInfo(): CallInfo? {
         val manager = sipCoreManager ?: return null
         val account = manager.currentAccountInfo ?: return null
         val callData = account.currentCallData ?: return null
 
-
-
-        return callData.isOnHold?.let {
+        return try {
             CallInfo(
                 callId = callData.callId,
                 phoneNumber = if (callData.direction == CallDirections.INCOMING) callData.from else callData.to,
@@ -531,13 +536,15 @@ class EddysSipLibrary private constructor() {
                 direction = if (callData.direction == CallDirections.INCOMING) CallDirection.INCOMING else CallDirection.OUTGOING,
                 startTime = manager.callStartTimeMillis,
                 duration = if (manager.callStartTimeMillis > 0) System.currentTimeMillis() - manager.callStartTimeMillis else 0,
-                isOnHold = it,
+                isOnHold = callData.isOnHold ?: false, // CORREGIDO: Manejar null con valor por defecto
                 isMuted = manager.webRtcManager.isMuted(),
                 localAccount = account.username,
                 codec = null // Extraer del SDP si está disponible
             )
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error creating CallInfo: ${e.message}" }
+            null
         }
-
     }
 
 
