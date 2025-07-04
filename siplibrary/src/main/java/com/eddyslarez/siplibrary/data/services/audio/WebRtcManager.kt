@@ -78,7 +78,7 @@ interface WebRtcManager {
      * Set a listener for WebRTC events
      * @param listener The WebRTC event listener
      */
-    fun setListener(listener: Any)
+    fun setListener(listener: Any?)
     fun prepareAudioForIncomingCall()
     suspend fun applyModifiedSdp(modifiedSdp: String): Boolean
     fun isInitialized(): Boolean
@@ -132,5 +132,5 @@ interface WebRtcEventListener {
      */
     fun onRemoteAudioTrack()
 
-    fun onAudioDeviceChanged(device: AudioDevice)
+    fun onAudioDeviceChanged(device: AudioDevice?)
 }

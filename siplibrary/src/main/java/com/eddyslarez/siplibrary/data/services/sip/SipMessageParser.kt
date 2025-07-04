@@ -21,6 +21,14 @@ object SipMessageParser {
     }
 
     /**
+     * Extracts the reason phrase from a SIP response status line, e.g. "SIP/2.0 403 Forbidden"
+     */
+    fun extractStatusReason(message: String): String {
+        val statusLine = message.lines().firstOrNull { it.startsWith("SIP/2.0") }
+        return statusLine?.substringAfter(" ", "")?.substringAfter(" ", "")?.trim() ?: "Unknown error"
+    }
+
+    /**
      * Extracts the branch parameter from a Via header
      */
     fun extractBranchFromVia(viaHeader: String): String {
