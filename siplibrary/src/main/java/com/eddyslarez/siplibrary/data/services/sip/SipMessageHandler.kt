@@ -13,9 +13,10 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.datetime.Clock
+
 /**
- * Handles SIP message processing and generation
- * Versión mejorada con mejor soporte para callbacks
+ * Handles SIP message processing and generation with improved state management
+ * Versión mejorada con estados detallados y prevención de duplicados
  *
  * @author Eddys Larez
  */
@@ -106,7 +107,7 @@ class SipMessageHandler(private val sipCoreManager: SipCoreManager) {
     }
 
     /**
-     * Handle SIP requests with simplified routing
+     * Handle SIP requests with improved state management
      */
     private fun handleSipRequest(
         requestLine: String,
@@ -125,7 +126,7 @@ class SipMessageHandler(private val sipCoreManager: SipCoreManager) {
     }
 
     /**
-     * Handle SIP responses with simplified routing
+     * Handle SIP responses with improved state management
      */
     fun handleSipResponse(
         statusLine: String,
@@ -148,13 +149,11 @@ class SipMessageHandler(private val sipCoreManager: SipCoreManager) {
                     handleInviteResponse(statusCode, message, accountInfo, lines)
                 }
             }
-
             "BYE" -> handleByeResponse(statusCode, message, accountInfo, lines)
             "CANCEL" -> handleCancelResponse(statusCode, message, accountInfo, lines)
             else -> log.d(tag = TAG) { "Response for unhandled method: $method" }
         }
     }
-
 
     // ===================== INCOMING REQUEST HANDLERS =====================
 
@@ -171,6 +170,9 @@ class SipMessageHandler(private val sipCoreManager: SipCoreManager) {
             val callData = createIncomingCallData(message, lines, accountInfo)
             setupIncomingCall(callData, accountInfo, lines)
 
+            // NUEVO: Actualizar estado detallado
+            CallStateManager.advanced.incomingCallReceived(callData.callId, callData.from)
+
             // Send immediate responses
             sendTrying(accountInfo, callData)
 
@@ -182,6 +184,12 @@ class SipMessageHandler(private val sipCoreManager: SipCoreManager) {
             }
         } catch (e: Exception) {
             log.e(tag = TAG) { "Error handling incoming INVITE: ${e.stackTraceToString()}" }
+            accountInfo.currentCallData?.let { callData ->
+                CallStateManager.advanced.callError(
+                    callData.callId,
+                    errorReason = CallErrorReason.NETWORK_ERROR
+                )
+            }
         }
     }
 
@@ -240,6 +248,7 @@ class SipMessageHandler(private val sipCoreManager: SipCoreManager) {
         CallStateManager.callerNumber(callData.from)
         CallStateManager.callId(callData.callId)
 
+        // MEJORADO: Usar estado detallado y legacy
         sipCoreManager.notifyCallStateChanged(CallState.INCOMING)
 
         CoroutineScope(Dispatchers.IO).launch {
@@ -267,6 +276,9 @@ class SipMessageHandler(private val sipCoreManager: SipCoreManager) {
             }
 
             clearRetryData(callId)
+
+            // NUEVO: Iniciar proceso de finalización
+            CallStateManager.advanced.startEnding(callId)
 
             when (requestType) {
                 "BYE" -> {
@@ -308,18 +320,27 @@ class SipMessageHandler(private val sipCoreManager: SipCoreManager) {
                     sipCoreManager.callHistoryManager.addCallLog(currentCallData, callType, endTime)
                 }
             }
+
             sipCoreManager.audioManager.stopAllRingtones()
 
+            // NUEVO: Finalizar llamada con estado detallado
+            CallStateManager.advanced.callEnded(callId)
             sipCoreManager.notifyCallStateChanged(CallState.ENDED)
+            
             sipCoreManager.webRtcManager.dispose()
             accountInfo.currentCallData = null
             terminateCall()
 
         } catch (e: Exception) {
             log.e(tag = TAG) { "Error handling $requestType: ${e.stackTraceToString()}" }
+            accountInfo.currentCallData?.let { callData ->
+                CallStateManager.advanced.callError(
+                    callData.callId,
+                    errorReason = CallErrorReason.NETWORK_ERROR
+                )
+            }
         }
     }
-
 
     private fun handleIncomingBye(message: String, accountInfo: AccountInfo, lines: List<String>) {
         handleTerminationRequest(message, accountInfo, lines, "BYE")
@@ -344,8 +365,11 @@ class SipMessageHandler(private val sipCoreManager: SipCoreManager) {
                 log.d(tag = TAG) { "ACK received for non-active call, ignoring" }
                 return
             }
+
             sipCoreManager.audioManager.stopAllRingtones()
 
+            // NUEVO: Transición a streams running
+            CallStateManager.advanced.streamsRunning(callId)
             sipCoreManager.notifyCallStateChanged(CallState.CONNECTED)
 
             log.d(tag = TAG) { "🟢 Call connected after receiving ACK" }
@@ -354,6 +378,12 @@ class SipMessageHandler(private val sipCoreManager: SipCoreManager) {
             accountInfo.callStartTime = sipCoreManager.callStartTimeMillis
         } catch (e: Exception) {
             log.e(tag = TAG) { "Error handling incoming ACK: ${e.stackTraceToString()}" }
+            accountInfo.currentCallData?.let { callData ->
+                CallStateManager.advanced.callError(
+                    callData.callId,
+                    errorReason = CallErrorReason.NETWORK_ERROR
+                )
+            }
         }
     }
 
@@ -373,7 +403,6 @@ class SipMessageHandler(private val sipCoreManager: SipCoreManager) {
         }
     }
 
-
     private fun handleInviteResponse(
         statusCode: Int?,
         message: String,
@@ -382,6 +411,7 @@ class SipMessageHandler(private val sipCoreManager: SipCoreManager) {
     ) {
         // Cancelar timeout si recibimos cualquier respuesta
         callInitiationTimeout?.cancel()
+        val callData = accountInfo.currentCallData
 
         when (statusCode) {
             CODE_TRYING -> {
@@ -389,41 +419,62 @@ class SipMessageHandler(private val sipCoreManager: SipCoreManager) {
                 startCallInitiationTimeout(accountInfo)
             }
 
-            CODE_RINGING, CODE_SESSION_PROGRESS -> {
-                // Limpiar reintentos en caso de éxito
-                accountInfo.currentCallData?.callId?.let { callId ->
-                    clearRetryData(callId)
+            CODE_SESSION_PROGRESS -> {
+                // NUEVO: Estado de progreso
+                callData?.let { data ->
+                    CallStateManager.advanced.outgoingCallProgress(data.callId, CODE_SESSION_PROGRESS)
+                    clearRetryData(data.callId)
+                }
+                handleSessionProgress()
+            }
+
+            CODE_RINGING -> {
+                // NUEVO: Estado de ringing
+                callData?.let { data ->
+                    CallStateManager.advanced.outgoingCallRinging(data.callId, CODE_RINGING)
+                    clearRetryData(data.callId)
                 }
                 handleRinging()
             }
 
             CODE_OK -> {
-                // Limpiar reintentos en caso de éxito
-                accountInfo.currentCallData?.callId?.let { callId ->
-                    clearRetryData(callId)
+                // NUEVO: Llamada conectada
+                callData?.let { data ->
+                    CallStateManager.advanced.callConnected(data.callId, CODE_OK)
+                    clearRetryData(data.callId)
                 }
                 handleInviteOk(message, accountInfo, lines)
                 sipCoreManager.audioManager.stopAllRingtones()
             }
 
             CODE_UNAUTHORIZED -> handleAuthenticationChallenge(accountInfo, message, lines)
+            
             CODE_BUSY -> {
-                // Limpiar reintentos - busy es respuesta definitiva
-                accountInfo.currentCallData?.callId?.let { callId ->
-                    clearRetryData(callId)
+                callData?.let { data ->
+                    CallStateManager.advanced.callError(
+                        data.callId,
+                        CODE_BUSY,
+                        "Busy Here",
+                        CallErrorReason.BUSY
+                    )
+                    clearRetryData(data.callId)
                 }
                 handleBusy()
             }
 
             CODE_FORBIDDEN, CODE_NOT_ACCEPTABLE -> {
-                // NUEVO: Manejar errores que permiten reintento
                 handleRetryableError(statusCode, message, accountInfo, lines)
             }
 
-            CODE_REQUEST_TERMINATED -> handleRequestTerminated(accountInfo, lines)
+            CODE_REQUEST_TERMINATED -> {
+                callData?.let { data ->
+                    CallStateManager.advanced.callEnded(data.callId, CODE_REQUEST_TERMINATED, "Request Terminated")
+                }
+                handleRequestTerminated(accountInfo, lines)
+            }
+            
             else -> {
                 if (statusCode != null && statusCode >= 400) {
-                    // Para otros errores 4xx, 5xx, 6xx también intentar retry
                     handleRetryableError(statusCode, message, accountInfo, lines)
                 } else {
                     handleOtherStatusCodes(statusCode)
@@ -441,11 +492,11 @@ class SipMessageHandler(private val sipCoreManager: SipCoreManager) {
         val callData = accountInfo.currentCallData ?: return
         val callId = callData.callId
 
-        log.d(tag = Companion.TAG) { "Received retryable error: $statusCode for call $callId" }
+        log.d(tag = TAG) { "Received retryable error: $statusCode for call $callId" }
 
         val currentRetries = inviteRetryMap[callId] ?: 0
 
-        if (currentRetries < Companion.MAX_INVITE_RETRIES) {
+        if (currentRetries < MAX_INVITE_RETRIES) {
             val nextRetryCount = currentRetries + 1
             inviteRetryMap[callId] = nextRetryCount
 
@@ -475,6 +526,9 @@ class SipMessageHandler(private val sipCoreManager: SipCoreManager) {
                         accountInfo.callId = newCallId
                         accountInfo.fromTag = newFromTag
 
+                        // NUEVO: Reiniciar estado para retry
+                        CallStateManager.advanced.startOutgoingCall(newCallId, callData.to)
+
                         // Actualizar el mapa de reintentos con el nuevo callId
                         inviteRetryMap.remove(callId)
                         inviteRetryMap[newCallId] = nextRetryCount
@@ -498,6 +552,15 @@ class SipMessageHandler(private val sipCoreManager: SipCoreManager) {
             }
         } else {
             log.d(tag = TAG) { "Max retries (${MAX_INVITE_RETRIES}) reached for call $callId with error $statusCode" }
+            
+            // NUEVO: Error final después de reintentos
+            CallStateManager.advanced.callError(
+                callId,
+                statusCode,
+                "Max retries reached",
+                SipErrorMapper.mapSipCodeToErrorReason(statusCode)
+            )
+            
             clearRetryData(callId)
             handleFinalCallFailure(accountInfo)
         }
@@ -522,6 +585,14 @@ class SipMessageHandler(private val sipCoreManager: SipCoreManager) {
         callInitiationTimeout = CoroutineScope(Dispatchers.IO).launch {
             delay(30000)
             log.d(tag = TAG) { "Call initiation timeout" }
+            
+            accountInfo.currentCallData?.let { callData ->
+                CallStateManager.advanced.callError(
+                    callData.callId,
+                    errorReason = CallErrorReason.NO_ANSWER
+                )
+            }
+            
             sipCoreManager.notifyCallStateChanged(CallState.ERROR)
             accountInfo.currentCallData = null
         }
@@ -544,6 +615,13 @@ class SipMessageHandler(private val sipCoreManager: SipCoreManager) {
                 callData.remoteSdp = sdpContent
                 sendAck(accountInfo, callData)
 
+                // NUEVO: Actualizar estado según hold/resume
+                if (callData.isOnHold == true) {
+                    CallStateManager.advanced.callOnHold(callData.callId)
+                } else {
+                    CallStateManager.advanced.streamsRunning(callData.callId)
+                }
+
                 val stateMessage = if (callData.isOnHold == true) "placed on hold" else "resumed"
                 log.d(tag = TAG) { "Call $stateMessage successfully" }
             }
@@ -563,6 +641,14 @@ class SipMessageHandler(private val sipCoreManager: SipCoreManager) {
 
     private fun restorePreviousHoldState(callData: CallData) {
         callData.isOnHold = !callData.isOnHold!!
+        
+        // NUEVO: Restaurar estado anterior
+        if (callData.isOnHold!!) {
+            CallStateManager.advanced.callOnHold(callData.callId)
+        } else {
+            CallStateManager.advanced.streamsRunning(callData.callId)
+        }
+        
         val newState = if (callData.isOnHold!!) CallState.HOLDING else CallState.CONNECTED
         sipCoreManager.notifyCallStateChanged(newState)
     }
@@ -576,6 +662,11 @@ class SipMessageHandler(private val sipCoreManager: SipCoreManager) {
         when (statusCode) {
             CODE_OK -> {
                 log.d(tag = TAG) { "BYE accepted by server" }
+                
+                accountInfo.currentCallData?.let { callData ->
+                    CallStateManager.advanced.callEnded(callData.callId, CODE_OK, "OK")
+                }
+                
                 terminateCall()
             }
 
@@ -592,11 +683,21 @@ class SipMessageHandler(private val sipCoreManager: SipCoreManager) {
         when (statusCode) {
             CODE_OK -> {
                 log.d(tag = TAG) { "CANCEL accepted (200 OK)" }
+                
+                accountInfo.currentCallData?.let { callData ->
+                    CallStateManager.advanced.callEnded(callData.callId, CODE_OK, "Cancelled")
+                }
+                
                 terminateCall()
             }
 
             else -> {
                 log.d(tag = TAG) { "Unexpected CANCEL response: $statusCode" }
+                
+                accountInfo.currentCallData?.let { callData ->
+                    CallStateManager.advanced.callEnded(callData.callId, statusCode, "Unexpected response")
+                }
+                
                 terminateCall()
                 sipCoreManager.notifyCallStateChanged(CallState.ENDED)
                 accountInfo.resetCallState()
@@ -647,10 +748,15 @@ class SipMessageHandler(private val sipCoreManager: SipCoreManager) {
         sipCoreManager.notifyCallStateChanged(CallState.INITIATING)
     }
 
+    private fun handleSessionProgress() {
+        log.d(tag = TAG) { "Session Progress (183)" }
+        sipCoreManager.notifyCallStateChanged(CallState.OUTGOING)
+    }
+
     private fun handleRinging() {
         sipCoreManager.notifyCallStateChanged(CallState.OUTGOING)
         sipCoreManager.audioManager.playOutgoingRingtone()
-        log.d(tag = TAG) { "Call established - Ringing/Session Progress (180/183)" }
+        log.d(tag = TAG) { "Call established - Ringing (180)" }
     }
 
     private fun handleRegisterOk(message: String, accountInfo: AccountInfo, lines: List<String>) {
@@ -659,7 +765,6 @@ class SipMessageHandler(private val sipCoreManager: SipCoreManager) {
 
         accountInfo.isRegistered = true
 
-        // CORREGIDO: Usar el nuevo método que actualiza por cuenta
         sipCoreManager.handleRegistrationSuccess(accountInfo)
 
         // Configure renewal
@@ -683,8 +788,6 @@ class SipMessageHandler(private val sipCoreManager: SipCoreManager) {
         sipCoreManager.handleRegistrationError(accountInfo, reason)
     }
 
-
-
     private fun handleBusy() {
         log.d(tag = TAG) { "Call rejected: Busy (486)" }
         sipCoreManager.notifyCallStateChanged(CallState.DECLINED)
@@ -694,10 +797,19 @@ class SipMessageHandler(private val sipCoreManager: SipCoreManager) {
         log.d(tag = TAG) { "Unhandled SIP code: $statusCode" }
 
         if (statusCode != null && statusCode >= 400) {
-            // Para registration errors, obtener la cuenta actual
             sipCoreManager.currentAccountInfo?.let { accountInfo ->
                 val accountKey = "${accountInfo.username}@${accountInfo.domain}"
                 sipCoreManager.updateRegistrationState(accountKey, RegistrationState.FAILED)
+                
+                // NUEVO: Error en llamada actual si existe
+                accountInfo.currentCallData?.let { callData ->
+                    CallStateManager.advanced.callError(
+                        callData.callId,
+                        statusCode,
+                        "Unhandled error",
+                        SipErrorMapper.mapSipCodeToErrorReason(statusCode)
+                    )
+                }
             }
             sipCoreManager.notifyCallStateChanged(CallState.ERROR)
         }
@@ -809,10 +921,22 @@ class SipMessageHandler(private val sipCoreManager: SipCoreManager) {
             messageType = "603 DECLINE",
             accountInfo = accountInfo
         )
+        
+        // NUEVO: Estado de error por rechazo
+        CallStateManager.advanced.callError(
+            callData.callId,
+            603,
+            "Decline",
+            CallErrorReason.REJECTED
+        )
+        
         terminateCall()
     }
 
     fun sendBye(accountInfo: AccountInfo, callData: CallData) {
+        // NUEVO: Iniciar finalización
+        CallStateManager.advanced.startEnding(callData.callId)
+        
         sendSipMessage(
             messageBuilder = { SipMessageBuilder.buildByeMessage(accountInfo, callData) },
             messageType = "BYE",
@@ -845,6 +969,9 @@ class SipMessageHandler(private val sipCoreManager: SipCoreManager) {
     }
 
     fun sendInviteOkResponse(accountInfo: AccountInfo, callData: CallData) {
+        // NUEVO: Llamada conectada
+        CallStateManager.advanced.callConnected(callData.callId, 200)
+        
         sendSipMessage(
             messageBuilder = { SipMessageBuilder.buildInviteOkResponse(accountInfo, callData) },
             messageType = "200 OK (INVITE)",
@@ -863,6 +990,9 @@ class SipMessageHandler(private val sipCoreManager: SipCoreManager) {
     }
 
     fun sendCancel(accountInfo: AccountInfo, callData: CallData) {
+        // NUEVO: Iniciar finalización por cancelación
+        CallStateManager.advanced.startEnding(callData.callId)
+        
         sendSipMessage(
             messageBuilder = {
                 val sipMessage = SipMessageBuilder.buildCancelMessage(accountInfo, callData)
