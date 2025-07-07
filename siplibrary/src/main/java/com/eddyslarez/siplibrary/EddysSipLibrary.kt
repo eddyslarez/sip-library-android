@@ -76,7 +76,10 @@ class EddysSipLibrary private constructor() {
         fun onRegistrationFailed(username: String, domain: String, error: String)
         fun onUnregistered(username: String, domain: String)
         fun onRegistrationExpiring(username: String, domain: String, expiresIn: Long)
+
+
     }
+
 
     /**
      * Listener específico para estados de llamada
