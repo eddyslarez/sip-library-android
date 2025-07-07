@@ -33,6 +33,13 @@ Una biblioteca SIP/VoIP completa y moderna para Android desarrollada por **Eddys
 - ⏸️ Funciones de hold/resume
 - 🔊 Soporte para audio HD
 
+### ✅ **Configuración Completa**
+- 🎵 Control total de ringtones (activar/desactivar, personalizar)
+- 📳 Configuración de vibración personalizable
+- 🔔 Control de notificaciones push
+- 🎚️ Ajustes de volumen y calidad de audio
+- 🔧 Más de 50 opciones de configuración
+
 ## 📱 Instalación
 
 ### Usando JitPack (Recomendado)
@@ -83,26 +90,85 @@ Agrega estos permisos en tu `AndroidManifest.xml`:
 <!-- Permisos para notificaciones -->
 <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+<!-- Permisos para vibración -->
+<uses-permission android:name="android.permission.VIBRATE" />
+
 <!-- Permisos para servicios en primer plano -->
 <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
 <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
 ```
 
-### 2. Inicialización en Application
+### 2. Configuración Completa en Application
 
 ```kotlin
 class MyApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         
-        // Configuración personalizada
+        // Configuración completa personalizada
         val config = EddysSipLibrary.SipConfig(
+            // === CONFIGURACIÓN BÁSICA ===
             defaultDomain = "tu-dominio.com",
             webSocketUrl = "wss://tu-servidor:puerto/",
             userAgent = "MiApp/1.0.0",
-            enableLogs = true,
+            
+            // === CONFIGURACIÓN DE LOGS ===
+            enableLogs = BuildConfig.DEBUG,
+            logLevel = EddysSipLibrary.LogLevel.DEBUG,
+            
+            // === CONFIGURACIÓN DE CONEXIÓN ===
             enableAutoReconnect = true,
-            pingIntervalMs = 30000L
+            maxReconnectAttempts = 5,
+            reconnectDelayMs = 2000L,
+            pingIntervalMs = 30000L,
+            
+            // === CONFIGURACIÓN DE PUSH NOTIFICATIONS ===
+            enablePushNotifications = true,
+            defaultPushProvider = "fcm",
+            
+            // === CONFIGURACIÓN DE AUDIO ===
+            enableAudioProcessing = true,
+            enableEchoCancellation = true,
+            enableNoiseSuppression = true,
+            audioSampleRate = 48000,
+            preferredAudioCodec = EddysSipLibrary.AudioCodec.OPUS,
+            
+            // === CONFIGURACIÓN DE RINGTONES ===
+            enableIncomingRingtone = true,
+            enableOutgoingRingtone = true,
+            ringtoneVolume = 0.8f,
+            enableVibration = true,
+            vibrationPattern = longArrayOf(0, 1000, 500, 1000),
+            
+            // === CONFIGURACIÓN DE LLAMADAS ===
+            enableDTMF = true,
+            dtmfToneDuration = 160,
+            enableCallHold = true,
+            enableCallHistory = true,
+            maxCallHistoryEntries = 1000,
+            
+            // === CONFIGURACIÓN DE DISPOSITIVOS DE AUDIO ===
+            enableBluetoothAudio = true,
+            enableWiredHeadsetAudio = true,
+            autoSwitchToBluetoothWhenConnected = true,
+            preferredAudioRoute = EddysSipLibrary.AudioRoute.AUTO,
+            
+            // === CONFIGURACIÓN DE SEGURIDAD ===
+            enableTLS = true,
+            enableSRTP = true,
+            tlsVersion = EddysSipLibrary.TLSVersion.TLS_1_2,
+            
+            // === CONFIGURACIÓN DE INTERFAZ ===
+            enableFullScreenIncomingCall = true,
+            enableCallNotifications = true,
+            enableMissedCallNotifications = true,
+            
+            // === CONFIGURACIÓN DE RENDIMIENTO ===
+            enableBatteryOptimization = true,
+            maxConcurrentCalls = 1,
+            
+            // === CONFIGURACIÓN DE DEBUGGING ===
+            enableDiagnosticMode = BuildConfig.DEBUG
         )
         
         // Inicializar la biblioteca
@@ -165,6 +231,10 @@ class MainActivity : ComponentActivity() {
             override fun onIncomingCall(callInfo: EddysSipLibrary.IncomingCallInfo) {
                 showNotification("Llamada de ${callInfo.callerNumber}")
             }
+            
+            override fun onCallQualityChanged(quality: EddysSipLibrary.CallQuality) {
+                updateQualityIndicator(quality.overallScore)
+            }
         })
     }
 }
@@ -194,84 +264,299 @@ sipLibrary.registerAccount("usuario1", "pass1", "dominio1.com")
 sipLibrary.registerAccount("usuario2", "pass2", "dominio2.com")
 ```
 
-### Realizar Llamadas
+## 🎵 Configuración de Ringtones
+
+### Configuración Básica
 
 ```kotlin
-// Llamada básica
-sipLibrary.makeCall("1234567890")
-
-// Llamada desde cuenta específica
-sipLibrary.makeCall(
-    phoneNumber = "1234567890",
-    username = "usuario1",
-    domain = "dominio1.com"
+// En la configuración inicial
+val config = EddysSipLibrary.SipConfig(
+    // Activar/desactivar ringtones
+    enableIncomingRingtone = true,
+    enableOutgoingRingtone = true,
+    
+    // Control de volumen (0.0 - 1.0)
+    ringtoneVolume = 0.8f,
+    
+    // Vibración
+    enableVibration = true,
+    vibrationPattern = longArrayOf(0, 1000, 500, 1000), // personalizable
+    
+    // Ringtones personalizados
+    incomingRingtoneUri = Uri.parse("content://media/internal/audio/media/123"),
+    outgoingRingtoneUri = Uri.parse("content://media/internal/audio/media/456")
 )
 ```
 
-### Gestionar Llamadas Entrantes
+### Cambiar Configuración en Tiempo Real
 
 ```kotlin
-// Aceptar llamada
-sipLibrary.acceptCall()
-
-// Rechazar llamada
-sipLibrary.declineCall()
-
-// Terminar llamada activa
-sipLibrary.endCall()
+// Actualizar configuración durante la ejecución
+sipLibrary.updateRuntimeConfig(
+    enableIncomingRingtone = false,  // Desactivar ringtone entrante
+    enableOutgoingRingtone = true,   // Mantener ringtone saliente
+    ringtoneVolume = 0.5f,           // Reducir volumen
+    enableVibration = false          // Desactivar vibración
+)
 ```
 
-### Controles Durante la Llamada
+### Ringtones Personalizados
 
 ```kotlin
-// Silenciar/desmute
-sipLibrary.toggleMute()
+// Seleccionar ringtone desde galería
+private fun selectCustomRingtone() {
+    val intent = Intent(RingtoneManager.ACTION_RINGTONE_PICKER).apply {
+        putExtra(RingtoneManager.EXTRA_RINGTONE_TYPE, RingtoneManager.TYPE_RINGTONE)
+        putExtra(RingtoneManager.EXTRA_RINGTONE_TITLE, "Seleccionar ringtone")
+    }
+    startActivityForResult(intent, REQUEST_RINGTONE)
+}
 
-// Verificar estado de mute
-val isMuted = sipLibrary.isMuted()
-
-// Poner en espera
-sipLibrary.holdCall()
-
-// Reanudar llamada
-sipLibrary.resumeCall()
-
-// Enviar DTMF
-sipLibrary.sendDtmf('1')
-sipLibrary.sendDtmfSequence("123*")
+override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+    super.onActivityResult(requestCode, resultCode, data)
+    
+    if (requestCode == REQUEST_RINGTONE && resultCode == RESULT_OK) {
+        val uri = data?.getParcelableExtra<Uri>(RingtoneManager.EXTRA_RINGTONE_PICKED_URI)
+        uri?.let {
+            // Actualizar configuración con nuevo ringtone
+            val newConfig = sipLibrary.getCurrentConfig().copy(
+                incomingRingtoneUri = it
+            )
+            sipLibrary.updateRuntimeConfig(/* parámetros actualizados */)
+        }
+    }
+}
 ```
 
-## 🎧 Gestión de Audio
+## 🔔 Configuración de Notificaciones Push
 
-### Obtener Dispositivos Disponibles
+### Configuración Completa
 
 ```kotlin
+val config = EddysSipLibrary.SipConfig(
+    // Activar/desactivar push notifications
+    enablePushNotifications = true,
+    
+    // Proveedor por defecto
+    defaultPushProvider = "fcm", // fcm, apns, custom
+    
+    // Timeout para push
+    pushTimeoutMs = 30000L,
+    
+    // Wake up desde push
+    enablePushWakeup = true
+)
+```
+
+### Integración con Firebase
+
+```kotlin
+class MyFirebaseMessagingService : FirebaseMessagingService() {
+    override fun onNewToken(token: String) {
+        super.onNewToken(token)
+        
+        // Actualizar token en la biblioteca SIP
+        EddysSipLibrary.getInstance().updatePushToken(token, "fcm")
+    }
+    
+    override fun onMessageReceived(remoteMessage: RemoteMessage) {
+        super.onMessageReceived(remoteMessage)
+        
+        // Manejar notificación de llamada entrante
+        if (remoteMessage.data["type"] == "incoming_call") {
+            handleIncomingCallPush(remoteMessage.data)
+        }
+    }
+}
+```
+
+## 🎧 Gestión Avanzada de Audio
+
+### Configuración de Audio
+
+```kotlin
+val config = EddysSipLibrary.SipConfig(
+    // Procesamiento de audio
+    enableAudioProcessing = true,
+    enableEchoCancellation = true,
+    enableNoiseSuppression = true,
+    enableAutoGainControl = true,
+    
+    // Calidad de audio
+    audioSampleRate = 48000,
+    audioChannels = EddysSipLibrary.AudioChannels.MONO,
+    preferredAudioCodec = EddysSipLibrary.AudioCodec.OPUS,
+    enableHDAudio = true,
+    
+    // Dispositivos de audio
+    enableBluetoothAudio = true,
+    enableWiredHeadsetAudio = true,
+    enableSpeakerAudio = true,
+    autoSwitchToBluetoothWhenConnected = true,
+    preferredAudioRoute = EddysSipLibrary.AudioRoute.AUTO
+)
+```
+
+### Gestión de Dispositivos
+
+```kotlin
+// Obtener dispositivos disponibles
 val (inputDevices, outputDevices) = sipLibrary.getAvailableAudioDevices()
 
-inputDevices.forEach { device ->
-    println("Input: ${device.name} - ${device.audioUnit.type}")
-}
-
-outputDevices.forEach { device ->
-    println("Output: ${device.name} - Quality: ${device.qualityScore}")
-}
-```
-
-### Cambiar Dispositivos Durante Llamada
-
-```kotlin
-// Obtener dispositivos actuales
-val (currentInput, currentOutput) = sipLibrary.getCurrentAudioDevices()
-
-// Cambiar a Bluetooth
+// Cambiar a Bluetooth automáticamente
 outputDevices.forEach { device ->
     if (device.isBluetooth && device.connectionState == DeviceConnectionState.AVAILABLE) {
         sipLibrary.changeAudioDevice(device)
+        showMessage("Cambiado a: ${device.name}")
     }
 }
 
-// Refrescar lista de dispositivos
-sipLibrary.refreshAudioDevices()
+// Monitorear cambios de dispositivos
+sipLibrary.addSipEventListener(object : EddysSipLibrary.SipEventListener {
+    override fun onAudioDeviceChanged(device: AudioDevice) {
+        showMessage("Dispositivo de audio: ${device.name}")
+        updateAudioDeviceUI(device)
+    }
+})
+```
+
+## 🔧 Configuración de Llamadas
+
+### Configuración DTMF
+
+```kotlin
+val config = EddysSipLibrary.SipConfig(
+    // Activar DTMF
+    enableDTMF = true,
+    
+    // Duración de tonos DTMF (milisegundos)
+    dtmfToneDuration = 160,
+    
+    // Pausa entre tonos
+    dtmfToneGap = 70
+)
+
+// Usar DTMF
+sipLibrary.sendDtmf('1')
+sipLibrary.sendDtmfSequence("123*456#")
+```
+
+### Configuración de Hold/Resume
+
+```kotlin
+val config = EddysSipLibrary.SipConfig(
+    // Activar funciones de hold
+    enableCallHold = true,
+    
+    // Transferencia de llamadas
+    enableCallTransfer = true,
+    
+    // Llamadas en conferencia
+    enableConferenceCall = false
+)
+```
+
+### Límites y Restricciones
+
+```kotlin
+val config = EddysSipLibrary.SipConfig(
+    // Máximo de llamadas concurrentes
+    maxConcurrentCalls = 1,
+    
+    // Duración máxima de llamada (0 = sin límite)
+    maxCallDuration = 3600000L, // 1 hora en milisegundos
+    
+    // Grabación de llamadas
+    enableCallRecording = false
+)
+```
+
+## 🔒 Configuración de Seguridad
+
+### Configuración TLS/SRTP
+
+```kotlin
+val config = EddysSipLibrary.SipConfig(
+    // Seguridad de transporte
+    enableTLS = true,
+    tlsVersion = EddysSipLibrary.TLSVersion.TLS_1_2,
+    certificateValidation = EddysSipLibrary.CertificateValidation.STRICT,
+    
+    // Seguridad de media
+    enableSRTP = true,
+    
+    // Autenticación
+    enableDigestAuthentication = true
+)
+```
+
+## 📊 Configuración de Rendimiento
+
+### Optimización de Batería y Red
+
+```kotlin
+val config = EddysSipLibrary.SipConfig(
+    // Optimizaciones
+    enableBatteryOptimization = true,
+    enableNetworkOptimization = true,
+    enableCpuOptimization = true,
+    
+    // Monitoreo de calidad
+    enableCallQualityMonitoring = true,
+    
+    // Intervalos de conexión
+    pingIntervalMs = 30000L,
+    keepAliveIntervalMs = 25000L
+)
+```
+
+### Configuración de Reconexión
+
+```kotlin
+val config = EddysSipLibrary.SipConfig(
+    // Reconexión automática
+    enableAutoReconnect = true,
+    maxReconnectAttempts = 5,
+    reconnectDelayMs = 2000L,
+    connectionTimeoutMs = 30000L
+)
+```
+
+## 🐛 Configuración de Debugging
+
+### Logs y Diagnósticos
+
+```kotlin
+val config = EddysSipLibrary.SipConfig(
+    // Configuración de logs
+    enableLogs = BuildConfig.DEBUG,
+    logLevel = EddysSipLibrary.LogLevel.DEBUG,
+    enableFileLogging = false,
+    maxLogFileSize = 10 * 1024 * 1024, // 10MB
+    
+    // Diagnósticos
+    enableDiagnosticMode = BuildConfig.DEBUG,
+    enableNetworkDiagnostics = false,
+    enableAudioDiagnostics = false,
+    enablePerformanceMetrics = false,
+    diagnosticReportIntervalMs = 60000L
+)
+```
+
+### Obtener Información de Diagnóstico
+
+```kotlin
+// Reporte completo del sistema
+val healthReport = sipLibrary.getSystemHealthReport()
+Log.d("SIP_HEALTH", healthReport)
+
+// Diagnóstico de listeners
+val listenerDiag = sipLibrary.diagnoseListeners()
+Log.d("SIP_LISTENERS", listenerDiag)
+
+// Configuración actual
+val currentConfig = sipLibrary.getCurrentConfig()
+Log.d("SIP_CONFIG", "Push enabled: ${currentConfig.enablePushNotifications}")
 ```
 
 ## 🔄 Observar Estados con Flow
@@ -282,7 +567,7 @@ sipLibrary.refreshAudioDevices()
 class SipViewModel : ViewModel() {
     private val sipLibrary = EddysSipLibrary.getInstance()
     
-    // Estados de llamada
+    // Estados de llamada unificados
     val callState: StateFlow<CallStateInfo> = sipLibrary.getCallStateFlow()
         .stateIn(viewModelScope, SharingStarted.Eagerly, 
             CallStateInfo(
@@ -312,552 +597,107 @@ class SipViewModel : ViewModel() {
 }
 ```
 
-### En Compose UI
+## 🌟 Características Experimentales
 
-```kotlin
-@Composable
-fun CallScreen(viewModel: SipViewModel) {
-    val callState by viewModel.callState.collectAsState()
-    val registrationStates by viewModel.registrationStates.collectAsState()
-    
-    Column {
-        // Estado de la llamada
-        CallStatusCard(
-            state = callState.state,
-            duration = if (callState.state == DetailedCallState.STREAMS_RUNNING) 
-                calculateDuration() else 0,
-            hasError = callState.hasError()
-        )
-        
-        // Controles según el estado
-        when (callState.state) {
-            DetailedCallState.INCOMING_RECEIVED -> {
-                IncomingCallControls(
-                    onAccept = { viewModel.acceptCall() },
-                    onDecline = { viewModel.declineCall() }
-                )
-            }
-            DetailedCallState.STREAMS_RUNNING -> {
-                ActiveCallControls(
-                    onMute = { viewModel.toggleMute() },
-                    onHold = { viewModel.holdCall() },
-                    onEnd = { viewModel.endCall() }
-                )
-            }
-        }
-        
-        // Estado multi-cuenta
-        MultiAccountStatus(registrationStates)
-    }
-}
-```
-
-## 📞 Historial de Llamadas
-
-### Obtener Historial
-
-```kotlin
-// Todas las llamadas
-val allCalls = sipLibrary.getCallLogs()
-
-// Solo llamadas perdidas
-val missedCalls = sipLibrary.getMissedCalls()
-
-// Llamadas de un número específico
-val callsFromNumber = sipLibrary.getCallLogsForNumber("1234567890")
-
-// Estadísticas
-val stats = sipLibrary.getCallStatistics()
-println("Total: ${stats.totalCalls}, Perdidas: ${stats.missedCalls}")
-```
-
-### Limpiar Historial
-
-```kotlin
-sipLibrary.clearCallLogs()
-```
-
-## 🔔 Notificaciones Push
-
-### Configurar Token
-
-```kotlin
-// Actualizar token FCM
-sipLibrary.updatePushToken("nuevo_token_fcm", "fcm")
-
-// Para APNS (iOS)
-sipLibrary.updatePushToken("apns_token", "apns")
-```
-
-### Registro con Push
-
-```kotlin
-sipLibrary.registerAccount(
-    username = "usuario",
-    password = "contraseña",
-    domain = "dominio.com",
-    pushToken = FirebaseMessaging.getInstance().token.result,
-    pushProvider = "fcm"
-)
-```
-
-## 🔧 Configuración Avanzada
-
-### Listeners Específicos
-
-```kotlin
-// Listener solo para registro
-sipLibrary.setRegistrationListener(object : EddysSipLibrary.RegistrationListener {
-    override fun onRegistrationSuccessful(username: String, domain: String) {
-        saveCredentials(username, domain)
-    }
-    
-    override fun onRegistrationFailed(username: String, domain: String, error: String) {
-        showError("Error registrando $username@$domain: $error")
-    }
-})
-
-// Listener solo para llamadas
-sipLibrary.setCallListener(object : EddysSipLibrary.CallListener {
-    override fun onCallInitiated(callInfo: EddysSipLibrary.CallInfo) {
-        startCallLogging(callInfo)
-    }
-    
-    override fun onCallStateChanged(stateInfo: CallStateInfo) {
-        updateCallUI(stateInfo)
-    }
-    
-    override fun onMuteStateChanged(isMuted: Boolean, callInfo: EddysSipLibrary.CallInfo) {
-        updateMuteButton(isMuted)
-    }
-})
-
-// Listener solo para llamadas entrantes
-sipLibrary.setIncomingCallListener(object : EddysSipLibrary.IncomingCallListener {
-    override fun onIncomingCall(callInfo: EddysSipLibrary.IncomingCallInfo) {
-        showFullScreenIncomingCall(callInfo)
-    }
-})
-```
-
-### Configuración Personalizada
+### Funciones Beta
 
 ```kotlin
 val config = EddysSipLibrary.SipConfig(
-    defaultDomain = "mi-servidor.com",
-    webSocketUrl = "wss://mi-servidor.com:8443/",
-    userAgent = "MiApp/2.0.0 (Android)",
-    enableLogs = BuildConfig.DEBUG,
-    enableAutoReconnect = true,
-    pingIntervalMs = 30000L // 30 segundos
-)
-```
-
-## 🔍 Diagnóstico y Debugging
-
-### Verificar Salud del Sistema
-
-```kotlin
-// Verificar si el sistema está saludable
-val isHealthy = sipLibrary.isSystemHealthy()
-
-// Obtener reporte detallado
-val healthReport = sipLibrary.getSystemHealthReport()
-Log.d("SIP_HEALTH", healthReport)
-
-// Diagnóstico de listeners
-val listenerDiag = sipLibrary.diagnoseListeners()
-Log.d("SIP_LISTENERS", listenerDiag)
-```
-
-### Historial de Estados
-
-```kotlin
-// Obtener historial de estados de llamada
-val stateHistory = sipLibrary.getCallStateHistory()
-stateHistory.forEach { state ->
-    Log.d("CALL_HISTORY", "${state.timestamp}: ${state.previousState} -> ${state.state}")
-}
-
-// Limpiar historial
-sipLibrary.clearCallStateHistory()
-```
-
-### Información de Audio
-
-```kotlin
-// Diagnóstico de audio
-val audioDiag = sipLibrary.webRtcManager.diagnoseAudioIssues()
-Log.d("AUDIO_DIAG", audioDiag)
-
-// Estado de dispositivos
-val (inputs, outputs) = sipLibrary.getAvailableAudioDevices()
-Log.d("AUDIO_DEVICES", "Inputs: ${inputs.size}, Outputs: ${outputs.size}")
-```
-
-## 🌟 Características Avanzadas
-
-### Multi-Cuenta
-
-```kotlin
-// Registrar múltiples cuentas
-sipLibrary.registerAccount("trabajo", "pass1", "empresa.com")
-sipLibrary.registerAccount("personal", "pass2", "proveedor.com")
-
-// Observar estados de todas las cuentas
-lifecycleScope.launch {
-    sipLibrary.getRegistrationStatesFlow().collect { states ->
-        states.forEach { (account, state) ->
-            updateAccountUI(account, state)
-        }
-    }
-}
-
-// Hacer llamada desde cuenta específica
-sipLibrary.makeCall(
-    phoneNumber = "555-1234",
-    username = "trabajo",
-    domain = "empresa.com"
-)
-```
-
-### Estados Detallados de Llamada
-
-```kotlin
-sipLibrary.addSipEventListener(object : EddysSipLibrary.SipEventListener {
-    override fun onCallStateChanged(stateInfo: CallStateInfo) {
-        when (stateInfo.state) {
-            DetailedCallState.OUTGOING_INIT -> showStatus("Iniciando llamada...")
-            DetailedCallState.OUTGOING_PROGRESS -> showStatus("Estableciendo conexión...")
-            DetailedCallState.OUTGOING_RINGING -> {
-                showStatus("Sonando...")
-                startRingbackTone()
-            }
-            DetailedCallState.CONNECTED -> showStatus("Conectando audio...")
-            DetailedCallState.STREAMS_RUNNING -> {
-                showStatus("En llamada")
-                startCallTimer()
-            }
-            DetailedCallState.PAUSING -> showStatus("Pausando...")
-            DetailedCallState.PAUSED -> showStatus("En espera")
-            DetailedCallState.RESUMING -> showStatus("Reanudando...")
-            DetailedCallState.ENDING -> showStatus("Finalizando...")
-            DetailedCallState.ENDED -> {
-                showStatus("Llamada terminada")
-                stopCallTimer()
-            }
-            DetailedCallState.ERROR -> {
-                val errorMsg = SipErrorMapper.getErrorDescription(stateInfo.errorReason)
-                showError("Error: $errorMsg")
-                
-                // Manejar errores específicos
-                when (stateInfo.errorReason) {
-                    CallErrorReason.BUSY -> showMessage("Línea ocupada")
-                    CallErrorReason.NO_ANSWER -> showMessage("Sin respuesta")
-                    CallErrorReason.NETWORK_ERROR -> checkNetworkConnection()
-                    else -> showGenericError()
-                }
-            }
-        }
-    }
-})
-```
-
-### Gestión Avanzada de Audio
-
-```kotlin
-class AudioManager {
-    private val sipLibrary = EddysSipLibrary.getInstance()
+    // Activar funciones experimentales
+    enableExperimentalFeatures = true,
     
-    fun setupAudioPreferences() {
-        // Configurar tipos de dispositivos preferidos
-        val preferredTypes = setOf(
-            AudioUnitTypes.BLUETOOTH,
-            AudioUnitTypes.HEADSET,
-            AudioUnitTypes.SPEAKER
-        )
-        
-        // La librería seleccionará automáticamente el mejor dispositivo
-        sipLibrary.audioDeviceManager.setPreferredDeviceTypes(preferredTypes)
-    }
-    
-    fun handleBluetoothConnection() {
-        val (_, outputs) = sipLibrary.getAvailableAudioDevices()
-        
-        outputs.filter { it.isBluetooth }.forEach { device ->
-            when (device.connectionState) {
-                DeviceConnectionState.CONNECTED -> {
-                    if (device.signalStrength != null && device.signalStrength > 70) {
-                        sipLibrary.changeAudioDevice(device)
-                    }
-                }
-                DeviceConnectionState.LOW_BATTERY -> {
-                    showWarning("Bluetooth device low battery: ${device.name}")
-                }
-                else -> {}
-            }
-        }
-    }
-}
-```
-
-## 🐛 Solución de Problemas
-
-### Problemas Comunes
-
-#### 1. Error de Permisos de Audio
-
-```kotlin
-// Verificar y solicitar permisos
-if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) 
-    != PackageManager.PERMISSION_GRANTED) {
-    
-    ActivityCompat.requestPermissions(this, 
-        arrayOf(Manifest.permission.RECORD_AUDIO), 
-        REQUEST_AUDIO_PERMISSION)
-}
-```
-
-#### 2. Problemas de Conexión
-
-```kotlin
-// Verificar estado de salud
-val healthReport = sipLibrary.getSystemHealthReport()
-if (!sipLibrary.isSystemHealthy()) {
-    Log.e("SIP_ERROR", "System unhealthy: $healthReport")
-    
-    // Reintentar conexión
-    sipLibrary.unregisterAllAccounts()
-    delay(2000)
-    sipLibrary.registerAccount(username, password, domain)
-}
-```
-
-#### 3. Audio No Funciona
-
-```kotlin
-// Verificar dispositivos disponibles
-val (inputs, outputs) = sipLibrary.getAvailableAudioDevices()
-if (inputs.isEmpty() || outputs.isEmpty()) {
-    Log.e("AUDIO_ERROR", "No audio devices available")
-    sipLibrary.refreshAudioDevices()
-}
-
-// Verificar dispositivos actuales
-val (currentInput, currentOutput) = sipLibrary.getCurrentAudioDevices()
-if (currentInput == null || currentOutput == null) {
-    Log.e("AUDIO_ERROR", "No current audio devices selected")
-}
-```
-
-#### 4. Llamadas No Se Conectan
-
-```kotlin
-// Verificar estado de registro
-val registrationStates = sipLibrary.getAllRegistrationStates()
-val hasRegisteredAccount = registrationStates.values.any { it == RegistrationState.OK }
-
-if (!hasRegisteredAccount) {
-    Log.e("CALL_ERROR", "No registered accounts available")
-    // Re-registrar cuentas
-}
-
-// Verificar historial de estados
-val stateHistory = sipLibrary.getCallStateHistory()
-val lastError = stateHistory.lastOrNull { it.hasError() }
-if (lastError != null) {
-    Log.e("CALL_ERROR", "Last call error: ${lastError.errorReason}")
-}
-```
-
-### Logs de Debugging
-
-```kotlin
-// Habilitar logs detallados
-val config = EddysSipLibrary.SipConfig(
-    enableLogs = true,
-    // ... otras configuraciones
+    // Funciones beta
+    enableVideoCall = false,
+    enableScreenSharing = false,
+    enableChatMessaging = false,
+    enablePresenceStatus = false
 )
-
-// Filtrar logs por tag
-adb logcat | grep "EddysSipLibrary\|SipCoreManager\|WebRtcManager"
 ```
 
-## 📊 Métricas y Monitoreo
-
-### Estadísticas de Llamadas
+## 📄 Configuración Completa de Ejemplo
 
 ```kotlin
-val stats = sipLibrary.getCallStatistics()
-println("""
-    📊 Estadísticas de Llamadas:
-    - Total: ${stats.totalCalls}
-    - Exitosas: ${stats.successfulCalls}
-    - Perdidas: ${stats.missedCalls}
-    - Rechazadas: ${stats.declinedCalls}
-    - Duración total: ${stats.totalDuration}s
-""")
-```
-
-### Monitoreo de Red
-
-```kotlin
-sipLibrary.addSipEventListener(object : EddysSipLibrary.SipEventListener {
-    override fun onNetworkStateChanged(isConnected: Boolean) {
-        if (!isConnected) {
-            showWarning("Conexión de red perdida")
-            pauseCallsIfActive()
-        } else {
-            showInfo("Conexión de red restaurada")
-            resumeCallsIfPaused()
-        }
-    }
-})
-```
-
-## 🔒 Seguridad
-
-### Mejores Prácticas
-
-```kotlin
-// 1. No hardcodear credenciales
-val credentials = getEncryptedCredentials()
-sipLibrary.registerAccount(
-    username = credentials.username,
-    password = credentials.password,
-    domain = credentials.domain
-)
-
-// 2. Usar conexiones seguras
-val config = EddysSipLibrary.SipConfig(
-    webSocketUrl = "wss://secure-server.com:443/", // WSS, no WS
-    // ...
-)
-
-// 3. Validar certificados SSL
-// La librería maneja automáticamente la validación SSL
-
-// 4. Limpiar datos sensibles al cerrar
-override fun onDestroy() {
-    super.onDestroy()
-    sipLibrary.unregisterAllAccounts()
-    sipLibrary.dispose()
-}
-```
-
-## 🚀 Optimización de Rendimiento
-
-### Configuración para Producción
-
-```kotlin
+// Configuración completa para producción
 val productionConfig = EddysSipLibrary.SipConfig(
+    // Básico
     defaultDomain = "production-server.com",
     webSocketUrl = "wss://production-server.com:443/",
     userAgent = "MyApp/1.0.0 (Android)",
-    enableLogs = false, // Deshabilitar en producción
+    
+    // Logs (deshabilitados en producción)
+    enableLogs = false,
+    logLevel = EddysSipLibrary.LogLevel.ERROR,
+    
+    // Conexión optimizada
     enableAutoReconnect = true,
-    pingIntervalMs = 60000L // Ping cada minuto
+    maxReconnectAttempts = 3,
+    reconnectDelayMs = 5000L,
+    pingIntervalMs = 60000L,
+    
+    // Push notifications
+    enablePushNotifications = true,
+    defaultPushProvider = "fcm",
+    
+    // Audio optimizado
+    enableAudioProcessing = true,
+    enableEchoCancellation = true,
+    enableNoiseSuppression = true,
+    audioSampleRate = 48000,
+    preferredAudioCodec = EddysSipLibrary.AudioCodec.OPUS,
+    
+    // Ringtones configurables
+    enableIncomingRingtone = true,
+    enableOutgoingRingtone = true,
+    ringtoneVolume = 0.8f,
+    enableVibration = true,
+    
+    // Llamadas
+    enableDTMF = true,
+    enableCallHold = true,
+    enableCallHistory = true,
+    maxCallHistoryEntries = 500,
+    
+    // Audio devices
+    enableBluetoothAudio = true,
+    autoSwitchToBluetoothWhenConnected = true,
+    
+    // Seguridad
+    enableTLS = true,
+    enableSRTP = true,
+    tlsVersion = EddysSipLibrary.TLSVersion.TLS_1_2,
+    
+    // UI
+    enableFullScreenIncomingCall = true,
+    enableCallNotifications = true,
+    
+    // Rendimiento
+    enableBatteryOptimization = true,
+    maxConcurrentCalls = 1,
+    
+    // Sin debugging en producción
+    enableDiagnosticMode = false
 )
 ```
-
-### Gestión de Memoria
-
-```kotlin
-class SipService : Service() {
-    override fun onDestroy() {
-        super.onDestroy()
-        
-        // Limpiar recursos
-        sipLibrary.clearCallLogs()
-        sipLibrary.clearCallStateHistory()
-        sipLibrary.unregisterAllAccounts()
-    }
-}
-```
-
-## 📄 Licencia
-
-```
-MIT License
-
-Copyright (c) 2024 Eddys Larez
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-```
-
-## 🤝 Contribución
-
-Las contribuciones son bienvenidas. Por favor:
-
-1. Fork el proyecto
-2. Crea una rama para tu feature (`git checkout -b feature/nueva-caracteristica`)
-3. Commit tus cambios (`git commit -am 'Agregar nueva característica'`)
-4. Push a la rama (`git push origin feature/nueva-caracteristica`)
-5. Abre un Pull Request
-
-### Guías de Contribución
-
-- Sigue las convenciones de código Kotlin
-- Agrega tests para nuevas funcionalidades
-- Actualiza la documentación
-- Asegúrate de que todos los tests pasen
-
-## 📞 Soporte
-
-Para soporte técnico o preguntas:
-
-- **GitHub Issues**: [Reportar un problema](https://github.com/eddyslarez/sip-library/issues)
-- **Email**: eddyslarez@example.com
-- **Documentación**: [Wiki del proyecto](https://github.com/eddyslarez/sip-library/wiki)
 
 ## 🔄 Changelog
 
 ### v1.4.0 (Actual)
+- ✅ **NUEVO**: Configuración completa con más de 50 opciones
+- ✅ **NUEVO**: Control total de ringtones y vibración
+- ✅ **NUEVO**: Configuración de push notifications
+- ✅ **NUEVO**: Configuración avanzada de audio
+- ✅ **NUEVO**: Configuración de seguridad TLS/SRTP
+- ✅ **NUEVO**: Configuración de rendimiento y batería
+- ✅ **NUEVO**: Configuración de debugging y diagnósticos
 - ✅ **OPTIMIZADO**: Estados de llamada unificados
-- ✅ **ELIMINADO**: Duplicación de `onCallStateChanged`
 - ✅ **MEJORADO**: API más simple y clara
-- ✅ **AÑADIDO**: Mejor diagnóstico de sistema
-- ✅ **OPTIMIZADO**: Rendimiento de notificaciones
+- ✅ **AÑADIDO**: Actualización de configuración en tiempo real
 
 ### v1.3.0
 - ✅ Estados detallados de llamada
 - ✅ Soporte multi-cuenta mejorado
 - ✅ Gestión avanzada de audio
 - ✅ Sistema de diagnóstico
-
-### v1.2.0
-- ✅ Soporte multi-cuenta
-- ✅ Gestión de dispositivos de audio
-- ✅ Notificaciones push
-- ✅ Historial de llamadas
-
-### v1.1.0
-- ✅ Estados reactivos con Flow
-- ✅ Soporte para DTMF
-- ✅ Hold/Resume de llamadas
-- ✅ Reconexión automática
-
-### v1.0.0
-- ✅ Lanzamiento inicial
-- ✅ Soporte completo para SIP/WebRTC
-- ✅ Llamadas entrantes y salientes
-- ✅ Gestión básica de audio
 
 ---
 

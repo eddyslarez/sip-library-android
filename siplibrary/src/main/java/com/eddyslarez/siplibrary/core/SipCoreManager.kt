@@ -71,7 +71,7 @@ class SipCoreManager private constructor(
     var isCallFromPush = false
     private var registrationCallbackForCall: ((AccountInfo, Boolean) -> Unit)? = null
     private var connectionRetryCount = 0
-    private val maxRetryAttempts = 5
+    private val maxRetryAttempts = config.maxReconnectAttempts
 
     // WebRTC manager and other managers
     val webRtcManager = WebRtcManagerFactory.createWebRtcManager(application)
@@ -91,7 +91,7 @@ class SipCoreManager private constructor(
             return SipCoreManager(
                 application = application,
                 config = config,
-                audioManager = AudioManager(application),
+                audioManager = AudioManager(application, config),
                 windowManager = WindowManager(),
                 platformInfo = PlatformInfo(),
                 settingsDataStore = SettingsDataStore(application)
@@ -113,7 +113,10 @@ class SipCoreManager private constructor(
         webRtcManager.initialize()
         setupWebRtcEventListener()
         setupPlatformLifecycleObservers()
-        startConnectionHealthCheck()
+        
+        if (config.enableAutoReconnect) {
+            startConnectionHealthCheck()
+        }
         
         // OPTIMIZADO: Inicializar gestor de estados unificado
         CallStateManager.advanced.resetToIdle()
@@ -122,6 +125,25 @@ class SipCoreManager private constructor(
     internal fun setCallbacks(callbacks: EddysSipLibrary.SipCallbacks) {
         this.sipCallbacks = callbacks
         log.d(tag = TAG) { "SipCallbacks configured in SipCoreManager" }
+    }
+
+    /**
+     * Actualiza configuración en tiempo de ejecución
+     */
+    fun updateConfig(newConfig: EddysSipLibrary.SipConfig) {
+        log.d(tag = TAG) { "Updating runtime configuration" }
+        
+        // Actualizar configuración de audio manager
+        audioManager.updateConfig(newConfig)
+        
+        // Actualizar otras configuraciones según sea necesario
+        if (newConfig.enableAutoReconnect != config.enableAutoReconnect) {
+            if (newConfig.enableAutoReconnect) {
+                startConnectionHealthCheck()
+            } else {
+                healthCheckJob?.cancel()
+            }
+        }
     }
 
     /**
@@ -356,7 +378,9 @@ class SipCoreManager private constructor(
         currentAccountInfo?.currentCallData?.let { callData ->
             val endTime = Clock.System.now().toEpochMilliseconds()
             val callType = determineCallType(callData, callState)
-            callHistoryManager.addCallLog(callData, callType, endTime)
+            if (config.enableCallHistory) {
+                callHistoryManager.addCallLog(callData, callType, endTime)
+            }
         }
     }
 
@@ -379,8 +403,8 @@ class SipCoreManager private constructor(
     }
 
     private fun startConnectionHealthCheck() {
-        CoroutineScope(Dispatchers.IO).launch {
-            while (true) {
+        healthCheckJob = CoroutineScope(Dispatchers.IO).launch {
+            while (isActive) {
                 delay(connectionCheckInterval)
                 checkConnectionHealth()
             }
@@ -427,8 +451,8 @@ class SipCoreManager private constructor(
             val accountInfo = AccountInfo(username, password, domain)
             activeAccounts[accountKey] = accountInfo
 
-            accountInfo.token = token
-            accountInfo.provider = provider
+            accountInfo.token = if (config.enablePushNotifications) token else ""
+            accountInfo.provider = if (config.enablePushNotifications) provider else ""
             accountInfo.userAgent = userAgent()
 
             // Inicializar estado de registro para esta cuenta
@@ -511,7 +535,7 @@ class SipCoreManager private constructor(
                 val accountKey = "${accountInfo.username}@${accountInfo.domain}"
                 accountInfo.isRegistered = false
                 updateRegistrationState(accountKey, RegistrationState.NONE)
-                if (code != 1000) {
+                if (code != 1000 && config.enableAutoReconnect) {
                     handleUnexpectedDisconnection(accountInfo)
                 }
             }
@@ -520,7 +544,9 @@ class SipCoreManager private constructor(
                 val accountKey = "${accountInfo.username}@${accountInfo.domain}"
                 accountInfo.isRegistered = false
                 updateRegistrationState(accountKey, RegistrationState.FAILED)
-                handleConnectionError(accountInfo, error)
+                if (config.enableAutoReconnect) {
+                    handleConnectionError(accountInfo, error)
+                }
             }
 
             override fun onPong(timeMs: Long) {
@@ -549,7 +575,9 @@ class SipCoreManager private constructor(
         registrationCallbackForCall?.invoke(accountInfo, false)
 
         // Manejar reintento de registro normal
-        handleRegistrationFailure()
+        if (config.enableAutoReconnect) {
+            handleRegistrationFailure()
+        }
     }
 
     fun handleRegistrationSuccess(accountInfo: AccountInfo) {
@@ -564,8 +592,8 @@ class SipCoreManager private constructor(
     }
 
     private fun handleRegistrationFailure() {
-        if (isShuttingDown) {
-            log.d(tag = TAG) { "Skipping registration failure handling - shutting down" }
+        if (isShuttingDown || !config.enableAutoReconnect) {
+            log.d(tag = TAG) { "Skipping registration failure handling - shutting down or auto-reconnect disabled" }
             return
         }
 
@@ -624,7 +652,7 @@ class SipCoreManager private constructor(
                 accountInfo.isRegistered = false
 
                 // 2. Esperar un momento para que se liberen recursos
-                delay(1000)
+                delay(config.reconnectDelayMs)
 
                 // 3. Actualizar información de la cuenta
                 accountInfo.userAgent = userAgent()
@@ -642,7 +670,7 @@ class SipCoreManager private constructor(
                 reconnectionInProgress = false
 
                 // Programar otro intento si no hemos alcanzado el máximo
-                if (connectionRetryCount < maxRetryAttempts) {
+                if (connectionRetryCount < maxRetryAttempts && config.enableAutoReconnect) {
                     CoroutineScope(Dispatchers.IO).launch {
                         delay(5000) // Esperar 5 segundos antes del siguiente intento
                         reconnectAccountImproved(accountInfo)
@@ -653,14 +681,14 @@ class SipCoreManager private constructor(
     }
 
     private fun calculateBackoffDelay(attempt: Int): Long {
-        val baseDelay = 2000L // 2 segundos base
+        val baseDelay = config.reconnectDelayMs
         val maxDelay = 30000L // máximo 30 segundos
         val delay = (2.0.pow((attempt - 1).toDouble()) * baseDelay).toLong()
         return minOf(delay, maxDelay)
     }
 
     private fun handleUnexpectedDisconnection(accountInfo: AccountInfo) {
-        if (!reconnectionInProgress) {
+        if (!reconnectionInProgress && config.enableAutoReconnect) {
             CoroutineScope(Dispatchers.IO).launch {
                 delay(2000)
                 reconnectAccount(accountInfo)
@@ -856,12 +884,16 @@ class SipCoreManager private constructor(
         when (callState) {
             CallState.CONNECTED, CallState.HOLDING, CallState.ACCEPTING -> {
                 messageHandler.sendBye(accountInfo, callData)
-                callHistoryManager.addCallLog(callData, CallTypes.SUCCESS, endTime)
+                if (config.enableCallHistory) {
+                    callHistoryManager.addCallLog(callData, CallTypes.SUCCESS, endTime)
+                }
             }
 
             CallState.CALLING, CallState.RINGING, CallState.OUTGOING -> {
                 messageHandler.sendCancel(accountInfo, callData)
-                callHistoryManager.addCallLog(callData, CallTypes.ABORTED, endTime)
+                if (config.enableCallHistory) {
+                    callHistoryManager.addCallLog(callData, CallTypes.ABORTED, endTime)
+                }
             }
 
             else -> {}
@@ -939,7 +971,9 @@ class SipCoreManager private constructor(
         messageHandler.sendDeclineResponse(accountInfo, callData)
 
         val endTime = Clock.System.now().toEpochMilliseconds()
-        callHistoryManager.addCallLog(callData, CallTypes.DECLINED, endTime)
+        if (config.enableCallHistory) {
+            callHistoryManager.addCallLog(callData, CallTypes.DECLINED, endTime)
+        }
 
         // OPTIMIZADO: Estado de rechazo
         notifyCallStateChanged(CallState.DECLINED)
@@ -951,7 +985,9 @@ class SipCoreManager private constructor(
         webRtcManager.setMuted(!webRtcManager.isMuted())
     }
 
-    fun sendDtmf(digit: Char, duration: Int = 160): Boolean {
+    fun sendDtmf(digit: Char, duration: Int = config.dtmfToneDuration): Boolean {
+        if (!config.enableDTMF) return false
+        
         val validDigits = setOf(
             '0', '1', '2', '3', '4', '5', '6', '7', '8', '9',
             '*', '#', 'A', 'B', 'C', 'D', 'a', 'b', 'c', 'd'
@@ -972,8 +1008,8 @@ class SipCoreManager private constructor(
         return true
     }
 
-    fun sendDtmfSequence(digits: String, duration: Int = 160): Boolean {
-        if (digits.isEmpty()) return false
+    fun sendDtmfSequence(digits: String, duration: Int = config.dtmfToneDuration): Boolean {
+        if (!config.enableDTMF || digits.isEmpty()) return false
 
         digits.forEach { digit ->
             sendDtmf(digit, duration)
@@ -1004,7 +1040,7 @@ class SipCoreManager private constructor(
 
                 val success = sendSingleDtmf(request.digit, request.duration)
                 if (success) {
-                    delay(150) // Gap between digits
+                    delay(config.dtmfToneGap.toLong()) // Gap between digits
                 }
             }
         } finally {
@@ -1027,7 +1063,7 @@ class SipCoreManager private constructor(
             webRtcManager.sendDtmfTones(
                 tones = digit.toString().uppercase(),
                 duration = duration,
-                gap = 100
+                gap = config.dtmfToneGap
             )
         } catch (e: Exception) {
             false
@@ -1044,6 +1080,8 @@ class SipCoreManager private constructor(
     }
 
     fun holdCall() {
+        if (!config.enableCallHold) return
+        
         val accountInfo = currentAccountInfo ?: return
         val callData = accountInfo.currentCallData ?: return
 
@@ -1062,6 +1100,8 @@ class SipCoreManager private constructor(
     }
 
     fun resumeCall() {
+        if (!config.enableCallHold) return
+        
         val accountInfo = currentAccountInfo ?: return
         val callData = accountInfo.currentCallData ?: return
 
@@ -1079,12 +1119,35 @@ class SipCoreManager private constructor(
         }
     }
 
-    fun clearCallLogs() = callHistoryManager.clearCallLogs()
-    fun callLogs(): List<CallLog> = callHistoryManager.getAllCallLogs()
-    fun getCallStatistics() = callHistoryManager.getCallStatistics()
-    fun getMissedCalls(): List<CallLog> = callHistoryManager.getMissedCalls()
-    fun getCallLogsForNumber(phoneNumber: String): List<CallLog> =
+    fun clearCallLogs() {
+        if (config.enableCallHistory) {
+            callHistoryManager.clearCallLogs()
+        }
+    }
+    
+    fun callLogs(): List<CallLog> = if (config.enableCallHistory) {
+        callHistoryManager.getAllCallLogs()
+    } else {
+        emptyList()
+    }
+    
+    fun getCallStatistics() = if (config.enableCallHistory) {
+        callHistoryManager.getCallStatistics()
+    } else {
+        CallHistoryManager.CallStatistics(0, 0, 0, 0, 0, 0, 0, 0)
+    }
+    
+    fun getMissedCalls(): List<CallLog> = if (config.enableCallHistory) {
+        callHistoryManager.getMissedCalls()
+    } else {
+        emptyList()
+    }
+    
+    fun getCallLogsForNumber(phoneNumber: String): List<CallLog> = if (config.enableCallHistory) {
         callHistoryManager.getCallLogsForNumber(phoneNumber)
+    } else {
+        emptyList()
+    }
 
     fun getRegistrationState(): RegistrationState = globalRegistrationState
     fun currentCall(): Boolean = callState != CallState.NONE && callState != CallState.ENDED
@@ -1116,13 +1179,25 @@ class SipCoreManager private constructor(
             // OPTIMIZADO: Información de estados unificados
             appendLine("\n--- Call State Info ---")
             appendLine(CallStateManager.advanced.getDiagnosticInfo())
+            
+            appendLine("\n--- Configuration ---")
+            appendLine("Push notifications: ${config.enablePushNotifications}")
+            appendLine("Incoming ringtone: ${config.enableIncomingRingtone}")
+            appendLine("Outgoing ringtone: ${config.enableOutgoingRingtone}")
+            appendLine("DTMF enabled: ${config.enableDTMF}")
+            appendLine("Call hold enabled: ${config.enableCallHold}")
+            appendLine("Auto reconnect: ${config.enableAutoReconnect}")
+            appendLine("Max retry attempts: ${config.maxReconnectAttempts}")
+            appendLine("Call history enabled: ${config.enableCallHistory}")
         }
     }
 
     fun enterPushMode(token: String? = null) {
-        token?.let { newToken ->
-            activeAccounts.values.forEach { accountInfo ->
-                accountInfo.token = newToken
+        if (config.enablePushNotifications) {
+            token?.let { newToken ->
+                activeAccounts.values.forEach { accountInfo ->
+                    accountInfo.token = newToken
+                }
             }
         }
     }
