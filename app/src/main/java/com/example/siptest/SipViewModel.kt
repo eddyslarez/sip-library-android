@@ -8,15 +8,8 @@ class SipViewModel(
     private val _permissionsGranted = MutableStateFlow(false)
     val permissionsGranted: StateFlow<Boolean> = _permissionsGranted.asStateFlow()
 
-    // Estados básicos (compatibilidad)
-    val callState: StateFlow<CallState> = sipLibrary.getCallStateFlow()
-        .stateIn(viewModelScope, SharingStarted.Eagerly, CallState.NONE)
-
-    val registrationState: StateFlow<RegistrationState> = sipLibrary.getRegistrationStateFlow()
-        .stateIn(viewModelScope, SharingStarted.Eagerly, RegistrationState.NONE)
-
-    // NUEVO: Estados detallados de llamada
-    val detailedCallState: StateFlow<CallStateInfo> = sipLibrary.getDetailedCallStateFlow()
+    // OPTIMIZADO: Estados unificados de llamada
+    val callState: StateFlow<CallStateInfo> = sipLibrary.getCallStateFlow()
         .stateIn(viewModelScope, SharingStarted.Eagerly, 
             CallStateInfo(
                 state = DetailedCallState.IDLE,
@@ -25,12 +18,15 @@ class SipViewModel(
             )
         )
 
-    // NUEVO: Estados de registro multi-cuenta
+    val registrationState: StateFlow<RegistrationState> = sipLibrary.getRegistrationStateFlow()
+        .stateIn(viewModelScope, SharingStarted.Eagerly, RegistrationState.NONE)
+
+    // Estados de registro multi-cuenta
     val registrationStates: StateFlow<Map<String, RegistrationState>> = sipLibrary.getRegistrationStatesFlow()
         .stateIn(viewModelScope, SharingStarted.Eagerly, emptyMap())
 
-    // NUEVO: Historial de estados para debugging
-    val callStateHistory: StateFlow<List<CallStateInfo>> = sipLibrary.getDetailedCallStateFlow()
+    // Historial de estados para debugging
+    val callStateHistory: StateFlow<List<CallStateInfo>> = sipLibrary.getCallStateFlow()
         .map { currentState ->
             sipLibrary.getCallStateHistory()
         }
@@ -38,7 +34,7 @@ class SipViewModel(
 
     init {
         setupSipListeners()
-        observeDetailedStates()
+        observeCallStates()
     }
 
     private fun setupSipListeners() {
@@ -54,23 +50,14 @@ class SipViewModel(
                 }
             }
 
-            override fun onCallStateChanged(state: CallState, callInfo: EddysSipLibrary.CallInfo?) {
-                Log.d("SipListener", "onCallStateChanged: ${state.name}, callInfo: $callInfo")
-                _uiState.update {
-                    it.copy(
-                        callMessage = "Call: ${state.name}",
-                        currentCall = callInfo
-                    )
-                }
-            }
-
-            // NUEVO: Listener para estados detallados
-            override fun onDetailedCallStateChanged(stateInfo: CallStateInfo) {
-                Log.d("SipListener", "onDetailedCallStateChanged: ${stateInfo.state.name}")
+            // OPTIMIZADO: Listener unificado para estados de llamada
+            override fun onCallStateChanged(stateInfo: CallStateInfo) {
+                Log.d("SipListener", "onCallStateChanged: ${stateInfo.state.name}")
                 
-                val message = buildDetailedCallMessage(stateInfo)
+                val message = buildCallMessage(stateInfo)
                 _uiState.update {
                     it.copy(
+                        callMessage = message,
                         detailedCallMessage = message,
                         lastStateTransition = "${stateInfo.previousState?.name ?: "NONE"} → ${stateInfo.state.name}",
                         hasCallError = stateInfo.hasError(),
@@ -79,7 +66,7 @@ class SipViewModel(
                 }
 
                 // Manejar estados específicos
-                handleDetailedStateChange(stateInfo)
+                handleStateChange(stateInfo)
             }
 
             override fun onIncomingCall(callInfo: EddysSipLibrary.IncomingCallInfo) {
@@ -189,9 +176,9 @@ class SipViewModel(
                 }
             }
 
-            // NUEVO: Listener para estados detallados específicos de llamada
-            override fun onDetailedStateChanged(stateInfo: CallStateInfo) {
-                Log.d("CallListener", "onDetailedStateChanged: ${stateInfo.state}")
+            // OPTIMIZADO: Listener unificado para estados detallados específicos de llamada
+            override fun onCallStateChanged(stateInfo: CallStateInfo) {
+                Log.d("CallListener", "onCallStateChanged: ${stateInfo.state}")
                 
                 // Aquí puedes manejar lógica específica de UI para cada estado
                 when (stateInfo.state) {
@@ -244,11 +231,11 @@ class SipViewModel(
         })
     }
 
-    // NUEVO: Observar estados detallados para lógica adicional
-    private fun observeDetailedStates() {
+    // OPTIMIZADO: Observar estados unificados para lógica adicional
+    private fun observeCallStates() {
         viewModelScope.launch {
-            detailedCallState.collect { stateInfo ->
-                // Lógica adicional basada en estados detallados
+            callState.collect { stateInfo ->
+                // Lógica adicional basada en estados
                 when (stateInfo.state) {
                     DetailedCallState.STREAMS_RUNNING -> {
                         // Iniciar timer de duración de llamada
@@ -279,8 +266,8 @@ class SipViewModel(
         }
     }
 
-    // NUEVO: Construir mensaje detallado del estado
-    private fun buildDetailedCallMessage(stateInfo: CallStateInfo): String {
+    // OPTIMIZADO: Construir mensaje del estado
+    private fun buildCallMessage(stateInfo: CallStateInfo): String {
         val baseMessage = when (stateInfo.state) {
             DetailedCallState.IDLE -> "Sin llamadas"
             DetailedCallState.OUTGOING_INIT -> "Iniciando llamada saliente"
@@ -304,8 +291,8 @@ class SipViewModel(
         }
     }
 
-    // NUEVO: Manejar cambios de estado específicos
-    private fun handleDetailedStateChange(stateInfo: CallStateInfo) {
+    // OPTIMIZADO: Manejar cambios de estado específicos
+    private fun handleStateChange(stateInfo: CallStateInfo) {
         when (stateInfo.state) {
             DetailedCallState.ERROR -> {
                 // Manejar errores específicos
@@ -339,7 +326,7 @@ class SipViewModel(
         }
     }
 
-    // NUEVO: Timer de duración de llamada
+    // Timer de duración de llamada
     private var callDurationTimer: Job? = null
     private val _callDuration = MutableStateFlow(0L)
     val callDuration: StateFlow<Long> = _callDuration.asStateFlow()
@@ -362,9 +349,9 @@ class SipViewModel(
         _callDuration.value = 0L
     }
 
-    // NUEVO: Métodos para obtener información detallada
-    fun getCurrentDetailedState(): CallStateInfo {
-        return sipLibrary.getCurrentDetailedCallState()
+    // OPTIMIZADO: Métodos para obtener información
+    fun getCurrentCallState(): CallStateInfo {
+        return sipLibrary.getCurrentCallState()
     }
 
     fun getCallStateHistory(): List<CallStateInfo> {
@@ -521,7 +508,7 @@ data class SipUiState(
     val currentCall: EddysSipLibrary.CallInfo? = null,
     val incomingCall: EddysSipLibrary.IncomingCallInfo? = null,
     
-    // NUEVO: Campos para estados detallados
+    // Campos para estados
     val detailedCallMessage: String = "Idle",
     val lastStateTransition: String = "",
     val hasCallError: Boolean = false,
@@ -530,19 +517,7 @@ data class SipUiState(
     val allAccountsRegistered: Boolean = false
 )
 
-// MEJORADO: Extension functions para estados
-fun CallState.isCallActive(): Boolean {
-    return this in listOf(
-        CallState.CALLING,
-        CallState.RINGING,
-        CallState.CONNECTED,
-        CallState.INCOMING,
-        CallState.ACCEPTING,
-        CallState.HOLDING
-    )
-}
-
-// NUEVO: Extension functions para estados detallados
+// OPTIMIZADO: Extension functions para estados
 fun DetailedCallState.isCallActive(): Boolean {
     return this in listOf(
         DetailedCallState.OUTGOING_INIT,
@@ -575,6 +550,8 @@ fun DetailedCallState.getDisplayText(): String {
     }
 }
 
+// OBSOLETO: Mantenido para compatibilidad
+@Deprecated("Use DetailedCallState.getDisplayText() instead")
 fun CallState.getDisplayText(): String {
     return when (this) {
         CallState.NONE -> "No Call"

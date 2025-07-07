@@ -28,8 +28,8 @@ import kotlinx.datetime.Clock
 import kotlin.math.pow
 
 /**
- * Gestor principal del core SIP - Adaptado para Android con soporte multi-cuenta mejorado
- * Versión mejorada con estados detallados de llamada
+ * Gestor principal del core SIP - Optimizado con estados unificados
+ * Versión optimizada con estados unificados de llamada
  *
  * @author Eddys Larez
  */
@@ -49,7 +49,7 @@ class SipCoreManager private constructor(
     private var isShuttingDown = false
     val callHistoryManager = CallHistoryManager()
 
-    // NUEVO: Estados de registro por cuenta
+    // Estados de registro por cuenta
     private val _registrationStates = MutableStateFlow<Map<String, RegistrationState>>(emptyMap())
     val registrationStatesFlow: StateFlow<Map<String, RegistrationState>> = _registrationStates.asStateFlow()
 
@@ -108,14 +108,14 @@ class SipCoreManager private constructor(
     fun getCurrentUsername(): String? = currentAccountInfo?.username
 
     fun initialize() {
-        log.d(tag = TAG) { "Initializing SIP Core with improved call states" }
+        log.d(tag = TAG) { "Initializing SIP Core with optimized call states" }
 
         webRtcManager.initialize()
         setupWebRtcEventListener()
         setupPlatformLifecycleObservers()
         startConnectionHealthCheck()
         
-        // NUEVO: Inicializar gestor de estados avanzado
+        // OPTIMIZADO: Inicializar gestor de estados unificado
         CallStateManager.advanced.resetToIdle()
     }
 
@@ -125,7 +125,7 @@ class SipCoreManager private constructor(
     }
 
     /**
-     * NUEVO: Actualiza el estado de registro para una cuenta específica
+     * Actualiza el estado de registro para una cuenta específica
      */
     fun updateRegistrationState(accountKey: String, newState: RegistrationState) {
         log.d(tag = TAG) { "Updating registration state for $accountKey: $newState" }
@@ -139,7 +139,7 @@ class SipCoreManager private constructor(
         globalRegistrationState = newState
         RegistrationStateManager.updateCallState(newState)
 
-        // CORREGIDO: Notificar solo si el estado cambió
+        // Notificar solo si el estado cambió
         if (previousState != newState) {
             val account = activeAccounts[accountKey]
             if (account != null) {
@@ -162,7 +162,7 @@ class SipCoreManager private constructor(
     }
 
     /**
-     * NUEVO: Método de conveniencia para mantener compatibilidad
+     * Método de conveniencia para mantener compatibilidad
      */
     fun updateRegistrationState(newState: RegistrationState) {
         currentAccountInfo?.let { account ->
@@ -172,21 +172,21 @@ class SipCoreManager private constructor(
     }
 
     /**
-     * NUEVO: Obtiene el estado de registro para una cuenta específica
+     * Obtiene el estado de registro para una cuenta específica
      */
     fun getRegistrationState(accountKey: String): RegistrationState {
         return _registrationStates.value[accountKey] ?: RegistrationState.NONE
     }
 
     /**
-     * NUEVO: Obtiene todos los estados de registro
+     * Obtiene todos los estados de registro
      */
     fun getAllRegistrationStates(): Map<String, RegistrationState> {
         return _registrationStates.value
     }
 
     /**
-     * CORREGIDO: Método para notificar cambios de estado de registro
+     * Método para notificar cambios de estado de registro
      */
     private fun notifyRegistrationStateChanged(state: RegistrationState, username: String, domain: String) {
         try {
@@ -195,7 +195,7 @@ class SipCoreManager private constructor(
             // Notificar a través del callback principal
             sipCallbacks?.onRegistrationStateChanged(state)
 
-            // NUEVO: Notificar con información específica de la cuenta
+            // Notificar con información específica de la cuenta
             sipCallbacks?.onAccountRegistrationStateChanged(username, domain, state)
 
             log.d(tag = TAG) { "Registration state notification sent successfully" }
@@ -205,20 +205,17 @@ class SipCoreManager private constructor(
     }
 
     /**
-     * MEJORADO: Método para notificar estados de llamada con estados detallados
+     * OPTIMIZADO: Método para notificar estados de llamada usando estados unificados
      */
     fun notifyCallStateChanged(state: CallState) {
         try {
-            log.d(tag = TAG) { "Notifying call state change: $state" }
+            log.d(tag = TAG) { "Notifying legacy call state change: $state" }
 
-            // Actualizar estado interno
+            // Actualizar estado interno legacy
             callState = state
             CallStateManager.updateCallState(state)
 
-            // Notificar a través de callbacks
-            sipCallbacks?.onCallStateChanged(state)
-
-            // Notificar cambios específicos
+            // Notificar cambios específicos para compatibilidad
             when (state) {
                 CallState.INCOMING -> {
                     currentAccountInfo?.currentCallData?.let { callData ->
@@ -340,7 +337,7 @@ class SipCoreManager private constructor(
     private fun handleWebRtcConnected() {
         callStartTimeMillis = Clock.System.now().toEpochMilliseconds()
 
-        // MEJORADO: Usar estados detallados
+        // OPTIMIZADO: Usar estados unificados
         currentAccountInfo?.currentCallData?.let { callData ->
             CallStateManager.advanced.streamsRunning(callData.callId)
         }
@@ -349,7 +346,7 @@ class SipCoreManager private constructor(
     }
 
     private fun handleWebRtcClosed() {
-        // MEJORADO: Finalizar con estados detallados
+        // OPTIMIZADO: Finalizar con estados unificados
         currentAccountInfo?.currentCallData?.let { callData ->
             CallStateManager.advanced.callEnded(callData.callId)
         }
@@ -826,7 +823,7 @@ class SipCoreManager private constructor(
                 accountInfo.currentCallData = callData
                 CallStateManager.callerNumber(phoneNumber)
 
-                // NUEVO: Iniciar llamada saliente con estados detallados
+                // OPTIMIZADO: Iniciar llamada saliente con estados unificados
                 CallStateManager.advanced.startOutgoingCall(callId, phoneNumber)
                 notifyCallStateChanged(CallState.CALLING)
 
@@ -835,7 +832,7 @@ class SipCoreManager private constructor(
                 log.e(tag = TAG) { "Error creating call: ${e.stackTraceToString()}" }
                 sipCallbacks?.onCallFailed("Error creating call: ${e.message}")
                 
-                // NUEVO: Error al crear llamada
+                // OPTIMIZADO: Error al crear llamada
                 accountInfo.currentCallData?.let { callData ->
                     CallStateManager.advanced.callError(
                         callData.callId,
@@ -870,7 +867,7 @@ class SipCoreManager private constructor(
             else -> {}
         }
 
-        // MEJORADO: Finalizar con estados detallados
+        // OPTIMIZADO: Finalizar con estados unificados
         CallStateManager.advanced.startEnding(callData.callId)
         notifyCallStateChanged(CallState.ENDED)
         
@@ -909,12 +906,12 @@ class SipCoreManager private constructor(
                 webRtcManager.setAudioEnabled(true)
                 webRtcManager.setMuted(false)
 
-                // MEJORADO: Estado de aceptación
+                // OPTIMIZADO: Estado de aceptación
                 notifyCallStateChanged(CallState.ACCEPTING)
             } catch (e: Exception) {
                 log.e(tag = TAG) { "Error accepting call: ${e.message}" }
                 
-                // NUEVO: Error al aceptar llamada
+                // OPTIMIZADO: Error al aceptar llamada
                 CallStateManager.advanced.callError(
                     callData.callId,
                     errorReason = CallErrorReason.NETWORK_ERROR
@@ -944,7 +941,7 @@ class SipCoreManager private constructor(
         val endTime = Clock.System.now().toEpochMilliseconds()
         callHistoryManager.addCallLog(callData, CallTypes.DECLINED, endTime)
 
-        // MEJORADO: Estado de rechazo
+        // OPTIMIZADO: Estado de rechazo
         notifyCallStateChanged(CallState.DECLINED)
     }
 
@@ -1051,7 +1048,7 @@ class SipCoreManager private constructor(
         val callData = accountInfo.currentCallData ?: return
 
         CoroutineScope(Dispatchers.IO).launch {
-            // NUEVO: Iniciar proceso de hold
+            // OPTIMIZADO: Iniciar proceso de hold
             CallStateManager.advanced.startHold(callData.callId)
             
             callHoldManager.holdCall()?.let { holdSdp ->
@@ -1069,7 +1066,7 @@ class SipCoreManager private constructor(
         val callData = accountInfo.currentCallData ?: return
 
         CoroutineScope(Dispatchers.IO).launch {
-            // NUEVO: Iniciar proceso de resume
+            // OPTIMIZADO: Iniciar proceso de resume
             CallStateManager.advanced.startResume(callData.callId)
             
             callHoldManager.resumeCall()?.let { resumeSdp ->
@@ -1116,8 +1113,8 @@ class SipCoreManager private constructor(
                 appendLine("  - $account: $state")
             }
             
-            // NUEVO: Información de estados detallados
-            appendLine("\n--- Detailed Call State Info ---")
+            // OPTIMIZADO: Información de estados unificados
+            appendLine("\n--- Call State Info ---")
             appendLine(CallStateManager.advanced.getDiagnosticInfo())
         }
     }
@@ -1148,7 +1145,7 @@ class SipCoreManager private constructor(
         activeAccounts.clear()
         _registrationStates.value = emptyMap()
         
-        // NUEVO: Resetear estados detallados
+        // OPTIMIZADO: Resetear estados unificados
         CallStateManager.advanced.resetToIdle()
         CallStateManager.advanced.clearHistory()
     }

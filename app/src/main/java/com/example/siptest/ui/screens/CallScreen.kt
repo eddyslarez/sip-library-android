@@ -4,19 +4,18 @@ fun CallScreen(
     onNavigateBack: () -> Unit
 ) {
     val uiState by sipViewModel.uiState.collectAsState()
-    val callState by sipViewModel.callState.collectAsState()
     
-    // NUEVO: Estados detallados
-    val detailedCallState by sipViewModel.detailedCallState.collectAsState()
+    // OPTIMIZADO: Estados unificados
+    val callState by sipViewModel.callState.collectAsState()
     val callDuration by sipViewModel.callDuration.collectAsState()
     
     val currentCall = uiState.currentCall
     val incomingCall = uiState.incomingCall
 
-    // MEJORADO: Navegar de vuelta cuando la llamada termine usando estados detallados
-    LaunchedEffect(detailedCallState.state) {
-        if (detailedCallState.state == DetailedCallState.ENDED || 
-            detailedCallState.state == DetailedCallState.IDLE) {
+    // OPTIMIZADO: Navegar de vuelta cuando la llamada termine usando estados unificados
+    LaunchedEffect(callState.state) {
+        if (callState.state == DetailedCallState.ENDED || 
+            callState.state == DetailedCallState.IDLE) {
             delay(2000) // Mostrar mensaje por 2 segundos
             onNavigateBack()
         }
@@ -29,10 +28,9 @@ fun CallScreen(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.SpaceBetween
     ) {
-        // MEJORADO: Información de la llamada con estados detallados
-        DetailedCallInfoSection(
+        // OPTIMIZADO: Información de la llamada con estados unificados
+        CallInfoSection(
             callState = callState,
-            detailedState = detailedCallState,
             currentCall = currentCall,
             incomingCall = incomingCall,
             callDuration = callDuration,
@@ -42,10 +40,9 @@ fun CallScreen(
             errorReason = uiState.errorReason
         )
 
-        // MEJORADO: Controles de llamada con estados detallados
-        DetailedCallControlsSection(
+        // OPTIMIZADO: Controles de llamada con estados unificados
+        CallControlsSection(
             callState = callState,
-            detailedState = detailedCallState,
             currentCall = currentCall,
             incomingCall = incomingCall,
             onAccept = { sipViewModel.acceptCall() },
@@ -59,13 +56,12 @@ fun CallScreen(
     }
 }
 
-// MEJORADO: Sección de información con estados detallados
+// OPTIMIZADO: Sección de información con estados unificados
 @Composable
-fun DetailedCallInfoSection(
-    callState: CallState,
-    detailedState: CallStateInfo,
-    currentCall: CallInfo?,
-    incomingCall: IncomingCallInfo?,
+fun CallInfoSection(
+    callState: CallStateInfo,
+    currentCall: EddysSipLibrary.CallInfo?,
+    incomingCall: EddysSipLibrary.IncomingCallInfo?,
     callDuration: Long,
     message: String,
     detailedMessage: String,
@@ -79,8 +75,8 @@ fun DetailedCallInfoSection(
         // Avatar/Icon con estado visual
         val avatarColor = when {
             hasError -> MaterialTheme.colorScheme.errorContainer
-            detailedState.state == DetailedCallState.STREAMS_RUNNING -> MaterialTheme.colorScheme.primaryContainer
-            detailedState.state.isCallActive() -> MaterialTheme.colorScheme.secondaryContainer
+            callState.state == DetailedCallState.STREAMS_RUNNING -> MaterialTheme.colorScheme.primaryContainer
+            callState.state.isCallActive() -> MaterialTheme.colorScheme.secondaryContainer
             else -> MaterialTheme.colorScheme.surfaceVariant
         }
         
@@ -106,7 +102,7 @@ fun DetailedCallInfoSection(
                         .align(Alignment.BottomEnd)
                         .size(24.dp)
                         .background(
-                            color = when (detailedState.state) {
+                            color = when (callState.state) {
                                 DetailedCallState.STREAMS_RUNNING -> Color.Green
                                 DetailedCallState.PAUSED -> Color.Yellow
                                 DetailedCallState.ERROR -> Color.Red
@@ -136,16 +132,16 @@ fun DetailedCallInfoSection(
 
         Spacer(modifier = Modifier.height(8.dp))
 
-        // Estado detallado de la llamada
+        // Estado de la llamada
         Text(
-            text = detailedState.state.getDisplayText(),
+            text = callState.state.getDisplayText(),
             style = MaterialTheme.typography.bodyLarge,
             color = if (hasError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
             fontWeight = if (hasError) FontWeight.Bold else FontWeight.Normal
         )
 
         // Duración de la llamada
-        if (detailedState.state == DetailedCallState.STREAMS_RUNNING && callDuration > 0) {
+        if (callState.state == DetailedCallState.STREAMS_RUNNING && callDuration > 0) {
             Spacer(modifier = Modifier.height(4.dp))
             Text(
                 text = formatDuration(callDuration),
@@ -186,10 +182,10 @@ fun DetailedCallInfoSection(
         }
 
         // Información SIP (solo en debug)
-        if (BuildConfig.DEBUG && detailedState.sipCode != null) {
+        if (BuildConfig.DEBUG && callState.sipCode != null) {
             Spacer(modifier = Modifier.height(4.dp))
             Text(
-                text = "SIP: ${detailedState.sipCode} ${detailedState.sipReason ?: ""}",
+                text = "SIP: ${callState.sipCode} ${callState.sipReason ?: ""}",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
             )
@@ -197,13 +193,12 @@ fun DetailedCallInfoSection(
     }
 }
 
-// MEJORADO: Controles con estados detallados
+// OPTIMIZADO: Controles con estados unificados
 @Composable
-fun DetailedCallControlsSection(
-    callState: CallState,
-    detailedState: CallStateInfo,
-    currentCall: CallInfo?,
-    incomingCall: IncomingCallInfo?,
+fun CallControlsSection(
+    callState: CallStateInfo,
+    currentCall: EddysSipLibrary.CallInfo?,
+    incomingCall: EddysSipLibrary.IncomingCallInfo?,
     onAccept: () -> Unit,
     onDecline: () -> Unit,
     onEnd: () -> Unit,
@@ -212,7 +207,7 @@ fun DetailedCallControlsSection(
     onMute: () -> Unit,
     onDtmf: (Char) -> Unit
 ) {
-    when (detailedState.state) {
+    when (callState.state) {
         DetailedCallState.INCOMING_RECEIVED -> {
             // Botones para llamada entrante
             Row(
@@ -278,23 +273,23 @@ fun DetailedCallControlsSection(
 
                     // Hold/Resume
                     FloatingActionButton(
-                        onClick = if (detailedState.state == DetailedCallState.PAUSED) onResume else onHold,
-                        containerColor = if (detailedState.state == DetailedCallState.PAUSED)
+                        onClick = if (callState.state == DetailedCallState.PAUSED) onResume else onHold,
+                        containerColor = if (callState.state == DetailedCallState.PAUSED)
                             MaterialTheme.colorScheme.tertiary
                         else
                             MaterialTheme.colorScheme.secondaryContainer,
                         modifier = Modifier.size(56.dp)
                     ) {
                         Icon(
-                            if (detailedState.state == DetailedCallState.PAUSED) 
+                            if (callState.state == DetailedCallState.PAUSED) 
                                 Icons.Default.PlayArrow 
                             else 
                                 Icons.Default.Pause,
-                            contentDescription = if (detailedState.state == DetailedCallState.PAUSED) 
+                            contentDescription = if (callState.state == DetailedCallState.PAUSED) 
                                 "Resume" 
                             else 
                                 "Hold",
-                            tint = if (detailedState.state == DetailedCallState.PAUSED)
+                            tint = if (callState.state == DetailedCallState.PAUSED)
                                 MaterialTheme.colorScheme.onTertiary
                             else
                                 MaterialTheme.colorScheme.onSecondaryContainer
@@ -333,7 +328,7 @@ fun DetailedCallControlsSection(
                 Spacer(modifier = Modifier.height(16.dp))
 
                 // Teclado DTMF solo si está en streams running
-                if (detailedState.state == DetailedCallState.STREAMS_RUNNING) {
+                if (callState.state == DetailedCallState.STREAMS_RUNNING) {
                     DtmfKeypad(onDtmf = onDtmf)
                 }
             }
@@ -398,7 +393,7 @@ fun DetailedCallControlsSection(
 
                 // Mostrar estado específico
                 Text(
-                    text = when (detailedState.state) {
+                    text = when (callState.state) {
                         DetailedCallState.OUTGOING_INIT -> "Iniciando llamada..."
                         DetailedCallState.OUTGOING_PROGRESS -> "Conectando..."
                         DetailedCallState.OUTGOING_RINGING -> "Sonando..."
@@ -450,7 +445,7 @@ fun DetailedCallControlsSection(
                 Spacer(modifier = Modifier.height(8.dp))
 
                 Text(
-                    text = detailedState.state.getDisplayText(),
+                    text = callState.state.getDisplayText(),
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -466,5 +461,13 @@ fun DtmfKeypad(onDtmf: (Char) -> Unit) {
 }
 
 private fun formatDuration(durationMs: Long): String {
-    // ... implementación existente
+    val seconds = (durationMs / 1000) % 60
+    val minutes = (durationMs / (1000 * 60)) % 60
+    val hours = (durationMs / (1000 * 60 * 60))
+
+    return if (hours > 0) {
+        String.format("%d:%02d:%02d", hours, minutes, seconds)
+    } else {
+        String.format("%d:%02d", minutes, seconds)
+    }
 }

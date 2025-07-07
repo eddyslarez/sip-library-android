@@ -4,10 +4,9 @@ fun DialerScreen(
 ) {
     val uiState by sipViewModel.uiState.collectAsState()
     val registrationState by sipViewModel.registrationState.collectAsState()
-    val callState by sipViewModel.callState.collectAsState()
     
-    // NUEVO: Estados detallados
-    val detailedCallState by sipViewModel.detailedCallState.collectAsState()
+    // OPTIMIZADO: Estados unificados
+    val callState by sipViewModel.callState.collectAsState()
     val registrationStates by sipViewModel.registrationStates.collectAsState()
     val callDuration by sipViewModel.callDuration.collectAsState()
 
@@ -16,10 +15,9 @@ fun DialerScreen(
             .fillMaxSize()
             .verticalScroll(rememberScrollState()),
     ) {
-        // MEJORADO: Estado de la llamada con información detallada
-        DetailedCallStatusCard(
+        // OPTIMIZADO: Estado de la llamada con información unificada
+        CallStatusCard(
             callState = callState,
-            detailedState = detailedCallState,
             message = uiState.callMessage,
             detailedMessage = uiState.detailedCallMessage,
             hasError = uiState.hasCallError,
@@ -29,7 +27,7 @@ fun DialerScreen(
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        // NUEVO: Estado de múltiples cuentas
+        // Estado de múltiples cuentas
         if (registrationStates.isNotEmpty()) {
             MultiAccountStatusCard(
                 registrationStates = registrationStates,
@@ -80,7 +78,7 @@ fun DialerScreen(
                     sipViewModel.makeCall(uiState.dialedNumber)
                 }
             },
-            enabled = registrationState == RegistrationState.OK && !detailedCallState.state.isCallActive(),
+            enabled = registrationState == RegistrationState.OK && !callState.state.isCallActive(),
             hasNumber = uiState.dialedNumber.isNotEmpty()
         )
 
@@ -103,11 +101,11 @@ fun DialerScreen(
             }
         }
 
-        // NUEVO: Información de debugging (solo en modo debug)
+        // Información de debugging (solo en modo debug)
         if (BuildConfig.DEBUG) {
             Spacer(modifier = Modifier.height(16.dp))
             DebugInfoCard(
-                detailedState = detailedCallState,
+                callState = callState,
                 lastTransition = uiState.lastStateTransition,
                 onShowDiagnostic = {
                     Log.d("SipDebug", sipViewModel.getSystemDiagnostic())
@@ -117,11 +115,10 @@ fun DialerScreen(
     }
 }
 
-// NUEVO: Card para estado detallado de llamada
+// OPTIMIZADO: Card para estado unificado de llamada
 @Composable
-fun DetailedCallStatusCard(
-    callState: CallState,
-    detailedState: CallStateInfo,
+fun CallStatusCard(
+    callState: CallStateInfo,
     message: String,
     detailedMessage: String,
     hasError: Boolean,
@@ -134,17 +131,17 @@ fun DetailedCallStatusCard(
             MaterialTheme.colorScheme.onErrorContainer,
             "❌"
         )
-        detailedState.state == DetailedCallState.STREAMS_RUNNING -> Triple(
+        callState.state == DetailedCallState.STREAMS_RUNNING -> Triple(
             MaterialTheme.colorScheme.primaryContainer,
             MaterialTheme.colorScheme.onPrimaryContainer,
             "📞"
         )
-        detailedState.state.isCallActive() -> Triple(
+        callState.state.isCallActive() -> Triple(
             MaterialTheme.colorScheme.secondaryContainer,
             MaterialTheme.colorScheme.onSecondaryContainer,
             "📱"
         )
-        detailedState.state == DetailedCallState.INCOMING_RECEIVED -> Triple(
+        callState.state == DetailedCallState.INCOMING_RECEIVED -> Triple(
             MaterialTheme.colorScheme.tertiaryContainer,
             MaterialTheme.colorScheme.onTertiaryContainer,
             "📲"
@@ -175,7 +172,7 @@ fun DetailedCallStatusCard(
                 Spacer(modifier = Modifier.width(8.dp))
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = detailedState.state.getDisplayText(),
+                        text = callState.state.getDisplayText(),
                         color = contentColor,
                         style = MaterialTheme.typography.bodyMedium,
                         fontWeight = FontWeight.Medium
@@ -190,7 +187,7 @@ fun DetailedCallStatusCard(
                 }
                 
                 // Mostrar duración si está en llamada
-                if (duration > 0 && detailedState.state == DetailedCallState.STREAMS_RUNNING) {
+                if (duration > 0 && callState.state == DetailedCallState.STREAMS_RUNNING) {
                     Text(
                         text = formatDuration(duration),
                         color = contentColor,
@@ -212,10 +209,10 @@ fun DetailedCallStatusCard(
             }
             
             // Mostrar código SIP si está disponible
-            if (detailedState.sipCode != null) {
+            if (callState.sipCode != null) {
                 Spacer(modifier = Modifier.height(2.dp))
                 Text(
-                    text = "SIP: ${detailedState.sipCode} ${detailedState.sipReason ?: ""}",
+                    text = "SIP: ${callState.sipCode} ${callState.sipReason ?: ""}",
                     color = contentColor.copy(alpha = 0.7f),
                     style = MaterialTheme.typography.labelSmall
                 )
@@ -224,7 +221,7 @@ fun DetailedCallStatusCard(
     }
 }
 
-// NUEVO: Card para estado de múltiples cuentas
+// Card para estado de múltiples cuentas
 @Composable
 fun MultiAccountStatusCard(
     registrationStates: Map<String, RegistrationState>,
@@ -276,10 +273,10 @@ fun MultiAccountStatusCard(
     }
 }
 
-// NUEVO: Card de información de debugging
+// OPTIMIZADO: Card de información de debugging
 @Composable
 fun DebugInfoCard(
-    detailedState: CallStateInfo,
+    callState: CallStateInfo,
     lastTransition: String,
     onShowDiagnostic: () -> Unit
 ) {
@@ -306,12 +303,12 @@ fun DebugInfoCard(
             )
             
             Text(
-                text = "Call ID: ${detailedState.callId}",
+                text = "Call ID: ${callState.callId}",
                 style = MaterialTheme.typography.labelSmall
             )
             
             Text(
-                text = "Direction: ${detailedState.direction.name}",
+                text = "Direction: ${callState.direction.name}",
                 style = MaterialTheme.typography.labelSmall
             )
             
