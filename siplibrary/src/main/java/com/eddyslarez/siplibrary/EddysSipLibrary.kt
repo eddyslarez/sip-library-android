@@ -15,11 +15,11 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
 
 /**
- * EddysSipLibrary - Biblioteca SIP/VoIP para Android (Versión Mejorada Multi-Cuenta)
- * Versión mejorada con estados detallados de llamada
+ * EddysSipLibrary - Biblioteca SIP/VoIP para Android (Versión Optimizada)
+ * Versión optimizada con estados unificados de llamada
  *
  * @author Eddys Larez
- * @version 1.3.0
+ * @version 1.4.0
  */
 class EddysSipLibrary private constructor() {
 
@@ -57,8 +57,7 @@ class EddysSipLibrary private constructor() {
      */
     interface SipEventListener {
         fun onRegistrationStateChanged(state: RegistrationState, username: String, domain: String) {}
-        fun onCallStateChanged(state: CallState, callInfo: CallInfo?) {}
-        fun onDetailedCallStateChanged(stateInfo: CallStateInfo) {}  // NUEVO
+        fun onCallStateChanged(stateInfo: CallStateInfo) {}  // OPTIMIZADO: Unificado con estados detallados
         fun onIncomingCall(callInfo: IncomingCallInfo) {}
         fun onCallConnected(callInfo: CallInfo) {}
         fun onCallEnded(callInfo: CallInfo, reason: CallEndReason) {}
@@ -76,10 +75,7 @@ class EddysSipLibrary private constructor() {
         fun onRegistrationFailed(username: String, domain: String, error: String)
         fun onUnregistered(username: String, domain: String)
         fun onRegistrationExpiring(username: String, domain: String, expiresIn: Long)
-
-
     }
-
 
     /**
      * Listener específico para estados de llamada
@@ -93,7 +89,7 @@ class EddysSipLibrary private constructor() {
         fun onCallEnded(callInfo: CallInfo, reason: CallEndReason)
         fun onCallTransferred(callInfo: CallInfo, transferTo: String)
         fun onMuteStateChanged(isMuted: Boolean, callInfo: CallInfo)
-        fun onDetailedStateChanged(stateInfo: CallStateInfo)  // NUEVO
+        fun onCallStateChanged(stateInfo: CallStateInfo)  // OPTIMIZADO: Renombrado de onDetailedStateChanged
     }
 
     /**
@@ -119,7 +115,7 @@ class EddysSipLibrary private constructor() {
         val isMuted: Boolean = false,
         val localAccount: String,
         val codec: String? = null,
-        val detailedState: DetailedCallState? = null  // NUEVO
+        val state: DetailedCallState? = null  // OPTIMIZADO: Renombrado de detailedState
     )
 
     /**
@@ -165,7 +161,7 @@ class EddysSipLibrary private constructor() {
         }
 
         try {
-            log.d(tag = TAG) { "Initializing EddysSipLibrary v1.3.0 Multi-Account with Detailed States by Eddys Larez" }
+            log.d(tag = TAG) { "Initializing EddysSipLibrary v1.4.0 Multi-Account Optimized by Eddys Larez" }
 
             this.config = config
             sipCoreManager = SipCoreManager.createInstance(application, config)
@@ -192,23 +188,6 @@ class EddysSipLibrary private constructor() {
                     log.d(tag = TAG) { "Internal callback: onCallTerminated" }
                     val callInfo = getCurrentCallInfo()
                     notifyCallEnded(callInfo, CallEndReason.NORMAL_HANGUP)
-                }
-
-                override fun onCallStateChanged(state: CallState) {
-                    log.d(tag = TAG) { "Internal callback: onCallStateChanged - $state" }
-                    val callInfo = getCurrentCallInfo()
-                    notifyCallStateChanged(state, callInfo)
-
-                    when (state) {
-                        CallState.CONNECTED -> callInfo?.let { notifyCallConnected(it) }
-                        CallState.RINGING, CallState.OUTGOING -> callInfo?.let { notifyCallRinging(it) }
-                        CallState.CALLING -> callInfo?.let { notifyCallInitiated(it) }
-                        CallState.INCOMING -> handleIncomingCall()
-                        CallState.ENDED -> callInfo?.let { notifyCallEnded(it, CallEndReason.NORMAL_HANGUP) }
-                        CallState.DECLINED -> callInfo?.let { notifyCallEnded(it, CallEndReason.REJECTED) }
-                        CallState.HOLDING -> callInfo?.let { notifyCallHeld(it) }
-                        else -> {}
-                    }
                 }
 
                 override fun onRegistrationStateChanged(state: RegistrationState) {
@@ -238,10 +217,27 @@ class EddysSipLibrary private constructor() {
                 }
             })
 
-            // NUEVO: Observar estados detallados
+            // OPTIMIZADO: Observar estados unificados
             CoroutineScope(Dispatchers.Main).launch {
                 CallStateManager.advanced.callStateFlow.collect { stateInfo ->
-                    notifyDetailedCallStateChanged(stateInfo)
+                    notifyCallStateChanged(stateInfo)
+
+                    // Mapear a eventos específicos para compatibilidad
+                    val callInfo = getCurrentCallInfo()
+                    when (stateInfo.state) {
+                        DetailedCallState.CONNECTED -> callInfo?.let { notifyCallConnected(it) }
+                        DetailedCallState.OUTGOING_RINGING -> callInfo?.let { notifyCallRinging(it) }
+                        DetailedCallState.OUTGOING_INIT -> callInfo?.let { notifyCallInitiated(it) }
+                        DetailedCallState.INCOMING_RECEIVED -> handleIncomingCall()
+                        DetailedCallState.ENDED -> callInfo?.let { notifyCallEnded(it, CallEndReason.NORMAL_HANGUP) }
+                        DetailedCallState.PAUSED -> callInfo?.let { notifyCallHeld(it) }
+                        DetailedCallState.STREAMS_RUNNING -> callInfo?.let { notifyCallResumed(it) }
+                        DetailedCallState.ERROR -> {
+                            val reason = mapErrorReasonToCallEndReason(stateInfo.errorReason)
+                            callInfo?.let { notifyCallEnded(it, reason) }
+                        }
+                        else -> {}
+                    }
                 }
             }
         }
@@ -316,37 +312,25 @@ class EddysSipLibrary private constructor() {
         }
     }
 
-    private fun notifyCallStateChanged(state: CallState, callInfo: CallInfo?) {
-        log.d(tag = TAG) { "Notifying call state change: $state to ${listeners.size} listeners" }
+    /**
+     * OPTIMIZADO: Notificar cambios de estado unificado
+     */
+    private fun notifyCallStateChanged(stateInfo: CallStateInfo) {
+        log.d(tag = TAG) { "Notifying call state change: ${stateInfo.state} to ${listeners.size} listeners" }
 
         listeners.forEach { listener ->
             try {
-                listener.onCallStateChanged(state, callInfo)
+                listener.onCallStateChanged(stateInfo)
             } catch (e: Exception) {
                 log.e(tag = TAG) { "Error in listener onCallStateChanged: ${e.message}" }
-            }
-        }
-    }
-
-    /**
-     * NUEVO: Notificar cambios de estado detallado
-     */
-    private fun notifyDetailedCallStateChanged(stateInfo: CallStateInfo) {
-        log.d(tag = TAG) { "Notifying detailed call state change: ${stateInfo.state} to ${listeners.size} listeners" }
-
-        listeners.forEach { listener ->
-            try {
-                listener.onDetailedCallStateChanged(stateInfo)
-            } catch (e: Exception) {
-                log.e(tag = TAG) { "Error in listener onDetailedCallStateChanged: ${e.message}" }
             }
         }
 
         callListener?.let { listener ->
             try {
-                listener.onDetailedStateChanged(stateInfo)
+                listener.onCallStateChanged(stateInfo)
             } catch (e: Exception) {
-                log.e(tag = TAG) { "Error in CallListener onDetailedStateChanged: ${e.message}" }
+                log.e(tag = TAG) { "Error in CallListener onCallStateChanged: ${e.message}" }
             }
         }
     }
@@ -396,6 +380,16 @@ class EddysSipLibrary private constructor() {
             callListener?.onCallHeld(callInfo)
         } catch (e: Exception) {
             log.e(tag = TAG) { "Error in CallListener onCallHeld: ${e.message}" }
+        }
+    }
+
+    private fun notifyCallResumed(callInfo: CallInfo) {
+        log.d(tag = TAG) { "Notifying call resumed" }
+
+        try {
+            callListener?.onCallResumed(callInfo)
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error in CallListener onCallResumed: ${e.message}" }
         }
     }
 
@@ -467,7 +461,7 @@ class EddysSipLibrary private constructor() {
     }
 
     /**
-     * CORREGIDO: Crear IncomingCallInfo desde los datos actuales de la llamada
+     * Crear IncomingCallInfo desde los datos actuales de la llamada
      */
     private fun createIncomingCallInfoFromCurrentCall(callerNumber: String, callerName: String?): IncomingCallInfo {
         val manager = sipCoreManager ?: return IncomingCallInfo(
@@ -493,7 +487,7 @@ class EddysSipLibrary private constructor() {
     // === MÉTODOS AUXILIARES ===
 
     /**
-     * MEJORADO: Método getCurrentCallInfo() con estados detallados
+     * OPTIMIZADO: Método getCurrentCallInfo() con estados unificados
      */
     private fun getCurrentCallInfo(): CallInfo? {
         val manager = sipCoreManager ?: return null
@@ -501,9 +495,9 @@ class EddysSipLibrary private constructor() {
         val callData = account.currentCallData ?: return null
 
         return try {
-            // NUEVO: Obtener estado detallado actual
-            val detailedState = CallStateManager.advanced.getCurrentState()
-            
+            // Obtener estado actual
+            val currentState = CallStateManager.advanced.getCurrentState()
+
             CallInfo(
                 callId = callData.callId,
                 phoneNumber = if (callData.direction == CallDirections.INCOMING) callData.from else callData.to,
@@ -515,11 +509,21 @@ class EddysSipLibrary private constructor() {
                 isMuted = manager.webRtcManager.isMuted(),
                 localAccount = account.username,
                 codec = null,
-                detailedState = detailedState.state  // NUEVO
+                state = currentState.state  // OPTIMIZADO: Renombrado
             )
         } catch (e: Exception) {
             log.e(tag = TAG) { "Error creating CallInfo: ${e.message}" }
             null
+        }
+    }
+
+    private fun mapErrorReasonToCallEndReason(errorReason: CallErrorReason): CallEndReason {
+        return when (errorReason) {
+            CallErrorReason.BUSY -> CallEndReason.BUSY
+            CallErrorReason.NO_ANSWER -> CallEndReason.NO_ANSWER
+            CallErrorReason.REJECTED -> CallEndReason.REJECTED
+            CallErrorReason.NETWORK_ERROR -> CallEndReason.NETWORK_ERROR
+            else -> CallEndReason.ERROR
         }
     }
 
@@ -584,7 +588,7 @@ class EddysSipLibrary private constructor() {
     }
 
     /**
-     * NUEVO: Obtiene el estado de registro para una cuenta específica
+     * Obtiene el estado de registro para una cuenta específica
      */
     fun getRegistrationState(username: String, domain: String): RegistrationState {
         checkInitialized()
@@ -593,7 +597,7 @@ class EddysSipLibrary private constructor() {
     }
 
     /**
-     * NUEVO: Obtiene todos los estados de registro
+     * Obtiene todos los estados de registro
      */
     fun getAllRegistrationStates(): Map<String, RegistrationState> {
         checkInitialized()
@@ -601,7 +605,7 @@ class EddysSipLibrary private constructor() {
     }
 
     /**
-     * NUEVO: Flow para observar estados de registro de todas las cuentas
+     * Flow para observar estados de registro de todas las cuentas
      */
     fun getRegistrationStatesFlow(): Flow<Map<String, RegistrationState>> {
         checkInitialized()
@@ -609,23 +613,23 @@ class EddysSipLibrary private constructor() {
     }
 
     /**
-     * NUEVO: Flow para observar estados detallados de llamada
+     * OPTIMIZADO: Flow para observar estados de llamada (renombrado)
      */
-    fun getDetailedCallStateFlow(): Flow<CallStateInfo> {
+    fun getCallStateFlow(): Flow<CallStateInfo> {
         checkInitialized()
         return CallStateManager.advanced.callStateFlow
     }
 
     /**
-     * NUEVO: Obtener estado detallado actual
+     * OPTIMIZADO: Obtener estado actual (renombrado)
      */
-    fun getCurrentDetailedCallState(): CallStateInfo {
+    fun getCurrentCallState(): CallStateInfo {
         checkInitialized()
         return CallStateManager.advanced.getCurrentState()
     }
 
     /**
-     * NUEVO: Obtener historial de estados de llamada
+     * Obtener historial de estados de llamada
      */
     fun getCallStateHistory(): List<CallStateInfo> {
         checkInitialized()
@@ -633,7 +637,7 @@ class EddysSipLibrary private constructor() {
     }
 
     /**
-     * NUEVO: Limpiar historial de estados
+     * Limpiar historial de estados
      */
     fun clearCallStateHistory() {
         checkInitialized()
@@ -739,9 +743,14 @@ class EddysSipLibrary private constructor() {
 
     // === MÉTODOS DE INFORMACIÓN ===
 
-    fun getCurrentCallState(): CallState {
+    /**
+     * OBSOLETO: Use getCurrentCallState() que ahora devuelve CallStateInfo
+     */
+    @Deprecated("Use getCurrentCallState() que ahora devuelve CallStateInfo con más información")
+    fun getCurrentCallStateLegacy(): CallState {
         checkInitialized()
-        return sipCoreManager?.callState ?: CallState.NONE
+        val stateInfo = getCurrentCallState()
+        return CallStateManager.mapDetailedToLegacyState(stateInfo.state)
     }
 
     /**
@@ -765,7 +774,11 @@ class EddysSipLibrary private constructor() {
 
     // === FLOWS PARA COMPOSE/COROUTINES ===
 
-    fun getCallStateFlow(): Flow<CallState> {
+    /**
+     * OBSOLETO: Use getCallStateFlow() que ahora devuelve CallStateInfo
+     */
+    @Deprecated("Use getCallStateFlow() que ahora devuelve CallStateInfo con más información")
+    fun getCallStateFlowLegacy(): Flow<CallState> {
         checkInitialized()
         return CallStateManager.callStateFlow
     }
@@ -859,7 +872,6 @@ class EddysSipLibrary private constructor() {
 
             appendLine("\n--- Current States ---")
             appendLine("Current call state: ${getCurrentCallState()}")
-            appendLine("Detailed call state: ${getCurrentDetailedCallState()}")
             appendLine("Registration states: ${getAllRegistrationStates()}")
 
             appendLine("\n--- Active Accounts ---")
@@ -895,7 +907,6 @@ class EddysSipLibrary private constructor() {
 
     internal interface SipCallbacks {
         fun onCallTerminated() {}
-        fun onCallStateChanged(state: CallState) {}
         fun onRegistrationStateChanged(state: RegistrationState) {}
         fun onAccountRegistrationStateChanged(username: String, domain: String, state: RegistrationState) {}
         fun onIncomingCall(callerNumber: String, callerName: String?) {}
