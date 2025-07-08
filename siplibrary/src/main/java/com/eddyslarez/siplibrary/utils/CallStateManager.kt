@@ -32,7 +32,7 @@ object CallStateManager {
     /**
      * Actualiza el estado de la llamada con validación y prevención de duplicados
      */
-    private fun updateCallState(
+    internal fun updateCallState(
         newState: CallState,
         callId: String = currentCallId,
         direction: CallDirections = currentDirection,
