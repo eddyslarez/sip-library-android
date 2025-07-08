@@ -1,6 +1,7 @@
 package com.eddyslarez.siplibrary.utils
 
 import com.eddyslarez.siplibrary.data.models.RegistrationState
+import com.eddyslarez.siplibrary.utils.RegistrationStateManager._globalStateFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
