@@ -1,18 +1,18 @@
 package com.eddyslarez.siplibrary.utils
 
 import com.eddyslarez.siplibrary.data.models.*
-import com.eddyslarez.siplibrary.utils.CallStateManager.advancedManager
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.datetime.Clock
 
 /**
- * Gestor avanzado de estados de llamada con prevención de duplicados
+ * Gestor optimizado de estados de llamada con prevención de duplicados
+ * Versión simplificada sin compatibilidad legacy
  * 
  * @author Eddys Larez
  */
-class AdvancedCallStateManager {
+object CallStateManager {
     
     private val _callStateFlow = MutableStateFlow(
         CallStateInfo(
@@ -28,11 +28,12 @@ class AdvancedCallStateManager {
     
     private var currentCallId: String = ""
     private var currentDirection: CallDirections = CallDirections.OUTGOING
+    private var currentCallerNumber: String = ""
     
     /**
      * Actualiza el estado de la llamada con validación y prevención de duplicados
      */
-    fun updateCallState(
+    private fun updateCallState(
         newState: DetailedCallState,
         callId: String = currentCallId,
         direction: CallDirections = currentDirection,
@@ -46,7 +47,7 @@ class AdvancedCallStateManager {
         if (currentStateInfo.state == newState && 
             currentStateInfo.callId == callId &&
             currentStateInfo.errorReason == errorReason) {
-            log.d(tag = "AdvancedCallStateManager") { 
+            log.d(tag = "CallStateManager") { 
                 "Duplicate state transition prevented: $newState for call $callId" 
             }
             return false
@@ -58,7 +59,7 @@ class AdvancedCallStateManager {
                 newState, 
                 direction
             )) {
-            log.w(tag = "AdvancedCallStateManager") { 
+            log.w(tag = "CallStateManager") { 
                 "Invalid state transition: ${currentStateInfo.state} -> $newState for $direction call" 
             }
             return false
@@ -96,19 +97,23 @@ class AdvancedCallStateManager {
             currentDirection = direction
         } else if (newState == DetailedCallState.ENDED || newState == DetailedCallState.IDLE) {
             currentCallId = ""
+            currentCallerNumber = ""
         }
         
-        log.d(tag = "AdvancedCallStateManager") { 
+        log.d(tag = "CallStateManager") { 
             "State transition: ${currentStateInfo.state} -> $newState for call $callId (${direction.name})" 
         }
         
         return true
     }
     
+    // === MÉTODOS PÚBLICOS PARA TRANSICIONES DE LLAMADA ===
+    
     /**
      * Métodos específicos para transiciones de llamada saliente
      */
     fun startOutgoingCall(callId: String, phoneNumber: String) {
+        currentCallerNumber = phoneNumber
         updateCallState(
             newState = DetailedCallState.OUTGOING_INIT,
             callId = callId,
@@ -138,6 +143,7 @@ class AdvancedCallStateManager {
      * Métodos específicos para transiciones de llamada entrante
      */
     fun incomingCallReceived(callId: String, callerNumber: String) {
+        currentCallerNumber = callerNumber
         updateCallState(
             newState = DetailedCallState.INCOMING_RECEIVED,
             callId = callId,
@@ -240,13 +246,14 @@ class AdvancedCallStateManager {
             callId = "",
             direction = CallDirections.OUTGOING
         )
+        currentCallerNumber = ""
     }
     
-    /**
-     * Métodos de consulta
-     */
+    // === MÉTODOS DE CONSULTA ===
+    
     fun getCurrentState(): CallStateInfo = _callStateFlow.value
     fun getCurrentCallId(): String = currentCallId
+    fun getCurrentCallerNumber(): String = currentCallerNumber
     fun isCallActive(): Boolean = _callStateFlow.value.isActive()
     fun isCallConnected(): Boolean = _callStateFlow.value.isConnected()
     fun hasError(): Boolean = _callStateFlow.value.hasError()
@@ -276,6 +283,7 @@ class AdvancedCallStateManager {
             appendLine("Previous State: ${current.previousState}")
             appendLine("Call ID: ${current.callId}")
             appendLine("Direction: ${current.direction}")
+            appendLine("Caller Number: $currentCallerNumber")
             appendLine("Error Reason: ${current.errorReason}")
             appendLine("SIP Code: ${current.sipCode}")
             appendLine("SIP Reason: ${current.sipReason}")
@@ -293,87 +301,10 @@ class AdvancedCallStateManager {
             }
         }
     }
-}
-
-/**
- * Instancia global del gestor de estados
- */
-object CallStateManager {
-    private val advancedManager = AdvancedCallStateManager()
-    
-    // Compatibilidad con la API existente
-
-    private val _callStateFlow = MutableStateFlow(CallState.NONE)
-    val callStateFlow: StateFlow<CallState> = _callStateFlow.asStateFlow()
-    
-    private val _callerNumberFlow = MutableStateFlow("")
-    val callerNumberFlow: StateFlow<String> = _callerNumberFlow.asStateFlow()
-    
-    private val _callIdFlow = MutableStateFlow("")
-    val callIdFlow: StateFlow<String> = _callIdFlow.asStateFlow()
-    
-    private val _isBackgroundFlow = MutableStateFlow(false)
-    val isBackgroundFlow: StateFlow<Boolean> = _isBackgroundFlow.asStateFlow()
-    
-    // Exponer el gestor avanzado
-    val advanced: AdvancedCallStateManager = advancedManager
-    
-    // Métodos de compatibilidad
-    fun updateCallState(newState: CallState) {
-        _callStateFlow.value = newState
-        
-        // Mapear a estados detallados
-        val detailedState = mapLegacyToDetailedState(newState)
-        if (detailedState != null) {
-            advancedManager.updateCallState(detailedState)
-        }
-    }
-    
-    fun callerNumber(number: String) {
-        _callerNumberFlow.value = number
-    }
-    
-    fun callId(id: String) {
-        _callIdFlow.value = id
-    }
-    
-    fun setBackground() {
-        _isBackgroundFlow.value = true
-    }
-    
-    fun setForeground() {
-        _isBackgroundFlow.value = false
-    }
-    
-    fun setAppClosed() {
-        _isBackgroundFlow.value = true
-    }
-    
-    fun getCurrentCallState(): CallState = _callStateFlow.value
-    fun getCurrentCallerNumber(): String = _callerNumberFlow.value
-    fun getCurrentCallId(): String = _callIdFlow.value
     
     /**
-     * Mapeo de estados legacy a estados detallados
-     */
-    private fun mapLegacyToDetailedState(legacyState: CallState): DetailedCallState? {
-        return when (legacyState) {
-            CallState.NONE, CallState.IDLE -> DetailedCallState.IDLE
-            CallState.CALLING, CallState.INITIATING -> DetailedCallState.OUTGOING_INIT
-            CallState.OUTGOING -> DetailedCallState.OUTGOING_RINGING
-            CallState.RINGING -> DetailedCallState.OUTGOING_RINGING
-            CallState.INCOMING -> DetailedCallState.INCOMING_RECEIVED
-            CallState.CONNECTED -> DetailedCallState.CONNECTED
-            CallState.HOLDING -> DetailedCallState.PAUSED
-            CallState.ENDING -> DetailedCallState.ENDING
-            CallState.ENDED -> DetailedCallState.ENDED
-            CallState.ERROR, CallState.FAILED -> DetailedCallState.ERROR
-            else -> null
-        }
-    }
-    
-    /**
-     * Mapeo de estados detallados a legacy para compatibilidad
+     * Mapeo de estados detallados a legacy para compatibilidad temporal
+     * TODO: Eliminar cuando se complete la migración
      */
     fun mapDetailedToLegacyState(detailedState: DetailedCallState): CallState {
         return when (detailedState) {
