@@ -302,6 +302,7 @@ object CallStateManager {
     private val advancedManager = AdvancedCallStateManager()
     
     // Compatibilidad con la API existente
+
     private val _callStateFlow = MutableStateFlow(CallState.NONE)
     val callStateFlow: StateFlow<CallState> = _callStateFlow.asStateFlow()
     
