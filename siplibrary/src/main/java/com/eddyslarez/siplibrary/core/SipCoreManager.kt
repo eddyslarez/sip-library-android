@@ -26,10 +26,9 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.datetime.Clock
 import kotlin.math.pow
-
 /**
- * Gestor principal del core SIP - Optimizado con estados unificados
- * Versión optimizada con estados unificados de llamada
+ * Gestor principal del core SIP - Optimizado sin estados legacy
+ * Versión simplificada usando únicamente los nuevos estados
  *
  * @author Eddys Larez
  */
@@ -53,11 +52,7 @@ class SipCoreManager private constructor(
     private val _registrationStates = MutableStateFlow<Map<String, RegistrationState>>(emptyMap())
     val registrationStatesFlow: StateFlow<Map<String, RegistrationState>> = _registrationStates.asStateFlow()
 
-    // Mantener compatibilidad con el estado global
-    private var globalRegistrationState = RegistrationState.NONE
-
     private val activeAccounts = HashMap<String, AccountInfo>()
-    var callState = CallState.NONE
     var callStartTimeMillis: Long = 0
     var currentAccountInfo: AccountInfo? = null
     var isAppInBackground = false
@@ -115,8 +110,8 @@ class SipCoreManager private constructor(
         setupPlatformLifecycleObservers()
         startConnectionHealthCheck()
 
-        // OPTIMIZADO: Inicializar gestor de estados unificado
-        CallStateManager.advanced.resetToIdle()
+        // Inicializar gestor de estados
+        CallStateManager.resetToIdle()
     }
 
     internal fun setCallbacks(callbacks: EddysSipLibrary.SipCallbacks) {
@@ -134,10 +129,6 @@ class SipCoreManager private constructor(
         val previousState = currentStates[accountKey]
         currentStates[accountKey] = newState
         _registrationStates.value = currentStates
-
-        // Actualizar estado global para compatibilidad
-        globalRegistrationState = newState
-        RegistrationStateManager.updateCallState(newState)
 
         // Notificar solo si el estado cambió
         if (previousState != newState) {
@@ -205,25 +196,21 @@ class SipCoreManager private constructor(
     }
 
     /**
-     * OPTIMIZADO: Método para notificar estados de llamada usando estados unificados
+     * Método para notificar estados de llamada usando únicamente los nuevos estados
      */
     fun notifyCallStateChanged(state: CallState) {
         try {
-            log.d(tag = TAG) { "Notifying legacy call state change: $state" }
+            log.d(tag = TAG) { "Notifying call state change: $state" }
 
-            // Actualizar estado interno legacy
-            callState = state
-            CallStateManager.updateCallState(state)
-
-            // Notificar cambios específicos para compatibilidad
+            // Notificar cambios específicos
             when (state) {
-                CallState.INCOMING -> {
+                CallState.INCOMING_RECEIVED -> {
                     currentAccountInfo?.currentCallData?.let { callData ->
                         log.d(tag = TAG) { "Notifying incoming call from ${callData.from}" }
                         sipCallbacks?.onIncomingCall(callData.from, callData.remoteDisplayName)
                     }
                 }
-                CallState.CONNECTED -> {
+                CallState.CONNECTED, CallState.STREAMS_RUNNING -> {
                     log.d(tag = TAG) { "Notifying call connected" }
                     sipCallbacks?.onCallConnected()
                 }
@@ -337,25 +324,25 @@ class SipCoreManager private constructor(
     private fun handleWebRtcConnected() {
         callStartTimeMillis = Clock.System.now().toEpochMilliseconds()
 
-        // OPTIMIZADO: Usar estados unificados
+        // Usar estados nuevos
         currentAccountInfo?.currentCallData?.let { callData ->
-            CallStateManager.advanced.streamsRunning(callData.callId)
+            CallStateManager.streamsRunning(callData.callId)
         }
 
-        notifyCallStateChanged(CallState.CONNECTED)
+        notifyCallStateChanged(CallState.STREAMS_RUNNING)
     }
 
     private fun handleWebRtcClosed() {
-        // OPTIMIZADO: Finalizar con estados unificados
+        // Finalizar con nuevos estados
         currentAccountInfo?.currentCallData?.let { callData ->
-            CallStateManager.advanced.callEnded(callData.callId)
+            CallStateManager.callEnded(callData.callId)
         }
 
         notifyCallStateChanged(CallState.ENDED)
 
         currentAccountInfo?.currentCallData?.let { callData ->
             val endTime = Clock.System.now().toEpochMilliseconds()
-            val callType = determineCallType(callData, callState)
+            val callType = determineCallType(callData, CallStateManager.getCurrentState().state)
             callHistoryManager.addCallLog(callData, callType, endTime)
         }
     }
@@ -366,7 +353,7 @@ class SipCoreManager private constructor(
     }
 
     private fun refreshAllRegistrationsWithNewUserAgent() {
-        if (callState != CallState.NONE && callState != CallState.ENDED) {
+        if (!CallStateManager.getCurrentState().isActive()) {
             return
         }
 
@@ -698,11 +685,11 @@ class SipCoreManager private constructor(
             log.d(tag = TAG) { "Health check stopped" }
 
             // 3. Terminar llamada activa si existe
-            if (callState != CallState.NONE && callState != CallState.ENDED) {
+            if (CallStateManager.getCurrentState().isActive()) {
                 log.d(tag = TAG) { "Terminating active call during unregister" }
                 try {
                     currentAccountInfo?.currentCallData?.let { callData ->
-                        CallStateManager.advanced.callEnded(callData.callId)
+                        CallStateManager.callEnded(callData.callId)
                     }
                     webRtcManager.dispose()
                     notifyCallStateChanged(CallState.ENDED)
@@ -769,7 +756,6 @@ class SipCoreManager private constructor(
             }
 
             // 7. Resetear todos los estados
-            callState = CallState.NONE
             callStartTimeMillis = 0
             isAppInBackground = false
             reconnectionInProgress = false
@@ -777,15 +763,13 @@ class SipCoreManager private constructor(
             connectionRetryCount = 0
             lastConnectionCheck = 0L
             lastRegistrationAttempt = 0L
-            globalRegistrationState = RegistrationState.CLEARED
 
             // 8. Limpiar colas
             clearDtmfQueue()
 
             // 9. Actualizar estados globales
-            CallStateManager.updateCallState(CallState.NONE)
-            CallStateManager.advanced.resetToIdle()
-            RegistrationStateManager.updateCallState(RegistrationState.CLEARED)
+            CallStateManager.resetToIdle()
+            CallStateManager.clearHistory()
 
             log.d(tag = TAG) { "Complete unregister and shutdown successful" }
 
@@ -823,18 +807,18 @@ class SipCoreManager private constructor(
                 accountInfo.currentCallData = callData
                 CallStateManager.callerNumber(phoneNumber)
 
-                // OPTIMIZADO: Iniciar llamada saliente con estados unificados
-                CallStateManager.advanced.startOutgoingCall(callId, phoneNumber)
-                notifyCallStateChanged(CallState.CALLING)
+                // Iniciar llamada saliente con nuevos estados
+                CallStateManager.startOutgoingCall(callId, phoneNumber)
+                notifyCallStateChanged(CallState.OUTGOING_INIT)
 
                 messageHandler.sendInvite(accountInfo, callData)
             } catch (e: Exception) {
                 log.e(tag = TAG) { "Error creating call: ${e.stackTraceToString()}" }
                 sipCallbacks?.onCallFailed("Error creating call: ${e.message}")
 
-                // OPTIMIZADO: Error al crear llamada
+                // Error al crear llamada
                 accountInfo.currentCallData?.let { callData ->
-                    CallStateManager.advanced.callError(
+                    CallStateManager.callError(
                         callData.callId,
                         errorReason = CallErrorReason.NETWORK_ERROR
                     )
@@ -847,19 +831,20 @@ class SipCoreManager private constructor(
         val accountInfo = currentAccountInfo ?: return
         val callData = accountInfo.currentCallData ?: return
 
-        if (callState == CallState.NONE || callState == CallState.ENDED) {
+        if (!CallStateManager.getCurrentState().isActive()) {
             return
         }
 
         val endTime = Clock.System.now().toEpochMilliseconds()
+        val currentState = CallStateManager.getCurrentState().state
 
-        when (callState) {
-            CallState.CONNECTED, CallState.HOLDING, CallState.ACCEPTING -> {
+        when (currentState) {
+            CallState.CONNECTED, CallState.STREAMS_RUNNING, CallState.PAUSED -> {
                 messageHandler.sendBye(accountInfo, callData)
                 callHistoryManager.addCallLog(callData, CallTypes.SUCCESS, endTime)
             }
 
-            CallState.CALLING, CallState.RINGING, CallState.OUTGOING -> {
+            CallState.OUTGOING_INIT, CallState.OUTGOING_PROGRESS, CallState.OUTGOING_RINGING -> {
                 messageHandler.sendCancel(accountInfo, callData)
                 callHistoryManager.addCallLog(callData, CallTypes.ABORTED, endTime)
             }
@@ -867,8 +852,8 @@ class SipCoreManager private constructor(
             else -> {}
         }
 
-        // OPTIMIZADO: Finalizar con estados unificados
-        CallStateManager.advanced.startEnding(callData.callId)
+        // Finalizar con nuevos estados
+        CallStateManager.startEnding(callData.callId)
         notifyCallStateChanged(CallState.ENDED)
 
         webRtcManager.dispose()
@@ -882,7 +867,7 @@ class SipCoreManager private constructor(
         val callData = accountInfo.currentCallData ?: return
 
         if (callData.direction != CallDirections.INCOMING ||
-            (callState != CallState.INCOMING && callState != CallState.RINGING)
+            CallStateManager.getCurrentState().state != CallState.INCOMING_RECEIVED
         ) {
             return
         }
@@ -906,13 +891,13 @@ class SipCoreManager private constructor(
                 webRtcManager.setAudioEnabled(true)
                 webRtcManager.setMuted(false)
 
-                // OPTIMIZADO: Estado de aceptación
-                notifyCallStateChanged(CallState.ACCEPTING)
+                // Estado de conexión
+                notifyCallStateChanged(CallState.CONNECTED)
             } catch (e: Exception) {
                 log.e(tag = TAG) { "Error accepting call: ${e.message}" }
 
-                // OPTIMIZADO: Error al aceptar llamada
-                CallStateManager.advanced.callError(
+                // Error al aceptar llamada
+                CallStateManager.callError(
                     callData.callId,
                     errorReason = CallErrorReason.NETWORK_ERROR
                 )
@@ -927,7 +912,7 @@ class SipCoreManager private constructor(
         val callData = accountInfo.currentCallData ?: return
 
         if (callData.direction != CallDirections.INCOMING ||
-            (callState != CallState.INCOMING && callState != CallState.RINGING)
+            CallStateManager.getCurrentState().state != CallState.INCOMING_RECEIVED
         ) {
             return
         }
@@ -941,8 +926,8 @@ class SipCoreManager private constructor(
         val endTime = Clock.System.now().toEpochMilliseconds()
         callHistoryManager.addCallLog(callData, CallTypes.DECLINED, endTime)
 
-        // OPTIMIZADO: Estado de rechazo
-        notifyCallStateChanged(CallState.DECLINED)
+        // Estado de rechazo
+        notifyCallStateChanged(CallState.ERROR)
     }
 
     fun rejectCall() = declineCall()
@@ -1018,7 +1003,7 @@ class SipCoreManager private constructor(
         val currentAccount = currentAccountInfo
         val callData = currentAccount?.currentCallData
 
-        if (currentAccount == null || callData == null || callState != CallState.CONNECTED) {
+        if (currentAccount == null || callData == null || !CallStateManager.getCurrentState().isConnected()) {
             return false
         }
 
@@ -1048,15 +1033,15 @@ class SipCoreManager private constructor(
         val callData = accountInfo.currentCallData ?: return
 
         CoroutineScope(Dispatchers.IO).launch {
-            // OPTIMIZADO: Iniciar proceso de hold
-            CallStateManager.advanced.startHold(callData.callId)
+            // Iniciar proceso de hold
+            CallStateManager.startHold(callData.callId)
 
             callHoldManager.holdCall()?.let { holdSdp ->
                 callData.localSdp = holdSdp
                 callData.isOnHold = true
                 messageHandler.sendReInvite(accountInfo, callData, holdSdp)
 
-                notifyCallStateChanged(CallState.HOLDING)
+                notifyCallStateChanged(CallState.PAUSING)
             }
         }
     }
@@ -1066,15 +1051,15 @@ class SipCoreManager private constructor(
         val callData = accountInfo.currentCallData ?: return
 
         CoroutineScope(Dispatchers.IO).launch {
-            // OPTIMIZADO: Iniciar proceso de resume
-            CallStateManager.advanced.startResume(callData.callId)
+            // Iniciar proceso de resume
+            CallStateManager.startResume(callData.callId)
 
             callHoldManager.resumeCall()?.let { resumeSdp ->
                 callData.localSdp = resumeSdp
                 callData.isOnHold = false
                 messageHandler.sendReInvite(accountInfo, callData, resumeSdp)
 
-                notifyCallStateChanged(CallState.CONNECTED)
+                notifyCallStateChanged(CallState.RESUMING)
             }
         }
     }
@@ -1086,9 +1071,14 @@ class SipCoreManager private constructor(
     fun getCallLogsForNumber(phoneNumber: String): List<CallLog> =
         callHistoryManager.getCallLogsForNumber(phoneNumber)
 
-    fun getRegistrationState(): RegistrationState = globalRegistrationState
-    fun currentCall(): Boolean = callState != CallState.NONE && callState != CallState.ENDED
-    fun currentCallConnected(): Boolean = callState == CallState.CONNECTED
+    fun getRegistrationState(): RegistrationState {
+        val registeredAccounts = _registrationStates.value.values.filter { it == RegistrationState.OK }
+        return if (registeredAccounts.isNotEmpty()) RegistrationState.OK else RegistrationState.NONE
+    }
+
+    fun currentCall(): Boolean = CallStateManager.getCurrentState().isActive()
+    fun currentCallConnected(): Boolean = CallStateManager.getCurrentState().isConnected()
+    fun getCurrentCallState(): CallStateInfo = CallStateManager.getCurrentState()
 
     fun isSipCoreManagerHealthy(): Boolean {
         return try {
@@ -1106,16 +1096,15 @@ class SipCoreManager private constructor(
             appendLine("Overall Health: ${if (isSipCoreManagerHealthy()) "✅ HEALTHY" else "❌ UNHEALTHY"}")
             appendLine("WebRTC Initialized: ${webRtcManager.isInitialized()}")
             appendLine("Active Accounts: ${activeAccounts.size}")
-            appendLine("Current Call State: $callState")
-            appendLine("Global Registration State: $globalRegistrationState")
+            appendLine("Current Call State: ${getCurrentCallState().state}")
             appendLine("Registration States per Account:")
             _registrationStates.value.forEach { (account, state) ->
                 appendLine("  - $account: $state")
             }
 
-            // OPTIMIZADO: Información de estados unificados
+            // Información de estados
             appendLine("\n--- Call State Info ---")
-            appendLine(CallStateManager.advanced.getDiagnosticInfo())
+            appendLine(CallStateManager.getDiagnosticInfo())
         }
     }
 
@@ -1129,9 +1118,12 @@ class SipCoreManager private constructor(
 
     private fun determineCallType(callData: CallData, finalState: CallState): CallTypes {
         return when (finalState) {
-            CallState.CONNECTED, CallState.ENDED -> CallTypes.SUCCESS
-            CallState.DECLINED -> CallTypes.DECLINED
-            CallState.CALLING, CallState.RINGING -> CallTypes.ABORTED
+            CallState.CONNECTED, CallState.STREAMS_RUNNING, CallState.ENDED -> CallTypes.SUCCESS
+            CallState.ERROR -> if (callData.direction == CallDirections.INCOMING) {
+                CallTypes.MISSED
+            } else {
+                CallTypes.ABORTED
+            }
             else -> if (callData.direction == CallDirections.INCOMING) {
                 CallTypes.MISSED
             } else {
@@ -1145,9 +1137,9 @@ class SipCoreManager private constructor(
         activeAccounts.clear()
         _registrationStates.value = emptyMap()
 
-        // OPTIMIZADO: Resetear estados unificados
-        CallStateManager.advanced.resetToIdle()
-        CallStateManager.advanced.clearHistory()
+        // Resetear estados
+        CallStateManager.resetToIdle()
+        CallStateManager.clearHistory()
     }
 
     fun getMessageHandler(): SipMessageHandler = messageHandler
