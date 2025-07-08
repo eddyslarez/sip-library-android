@@ -2,7 +2,6 @@ package com.eddyslarez.siplibrary
 
 import android.app.Application
 import android.content.Context
-import android.net.Uri
 import com.eddyslarez.siplibrary.core.SipCoreManager
 import com.eddyslarez.siplibrary.data.models.*
 import com.eddyslarez.siplibrary.data.services.audio.AudioDevice
@@ -44,152 +43,14 @@ class EddysSipLibrary private constructor() {
         }
     }
 
-    /**
-     * Configuración completa de la biblioteca SIP
-     */
     data class SipConfig(
-        // === CONFIGURACIÓN BÁSICA ===
         val defaultDomain: String = "",
         val webSocketUrl: String = "",
-        val userAgent: String = "EddysSipLibrary/1.4.0",
-        
-        // === CONFIGURACIÓN DE LOGS ===
+        val userAgent: String = "",
         val enableLogs: Boolean = true,
-        val logLevel: LogLevel = LogLevel.DEBUG,
-        val enableFileLogging: Boolean = false,
-        val maxLogFileSize: Long = 10 * 1024 * 1024, // 10MB
-        
-        // === CONFIGURACIÓN DE CONEXIÓN ===
         val enableAutoReconnect: Boolean = true,
-        val maxReconnectAttempts: Int = 5,
-        val reconnectDelayMs: Long = 2000L,
-        val connectionTimeoutMs: Long = 30000L,
-        val pingIntervalMs: Long = 30000L,
-        val registrationExpiresSeconds: Int = 3600, // 1 hora
-        val keepAliveIntervalMs: Long = 25000L,
-        
-        // === CONFIGURACIÓN DE PUSH NOTIFICATIONS ===
-        val enablePushNotifications: Boolean = true,
-        val defaultPushProvider: String = "fcm", // fcm, apns, custom
-        val pushTimeoutMs: Long = 30000L,
-        val enablePushWakeup: Boolean = true,
-        
-        // === CONFIGURACIÓN DE AUDIO ===
-        val enableAudioProcessing: Boolean = true,
-        val enableEchoCancellation: Boolean = true,
-        val enableNoiseSuppression: Boolean = true,
-        val enableAutoGainControl: Boolean = true,
-        val audioSampleRate: Int = 48000,
-        val audioChannels: AudioChannels = AudioChannels.MONO,
-        val preferredAudioCodec: AudioCodec = AudioCodec.OPUS,
-        val enableHDAudio: Boolean = true,
-        
-        // === CONFIGURACIÓN DE RINGTONES ===
-        val enableIncomingRingtone: Boolean = true,
-        val enableOutgoingRingtone: Boolean = true,
-        val incomingRingtoneUri: Uri? = null, // null = usar por defecto
-        val outgoingRingtoneUri: Uri? = null, // null = usar por defecto
-        val ringtoneVolume: Float = 1.0f, // 0.0 - 1.0
-        val enableVibration: Boolean = true,
-        val vibrationPattern: LongArray = longArrayOf(0, 1000, 500, 1000), // patrón de vibración
-        
-        // === CONFIGURACIÓN DE LLAMADAS ===
-        val enableDTMF: Boolean = true,
-        val dtmfToneDuration: Int = 160, // milisegundos
-        val dtmfToneGap: Int = 70, // milisegundos entre tonos
-        val enableCallHold: Boolean = true,
-        val enableCallTransfer: Boolean = true,
-        val enableConferenceCall: Boolean = false,
-        val maxCallDuration: Long = 0L, // 0 = sin límite, en milisegundos
-        val enableCallRecording: Boolean = false,
-        
-        // === CONFIGURACIÓN DE SEGURIDAD ===
-        val enableTLS: Boolean = true,
-        val enableSRTP: Boolean = true,
-        val tlsVersion: TLSVersion = TLSVersion.TLS_1_2,
-        val certificateValidation: CertificateValidation = CertificateValidation.STRICT,
-        val enableDigestAuthentication: Boolean = true,
-        
-        // === CONFIGURACIÓN DE INTERFAZ ===
-        val enableFullScreenIncomingCall: Boolean = true,
-        val enableCallNotifications: Boolean = true,
-        val enableMissedCallNotifications: Boolean = true,
-        val notificationChannelId: String = "sip_calls",
-        val notificationChannelName: String = "SIP Calls",
-        val enableCallHistory: Boolean = true,
-        val maxCallHistoryEntries: Int = 1000,
-        
-        // === CONFIGURACIÓN DE DISPOSITIVOS DE AUDIO ===
-        val enableBluetoothAudio: Boolean = true,
-        val enableWiredHeadsetAudio: Boolean = true,
-        val enableSpeakerAudio: Boolean = true,
-        val autoSwitchToBluetoothWhenConnected: Boolean = true,
-        val autoSwitchToWiredHeadsetWhenConnected: Boolean = true,
-        val preferredAudioRoute: AudioRoute = AudioRoute.AUTO,
-        
-        // === CONFIGURACIÓN DE RENDIMIENTO ===
-        val enableBatteryOptimization: Boolean = true,
-        val enableNetworkOptimization: Boolean = true,
-        val enableCpuOptimization: Boolean = true,
-        val maxConcurrentCalls: Int = 1,
-        val enableCallQualityMonitoring: Boolean = true,
-        
-        // === CONFIGURACIÓN DE DEBUGGING ===
-        val enableDiagnosticMode: Boolean = false,
-        val enableNetworkDiagnostics: Boolean = false,
-        val enableAudioDiagnostics: Boolean = false,
-        val enablePerformanceMetrics: Boolean = false,
-        val diagnosticReportIntervalMs: Long = 60000L,
-        
-        // === CONFIGURACIÓN EXPERIMENTAL ===
-        val enableExperimentalFeatures: Boolean = false,
-        val enableVideoCall: Boolean = false,
-        val enableScreenSharing: Boolean = false,
-        val enableChatMessaging: Boolean = false,
-        val enablePresenceStatus: Boolean = false
+        val pingIntervalMs: Long = 30000L
     )
-
-    /**
-     * Niveles de logging
-     */
-    enum class LogLevel {
-        VERBOSE, DEBUG, INFO, WARN, ERROR, NONE
-    }
-
-    /**
-     * Canales de audio
-     */
-    enum class AudioChannels {
-        MONO, STEREO
-    }
-
-    /**
-     * Códecs de audio soportados
-     */
-    enum class AudioCodec {
-        OPUS, G722, G711_PCMU, G711_PCMA, G729, SPEEX
-    }
-
-    /**
-     * Versiones de TLS
-     */
-    enum class TLSVersion {
-        TLS_1_0, TLS_1_1, TLS_1_2, TLS_1_3
-    }
-
-    /**
-     * Validación de certificados
-     */
-    enum class CertificateValidation {
-        STRICT, PERMISSIVE, DISABLED
-    }
-
-    /**
-     * Rutas de audio preferidas
-     */
-    enum class AudioRoute {
-        AUTO, EARPIECE, SPEAKER, BLUETOOTH, WIRED_HEADSET
-    }
 
     /**
      * Listener principal para todos los eventos SIP
@@ -204,8 +65,6 @@ class EddysSipLibrary private constructor() {
         fun onDtmfReceived(digit: Char, callInfo: CallInfo) {}
         fun onAudioDeviceChanged(device: AudioDevice) {}
         fun onNetworkStateChanged(isConnected: Boolean) {}
-        fun onCallQualityChanged(quality: CallQuality) {}
-        fun onBatteryOptimizationChanged(isOptimized: Boolean) {}
     }
 
     /**
@@ -231,8 +90,6 @@ class EddysSipLibrary private constructor() {
         fun onCallTransferred(callInfo: CallInfo, transferTo: String)
         fun onMuteStateChanged(isMuted: Boolean, callInfo: CallInfo)
         fun onCallStateChanged(stateInfo: CallStateInfo)  // OPTIMIZADO: Renombrado de onDetailedStateChanged
-        fun onCallQualityChanged(callInfo: CallInfo, quality: CallQuality)
-        fun onCallDurationChanged(callInfo: CallInfo, duration: Long)
     }
 
     /**
@@ -258,8 +115,7 @@ class EddysSipLibrary private constructor() {
         val isMuted: Boolean = false,
         val localAccount: String,
         val codec: String? = null,
-        val state: DetailedCallState? = null,  // OPTIMIZADO: Renombrado de detailedState
-        val quality: CallQuality? = null
+        val state: DetailedCallState? = null  // OPTIMIZADO: Renombrado de detailedState
     )
 
     /**
@@ -271,20 +127,7 @@ class EddysSipLibrary private constructor() {
         val callerName: String?,
         val targetAccount: String,
         val timestamp: Long,
-        val headers: Map<String, String> = emptyMap(),
-        val priority: CallPriority = CallPriority.NORMAL
-    )
-
-    /**
-     * Calidad de llamada
-     */
-    data class CallQuality(
-        val audioQuality: AudioQuality,
-        val networkQuality: NetworkQuality,
-        val overallScore: Int, // 0-100
-        val jitter: Double,
-        val packetLoss: Double,
-        val roundTripTime: Double
+        val headers: Map<String, String> = emptyMap()
     )
 
     /**
@@ -292,27 +135,6 @@ class EddysSipLibrary private constructor() {
      */
     enum class CallDirection {
         INCOMING, OUTGOING
-    }
-
-    /**
-     * Prioridad de llamada
-     */
-    enum class CallPriority {
-        LOW, NORMAL, HIGH, URGENT
-    }
-
-    /**
-     * Calidad de audio
-     */
-    enum class AudioQuality {
-        POOR, FAIR, GOOD, EXCELLENT
-    }
-
-    /**
-     * Calidad de red
-     */
-    enum class NetworkQuality {
-        POOR, FAIR, GOOD, EXCELLENT
     }
 
     /**
@@ -326,10 +148,7 @@ class EddysSipLibrary private constructor() {
         NETWORK_ERROR,
         CANCELLED,
         TIMEOUT,
-        ERROR,
-        MAX_DURATION_REACHED,
-        BATTERY_LOW,
-        PERMISSION_DENIED
+        ERROR
     }
 
     fun initialize(
@@ -352,7 +171,7 @@ class EddysSipLibrary private constructor() {
             setupInternalListeners()
 
             isInitialized = true
-            log.d(tag = TAG) { "EddysSipLibrary initialized successfully with config: ${config.javaClass.simpleName}" }
+            log.d(tag = TAG) { "EddysSipLibrary initialized successfully" }
 
         } catch (e: Exception) {
             log.e(tag = TAG) { "Error initializing library: ${e.message}" }
@@ -402,7 +221,7 @@ class EddysSipLibrary private constructor() {
             CoroutineScope(Dispatchers.Main).launch {
                 CallStateManager.advanced.callStateFlow.collect { stateInfo ->
                     notifyCallStateChanged(stateInfo)
-                    
+
                     // Mapear a eventos específicos para compatibilidad
                     val callInfo = getCurrentCallInfo()
                     when (stateInfo.state) {
@@ -678,7 +497,7 @@ class EddysSipLibrary private constructor() {
         return try {
             // Obtener estado actual
             val currentState = CallStateManager.advanced.getCurrentState()
-            
+
             CallInfo(
                 callId = callData.callId,
                 phoneNumber = if (callData.direction == CallDirections.INCOMING) callData.from else callData.to,
@@ -732,14 +551,14 @@ class EddysSipLibrary private constructor() {
         password: String,
         domain: String? = null,
         pushToken: String? = null,
-        pushProvider: String = config.defaultPushProvider
+        pushProvider: String = "fcm"
     ) {
         checkInitialized()
 
-        val finalDomain = domain ?: sipCoreManager?.getDefaultDomain() ?: config.defaultDomain
-        val finalToken = if (config.enablePushNotifications) pushToken ?: "" else ""
+        val finalDomain = domain ?: sipCoreManager?.getDefaultDomain() ?: "mcn.ru"
+        val finalToken = pushToken ?: ""
 
-        log.d(tag = TAG) { "Registering account: $username@$finalDomain with push: ${config.enablePushNotifications}" }
+        log.d(tag = TAG) { "Registering account: $username@$finalDomain" }
 
         sipCoreManager?.register(
             username = username,
@@ -830,9 +649,7 @@ class EddysSipLibrary private constructor() {
      */
     fun changeAudioDevice(device: AudioDevice) {
         checkInitialized()
-        if (config.enableBluetoothAudio || !device.isBluetooth) {
-            sipCoreManager?.changeAudioDevice(device)
-        }
+        sipCoreManager?.changeAudioDevice(device)
     }
 
     /**
@@ -867,7 +684,7 @@ class EddysSipLibrary private constructor() {
         checkInitialized()
 
         val finalUsername = username ?: sipCoreManager?.getCurrentUsername()
-        val finalDomain = domain ?: sipCoreManager?.getDefaultDomain() ?: config.defaultDomain
+        val finalDomain = domain ?: sipCoreManager?.getDefaultDomain() ?: ""
 
         if (finalUsername == null) {
             throw SipLibraryException("No registered account available for calling")
@@ -898,18 +715,14 @@ class EddysSipLibrary private constructor() {
 
     fun holdCall() {
         checkInitialized()
-        if (config.enableCallHold) {
-            log.d(tag = TAG) { "Holding call" }
-            sipCoreManager?.holdCall()
-        }
+        log.d(tag = TAG) { "Holding call" }
+        sipCoreManager?.holdCall()
     }
 
     fun resumeCall() {
         checkInitialized()
-        if (config.enableCallHold) {
-            log.d(tag = TAG) { "Resuming call" }
-            sipCoreManager?.resumeCall()
-        }
+        log.d(tag = TAG) { "Resuming call" }
+        sipCoreManager?.resumeCall()
     }
 
     fun toggleMute() {
@@ -941,7 +754,7 @@ class EddysSipLibrary private constructor() {
     }
 
     /**
-     * OBSOLETO: Use getRegistrationStatesFlow() para obtener estados de todas las cuentas
+     * OBSOLETO: Use getRegistrationStatesFlow() o getAllRegistrationStates() en su lugar
      */
     @Deprecated("Use getRegistrationStatesFlow() para obtener estados de todas las cuentas")
     fun getRegistrationState(): RegistrationState {
@@ -981,22 +794,14 @@ class EddysSipLibrary private constructor() {
 
     // === MÉTODOS ADICIONALES ===
 
-    fun sendDtmf(digit: Char, duration: Int = config.dtmfToneDuration): Boolean {
+    fun sendDtmf(digit: Char, duration: Int = 160): Boolean {
         checkInitialized()
-        return if (config.enableDTMF) {
-            sipCoreManager?.sendDtmf(digit, duration) ?: false
-        } else {
-            false
-        }
+        return sipCoreManager?.sendDtmf(digit, duration) ?: false
     }
 
-    fun sendDtmfSequence(digits: String, duration: Int = config.dtmfToneDuration): Boolean {
+    fun sendDtmfSequence(digits: String, duration: Int = 160): Boolean {
         checkInitialized()
-        return if (config.enableDTMF) {
-            sipCoreManager?.sendDtmfSequence(digits, duration) ?: false
-        } else {
-            false
-        }
+        return sipCoreManager?.sendDtmfSequence(digits, duration) ?: false
     }
 
     fun isMuted(): Boolean {
@@ -1016,43 +821,27 @@ class EddysSipLibrary private constructor() {
 
     fun getCallLogs(): List<CallLog> {
         checkInitialized()
-        return if (config.enableCallHistory) {
-            sipCoreManager?.callLogs() ?: emptyList()
-        } else {
-            emptyList()
-        }
+        return sipCoreManager?.callLogs() ?: emptyList()
     }
 
     fun getMissedCalls(): List<CallLog> {
         checkInitialized()
-        return if (config.enableCallHistory) {
-            sipCoreManager?.getMissedCalls() ?: emptyList()
-        } else {
-            emptyList()
-        }
+        return sipCoreManager?.getMissedCalls() ?: emptyList()
     }
 
     fun getCallLogsForNumber(phoneNumber: String): List<CallLog> {
         checkInitialized()
-        return if (config.enableCallHistory) {
-            sipCoreManager?.getCallLogsForNumber(phoneNumber) ?: emptyList()
-        } else {
-            emptyList()
-        }
+        return sipCoreManager?.getCallLogsForNumber(phoneNumber) ?: emptyList()
     }
 
     fun clearCallLogs() {
         checkInitialized()
-        if (config.enableCallHistory) {
-            sipCoreManager?.clearCallLogs()
-        }
+        sipCoreManager?.clearCallLogs()
     }
 
-    fun updatePushToken(token: String, provider: String = config.defaultPushProvider) {
+    fun updatePushToken(token: String, provider: String = "fcm") {
         checkInitialized()
-        if (config.enablePushNotifications) {
-            sipCoreManager?.enterPushMode(token)
-        }
+        sipCoreManager?.enterPushMode(token)
     }
 
     fun getSystemHealthReport(): String {
@@ -1063,44 +852,6 @@ class EddysSipLibrary private constructor() {
     fun isSystemHealthy(): Boolean {
         checkInitialized()
         return sipCoreManager?.isSipCoreManagerHealthy() ?: false
-    }
-
-    /**
-     * Obtiene la configuración actual
-     */
-    fun getCurrentConfig(): SipConfig {
-        checkInitialized()
-        return config
-    }
-
-    /**
-     * Actualiza configuración en tiempo de ejecución (solo algunas opciones)
-     */
-    fun updateRuntimeConfig(
-        enableIncomingRingtone: Boolean? = null,
-        enableOutgoingRingtone: Boolean? = null,
-        ringtoneVolume: Float? = null,
-        enableVibration: Boolean? = null,
-        enablePushNotifications: Boolean? = null
-    ) {
-        checkInitialized()
-        
-        // Crear nueva configuración con los cambios
-        val newConfig = config.copy(
-            enableIncomingRingtone = enableIncomingRingtone ?: config.enableIncomingRingtone,
-            enableOutgoingRingtone = enableOutgoingRingtone ?: config.enableOutgoingRingtone,
-            ringtoneVolume = ringtoneVolume ?: config.ringtoneVolume,
-            enableVibration = enableVibration ?: config.enableVibration,
-            enablePushNotifications = enablePushNotifications ?: config.enablePushNotifications
-        )
-        
-        // Actualizar configuración interna
-        this.config = newConfig
-        
-        // Aplicar cambios al core manager
-        sipCoreManager?.updateConfig(newConfig)
-        
-        log.d(tag = TAG) { "Runtime configuration updated" }
     }
 
     private fun checkInitialized() {
@@ -1135,16 +886,6 @@ class EddysSipLibrary private constructor() {
             history.takeLast(5).forEach { state ->
                 appendLine("${state.timestamp}: ${state.previousState} -> ${state.state}")
             }
-
-            appendLine("\n--- Configuration ---")
-            appendLine("Push notifications: ${config.enablePushNotifications}")
-            appendLine("Incoming ringtone: ${config.enableIncomingRingtone}")
-            appendLine("Outgoing ringtone: ${config.enableOutgoingRingtone}")
-            appendLine("DTMF enabled: ${config.enableDTMF}")
-            appendLine("Call hold enabled: ${config.enableCallHold}")
-            appendLine("Bluetooth audio: ${config.enableBluetoothAudio}")
-            appendLine("Auto reconnect: ${config.enableAutoReconnect}")
-            appendLine("Max concurrent calls: ${config.maxConcurrentCalls}")
         }
     }
 
