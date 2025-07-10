@@ -1,14 +1,14 @@
 package com.eddyslarez.siplibrary.data.services.translation
 
 /**
- * Gestor para guardar audios de conversaciones en el dispositivo
+ * Gestor para guardar audios de conversaciones - CORREGIDO
  * Almacena tanto el audio original como las traducciones
- *
- * @author Eddys Larez
  */
 import android.content.Context
-import android.media.MediaMetadataRetriever
 import android.os.Environment
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.core.content.ContextCompat
 import com.eddyslarez.siplibrary.utils.log
 import kotlinx.coroutines.*
 import kotlinx.serialization.Serializable
@@ -17,43 +17,51 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.decodeFromString
 import java.io.File
 import java.io.FileOutputStream
-import java.io.IOException
 import java.text.SimpleDateFormat
 import java.util.*
 import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.zip.ZipOutputStream
+import java.util.zip.ZipEntry
+import java.io.FileInputStream
 
 class AudioRecordingManager(
     private val context: Context
 ) {
     companion object {
         private const val TAG = "AudioRecordingManager"
-        private const val CONVERSATIONS_FOLDER = "Conversaciones"
+        private const val CONVERSATIONS_FOLDER = "SipConversations"
         private const val ORIGINAL_AUDIO_FOLDER = "Original"
         private const val TRANSLATED_AUDIO_FOLDER = "Traducido"
         private const val METADATA_FILE = "metadata.json"
         private const val AUDIO_FORMAT = ".wav"
-        private const val MAX_AUDIO_DURATION_MS = 300000L // 5 minutos máximo por archivo
     }
 
     private val coroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val audioQueue = ConcurrentLinkedQueue<AudioRecordingTask>()
-    private val json = Json { prettyPrint = true }
+    private val json = Json {
+        prettyPrint = true
+        ignoreUnknownKeys = true
+    }
 
     // Sesión de grabación actual
     private var currentRecordingSession: ConversationRecordingSession? = null
     private var isRecording = false
     private var recordingJob: Job? = null
-
-    // Configuración de grabación
     private var recordingConfig = AudioRecordingConfig()
 
     /**
-     * Inicia la grabación de una conversación
+     * CORREGIDO: Verificar permisos antes de iniciar grabación
      */
     fun startRecording(callId: String, participantName: String? = null): Boolean {
         return try {
             if (isRecording) {
                 log.w(tag = TAG) { "Recording already in progress" }
+                return false
+            }
+
+            // CRÍTICO: Verificar permisos
+            if (!hasRequiredPermissions()) {
+                log.e(tag = TAG) { "Missing required permissions for recording" }
                 return false
             }
 
@@ -71,8 +79,11 @@ class AudioRecordingManager(
                 isActive = true
             )
 
-            // Crear directorios
-            createRecordingDirectories(sessionId)
+            // CORREGIDO: Crear directorios con verificación
+            if (!createRecordingDirectories(sessionId)) {
+                log.e(tag = TAG) { "Failed to create recording directories" }
+                return false
+            }
 
             // Iniciar procesamiento de audio
             startAudioProcessing()
@@ -88,8 +99,339 @@ class AudioRecordingManager(
     }
 
     /**
-     * Detiene la grabación y guarda los metadatos
+     * CORREGIDO: Mejorado el guardado de audio
      */
+    fun saveOriginalAudio(
+        audioData: ByteArray,
+        direction: TranslationDirection,
+        language: String? = null
+    ) {
+        if (!isRecording || audioData.isEmpty()) return
+
+        val session = currentRecordingSession ?: return
+
+        val task = AudioRecordingTask(
+            sessionId = session.sessionId,
+            audioData = audioData.copyOf(), // IMPORTANTE: Copiar los datos
+            audioType = AudioType.ORIGINAL,
+            direction = direction,
+            language = language,
+            timestamp = System.currentTimeMillis()
+        )
+
+        audioQueue.offer(task)
+        log.d(tag = TAG) { "Queued original audio: ${audioData.size} bytes, direction: $direction" }
+    }
+
+    /**
+     * CORREGIDO: Mejorado el guardado de audio traducido
+     */
+    fun saveTranslatedAudio(
+        audioData: ByteArray,
+        direction: TranslationDirection,
+        originalLanguage: String,
+        translatedLanguage: String,
+        originalText: String? = null,
+        translatedText: String? = null
+    ) {
+        if (!isRecording || audioData.isEmpty()) return
+
+        val session = currentRecordingSession ?: return
+
+        val task = AudioRecordingTask(
+            sessionId = session.sessionId,
+            audioData = audioData.copyOf(), // IMPORTANTE: Copiar los datos
+            audioType = AudioType.TRANSLATED,
+            direction = direction,
+            language = translatedLanguage,
+            originalLanguage = originalLanguage,
+            originalText = originalText,
+            translatedText = translatedText,
+            timestamp = System.currentTimeMillis()
+        )
+
+        audioQueue.offer(task)
+        log.d(tag = TAG) { "Queued translated audio: ${audioData.size} bytes, direction: $direction" }
+    }
+
+    /**
+     * CORREGIDO: Verificación de permisos
+     */
+    private fun hasRequiredPermissions(): Boolean {
+        val permissions = arrayOf(
+            Manifest.permission.WRITE_EXTERNAL_STORAGE,
+            Manifest.permission.READ_EXTERNAL_STORAGE
+        )
+
+        return permissions.all { permission ->
+            ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
+        }
+    }
+
+    /**
+     * CORREGIDO: Creación de directorios con mejor manejo de errores
+     */
+    private fun createRecordingDirectories(sessionId: String): Boolean {
+        return try {
+            val sessionDir = getSessionDirectory(sessionId)
+            val originalDir = File(sessionDir, ORIGINAL_AUDIO_FOLDER)
+            val translatedDir = File(sessionDir, TRANSLATED_AUDIO_FOLDER)
+
+            // Crear directorios
+            val sessionCreated = sessionDir.mkdirs() || sessionDir.exists()
+            val originalCreated = originalDir.mkdirs() || originalDir.exists()
+            val translatedCreated = translatedDir.mkdirs() || translatedDir.exists()
+
+            val success = sessionCreated && originalCreated && translatedCreated
+
+            if (success) {
+                log.d(tag = TAG) { "Recording directories created: ${sessionDir.absolutePath}" }
+                // Verificar que realmente se pueden escribir archivos
+                val testFile = File(sessionDir, "test.tmp")
+                try {
+                    testFile.writeText("test")
+                    testFile.delete()
+                } catch (e: Exception) {
+                    log.e(tag = TAG) { "Cannot write to recording directory: ${e.message}" }
+                    return false
+                }
+            } else {
+                log.e(tag = TAG) { "Failed to create recording directories" }
+            }
+
+            success
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error creating recording directories: ${e.message}" }
+            false
+        }
+    }
+
+    /**
+     * CORREGIDO: Directorio usando el almacenamiento de la app
+     */
+    private fun getConversationsDirectory(): File {
+        // Usar el directorio de la aplicación en lugar del público
+        val appDirectory = File(context.getExternalFilesDir(null), CONVERSATIONS_FOLDER)
+        if (!appDirectory.exists()) {
+            appDirectory.mkdirs()
+        }
+        return appDirectory
+    }
+
+    private fun getSessionDirectory(sessionId: String): File {
+        return File(getConversationsDirectory(), sessionId)
+    }
+
+    /**
+     * CORREGIDO: Procesamiento de tareas de audio con mejor manejo de errores
+     */
+    private suspend fun processAudioTask(task: AudioRecordingTask) {
+        try {
+            log.d(tag = TAG) { "Processing audio task: ${task.audioType}, ${task.audioData.size} bytes" }
+
+            val sessionDir = getSessionDirectory(task.sessionId)
+            if (!sessionDir.exists()) {
+                log.e(tag = TAG) { "Session directory does not exist: ${sessionDir.absolutePath}" }
+                return
+            }
+
+            val audioDir = when (task.audioType) {
+                AudioType.ORIGINAL -> File(sessionDir, ORIGINAL_AUDIO_FOLDER)
+                AudioType.TRANSLATED -> File(sessionDir, TRANSLATED_AUDIO_FOLDER)
+            }
+
+            if (!audioDir.exists()) {
+                log.e(tag = TAG) { "Audio directory does not exist: ${audioDir.absolutePath}" }
+                return
+            }
+
+            // Crear nombre de archivo
+            val filename = createAudioFilename(task)
+            val audioFile = File(audioDir, filename)
+
+            // CORREGIDO: Guardar archivo de audio con manejo de errores
+            withContext(Dispatchers.IO) {
+                try {
+                    audioFile.parentFile?.mkdirs()
+
+                    FileOutputStream(audioFile).use { fos ->
+                        val wavData = convertPcmToWav(task.audioData)
+                        fos.write(wavData)
+                        fos.flush()
+                    }
+
+                    log.d(tag = TAG) { "Audio saved successfully: ${audioFile.absolutePath} (${audioFile.length()} bytes)" }
+
+                    // Verificar que el archivo se guardó correctamente
+                    if (!audioFile.exists() || audioFile.length() == 0L) {
+                        log.e(tag = TAG) { "Audio file was not saved correctly: ${audioFile.absolutePath}" }
+                        return@withContext
+                    }
+
+                } catch (e: Exception) {
+                    log.e(tag = TAG) { "Error writing audio file: ${e.message}" }
+                    return@withContext
+                }
+            }
+
+            // Actualizar metadatos de la sesión
+            updateSessionMetadata(task)
+
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error processing audio task: ${e.message}" }
+        }
+    }
+
+    /**
+     * CORREGIDO: Conversión PCM a WAV con header correcto
+     */
+    private fun convertPcmToWav(pcmData: ByteArray): ByteArray {
+        // Parámetros de audio
+        val sampleRate = 24000
+        val channels = 1
+        val bitsPerSample = 16
+        val byteRate = sampleRate * channels * bitsPerSample / 8
+        val blockAlign = channels * bitsPerSample / 8
+
+        // Crear header WAV
+        val header = ByteArray(44)
+
+        // ChunkID "RIFF"
+        header[0] = 'R'.code.toByte()
+        header[1] = 'I'.code.toByte()
+        header[2] = 'F'.code.toByte()
+        header[3] = 'F'.code.toByte()
+
+        // ChunkSize
+        val fileSize = pcmData.size + 36
+        header[4] = (fileSize and 0xff).toByte()
+        header[5] = ((fileSize shr 8) and 0xff).toByte()
+        header[6] = ((fileSize shr 16) and 0xff).toByte()
+        header[7] = ((fileSize shr 24) and 0xff).toByte()
+
+        // Format "WAVE"
+        header[8] = 'W'.code.toByte()
+        header[9] = 'A'.code.toByte()
+        header[10] = 'V'.code.toByte()
+        header[11] = 'E'.code.toByte()
+
+        // Subchunk1ID "fmt "
+        header[12] = 'f'.code.toByte()
+        header[13] = 'm'.code.toByte()
+        header[14] = 't'.code.toByte()
+        header[15] = ' '.code.toByte()
+
+        // Subchunk1Size (16 for PCM)
+        header[16] = 16
+        header[17] = 0
+        header[18] = 0
+        header[19] = 0
+
+        // AudioFormat (1 for PCM)
+        header[20] = 1
+        header[21] = 0
+
+        // NumChannels
+        header[22] = channels.toByte()
+        header[23] = 0
+
+        // SampleRate
+        header[24] = (sampleRate and 0xff).toByte()
+        header[25] = ((sampleRate shr 8) and 0xff).toByte()
+        header[26] = ((sampleRate shr 16) and 0xff).toByte()
+        header[27] = ((sampleRate shr 24) and 0xff).toByte()
+
+        // ByteRate
+        header[28] = (byteRate and 0xff).toByte()
+        header[29] = ((byteRate shr 8) and 0xff).toByte()
+        header[30] = ((byteRate shr 16) and 0xff).toByte()
+        header[31] = ((byteRate shr 24) and 0xff).toByte()
+
+        // BlockAlign
+        header[32] = blockAlign.toByte()
+        header[33] = 0
+
+        // BitsPerSample
+        header[34] = bitsPerSample.toByte()
+        header[35] = 0
+
+        // Subchunk2ID "data"
+        header[36] = 'd'.code.toByte()
+        header[37] = 'a'.code.toByte()
+        header[38] = 't'.code.toByte()
+        header[39] = 'a'.code.toByte()
+
+        // Subchunk2Size
+        header[40] = (pcmData.size and 0xff).toByte()
+        header[41] = ((pcmData.size shr 8) and 0xff).toByte()
+        header[42] = ((pcmData.size shr 16) and 0xff).toByte()
+        header[43] = ((pcmData.size shr 24) and 0xff).toByte()
+
+        return header + pcmData
+    }
+
+    /**
+     * CORREGIDO: Implementación real del ZIP
+     */
+    private fun createZipFile(sourceDir: File, zipFile: File) {
+        try {
+            ZipOutputStream(FileOutputStream(zipFile)).use { zipOut ->
+                addDirectoryToZip(sourceDir, sourceDir.name, zipOut)
+            }
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error creating ZIP file: ${e.message}" }
+        }
+    }
+
+    private fun addDirectoryToZip(sourceDir: File, parentPath: String, zipOut: ZipOutputStream) {
+        sourceDir.listFiles()?.forEach { file ->
+            if (file.isDirectory) {
+                addDirectoryToZip(file, "$parentPath/${file.name}", zipOut)
+            } else {
+                val entry = ZipEntry("$parentPath/${file.name}")
+                zipOut.putNextEntry(entry)
+
+                FileInputStream(file).use { fis ->
+                    fis.copyTo(zipOut)
+                }
+                zipOut.closeEntry()
+            }
+        }
+    }
+
+    // Resto de métodos sin cambios...
+    private fun startAudioProcessing() {
+        recordingJob = coroutineScope.launch {
+            while (isRecording) {
+                try {
+                    val task = audioQueue.poll()
+                    if (task != null) {
+                        processAudioTask(task)
+                    } else {
+                        delay(100)
+                    }
+                } catch (e: Exception) {
+                    log.e(tag = TAG) { "Error processing audio task: ${e.message}" }
+                }
+            }
+        }
+    }
+
+    private fun stopAudioProcessing() {
+        recordingJob?.cancel()
+        recordingJob = null
+
+        // Procesar tareas pendientes
+        coroutineScope.launch {
+            while (audioQueue.isNotEmpty()) {
+                val task = audioQueue.poll()
+                if (task != null) {
+                    processAudioTask(task)
+                }
+            }
+        }
+    }
+
     fun stopRecording(): String? {
         return try {
             if (!isRecording) {
@@ -125,71 +467,57 @@ class AudioRecordingManager(
         }
     }
 
-    /**
-     * Guarda audio original de la conversación
-     */
-    fun saveOriginalAudio(
-        audioData: ByteArray,
-        direction: TranslationDirection,
-        language: String? = null
-    ) {
-        if (!isRecording) return
+    private fun createAudioFilename(task: AudioRecordingTask): String {
+        val timestamp = SimpleDateFormat("HHmmss_SSS", Locale.getDefault()).format(Date(task.timestamp))
+        val direction = task.direction.name.lowercase()
+        val type = task.audioType.name.lowercase()
+        val language = task.language ?: "unknown"
 
-        val session = currentRecordingSession ?: return
-
-        val task = AudioRecordingTask(
-            sessionId = session.sessionId,
-            audioData = audioData,
-            audioType = AudioType.ORIGINAL,
-            direction = direction,
-            language = language,
-            timestamp = System.currentTimeMillis()
-        )
-
-        audioQueue.offer(task)
+        return "${direction}_${type}_${language}_${timestamp}$AUDIO_FORMAT"
     }
 
-    /**
-     * Guarda audio traducido
-     */
-    fun saveTranslatedAudio(
-        audioData: ByteArray,
-        direction: TranslationDirection,
-        originalLanguage: String,
-        translatedLanguage: String,
-        originalText: String? = null,
-        translatedText: String? = null
-    ) {
-        if (!isRecording) return
+    private fun saveSessionMetadata(session: ConversationRecordingSession) {
+        try {
+            val sessionDir = getSessionDirectory(session.sessionId)
+            val metadataFile = File(sessionDir, METADATA_FILE)
 
-        val session = currentRecordingSession ?: return
+            val metadata = json.encodeToString(session)
+            metadataFile.writeText(metadata)
 
-        val task = AudioRecordingTask(
-            sessionId = session.sessionId,
-            audioData = audioData,
-            audioType = AudioType.TRANSLATED,
-            direction = direction,
-            language = translatedLanguage,
-            originalLanguage = originalLanguage,
-            originalText = originalText,
-            translatedText = translatedText,
-            timestamp = System.currentTimeMillis()
-        )
-
-        audioQueue.offer(task)
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error saving session metadata: ${e.message}" }
+        }
     }
 
-    /**
-     * Configura las opciones de grabación
-     */
+    private fun updateSessionMetadata(task: AudioRecordingTask) {
+        val session = currentRecordingSession ?: return
+
+        val updatedSession = session.copy(
+            audioFileCount = session.audioFileCount + 1,
+            lastActivityTime = System.currentTimeMillis()
+        )
+
+        currentRecordingSession = updatedSession
+    }
+
+    private fun generateSessionId(): String {
+        return "conv_${System.currentTimeMillis()}_${UUID.randomUUID().toString().take(8)}"
+    }
+
     fun configure(config: AudioRecordingConfig) {
         recordingConfig = config
         log.d(tag = TAG) { "Recording configuration updated" }
     }
 
-    /**
-     * Obtiene la lista de conversaciones guardadas
-     */
+    fun dispose() {
+        log.d(tag = TAG) { "Disposing AudioRecordingManager" }
+        if (isRecording) {
+            stopRecording()
+        }
+        coroutineScope.cancel()
+    }
+
+    // Métodos de lectura sin cambios...
     fun getSavedConversations(): List<ConversationRecordingSession> {
         return try {
             val conversationsDir = getConversationsDirectory()
@@ -220,9 +548,6 @@ class AudioRecordingManager(
         }
     }
 
-    /**
-     * Obtiene los archivos de audio de una sesión específica
-     */
     fun getSessionAudioFiles(sessionId: String): List<AudioFileInfo> {
         return try {
             val sessionDir = getSessionDirectory(sessionId)
@@ -274,9 +599,6 @@ class AudioRecordingManager(
         }
     }
 
-    /**
-     * Elimina una conversación completa
-     */
     fun deleteConversation(sessionId: String): Boolean {
         return try {
             val sessionDir = getSessionDirectory(sessionId)
@@ -293,17 +615,12 @@ class AudioRecordingManager(
         }
     }
 
-    /**
-     * Exporta una conversación a un archivo ZIP
-     */
     fun exportConversation(sessionId: String): File? {
         return try {
             val sessionDir = getSessionDirectory(sessionId)
             if (!sessionDir.exists()) return null
 
             val exportFile = File(getConversationsDirectory(), "${sessionId}_export.zip")
-
-            // Crear ZIP con todos los archivos de la sesión
             createZipFile(sessionDir, exportFile)
 
             log.d(tag = TAG) { "Conversation exported: $sessionId" }
@@ -313,185 +630,6 @@ class AudioRecordingManager(
             log.e(tag = TAG) { "Error exporting conversation: ${e.message}" }
             null
         }
-    }
-
-    // Métodos privados
-
-    private fun startAudioProcessing() {
-        recordingJob = coroutineScope.launch {
-            while (isRecording) {
-                try {
-                    val task = audioQueue.poll()
-                    if (task != null) {
-                        processAudioTask(task)
-                    } else {
-                        delay(100) // Pequeña pausa si no hay tareas
-                    }
-                } catch (e: Exception) {
-                    log.e(tag = TAG) { "Error processing audio task: ${e.message}" }
-                }
-            }
-        }
-    }
-
-    private fun stopAudioProcessing() {
-        recordingJob?.cancel()
-        recordingJob = null
-
-        // Procesar tareas pendientes
-        coroutineScope.launch {
-            while (audioQueue.isNotEmpty()) {
-                val task = audioQueue.poll()
-                if (task != null) {
-                    processAudioTask(task)
-                }
-            }
-        }
-    }
-
-    private suspend fun processAudioTask(task: AudioRecordingTask) {
-        try {
-            val sessionDir = getSessionDirectory(task.sessionId)
-            val audioDir = when (task.audioType) {
-                AudioType.ORIGINAL -> File(sessionDir, ORIGINAL_AUDIO_FOLDER)
-                AudioType.TRANSLATED -> File(sessionDir, TRANSLATED_AUDIO_FOLDER)
-            }
-
-            // Crear nombre de archivo
-            val filename = createAudioFilename(task)
-            val audioFile = File(audioDir, filename)
-
-            // Guardar archivo de audio
-            withContext(Dispatchers.IO) {
-                FileOutputStream(audioFile).use { fos ->
-                    // Convertir PCM a WAV si es necesario
-                    val wavData = convertPcmToWav(task.audioData)
-                    fos.write(wavData)
-                }
-            }
-
-            // Actualizar metadatos de la sesión
-            updateSessionMetadata(task)
-
-            log.d(tag = TAG) { "Audio saved: $filename" }
-
-        } catch (e: Exception) {
-            log.e(tag = TAG) { "Error processing audio task: ${e.message}" }
-        }
-    }
-
-    private fun createRecordingDirectories(sessionId: String) {
-        val sessionDir = getSessionDirectory(sessionId)
-        val originalDir = File(sessionDir, ORIGINAL_AUDIO_FOLDER)
-        val translatedDir = File(sessionDir, TRANSLATED_AUDIO_FOLDER)
-
-        sessionDir.mkdirs()
-        originalDir.mkdirs()
-        translatedDir.mkdirs()
-    }
-
-    private fun getConversationsDirectory(): File {
-        val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-        return File(downloadsDir, CONVERSATIONS_FOLDER)
-    }
-
-    private fun getSessionDirectory(sessionId: String): File {
-        return File(getConversationsDirectory(), sessionId)
-    }
-
-    private fun createAudioFilename(task: AudioRecordingTask): String {
-        val timestamp = SimpleDateFormat("HHmmss_SSS", Locale.getDefault()).format(Date(task.timestamp))
-        val direction = task.direction.name.lowercase()
-        val type = task.audioType.name.lowercase()
-        val language = task.language ?: "unknown"
-
-        return "${direction}_${type}_${language}_${timestamp}$AUDIO_FORMAT"
-    }
-
-    private fun convertPcmToWav(pcmData: ByteArray): ByteArray {
-        // Parámetros de audio (ajustar según tu configuración)
-        val sampleRate = 24000
-        val channels = 1
-        val bitsPerSample = 16
-
-        val wavHeader = createWavHeader(pcmData.size, sampleRate, channels, bitsPerSample)
-        return wavHeader + pcmData
-    }
-
-    private fun createWavHeader(dataSize: Int, sampleRate: Int, channels: Int, bitsPerSample: Int): ByteArray {
-        val byteRate = sampleRate * channels * bitsPerSample / 8
-        val blockAlign = channels * bitsPerSample / 8
-        val totalSize = dataSize + 36
-
-        return ByteArray(44).apply {
-            // ChunkID "RIFF"
-            System.arraycopy("RIFF".toByteArray(), 0, this, 0, 4)
-            // ChunkSize
-            writeInt(totalSize, 4)
-            // Format "WAVE"
-            System.arraycopy("WAVE".toByteArray(), 0, this, 8, 4)
-            // Subchunk1ID "fmt "
-            System.arraycopy("fmt ".toByteArray(), 0, this, 12, 4)
-            // Subchunk1Size
-            writeInt(16, 16)
-            // AudioFormat
-            writeShort(1, 20)
-            // NumChannels
-            writeShort(channels, 22)
-            // SampleRate
-            writeInt(sampleRate, 24)
-            // ByteRate
-            writeInt(byteRate, 28)
-            // BlockAlign
-            writeShort(blockAlign, 32)
-            // BitsPerSample
-            writeShort(bitsPerSample, 34)
-            // Subchunk2ID "data"
-            System.arraycopy("data".toByteArray(), 0, this, 36, 4)
-            // Subchunk2Size
-            writeInt(dataSize, 40)
-        }
-    }
-
-    private fun ByteArray.writeInt(value: Int, offset: Int) {
-        this[offset] = (value and 0xFF).toByte()
-        this[offset + 1] = ((value shr 8) and 0xFF).toByte()
-        this[offset + 2] = ((value shr 16) and 0xFF).toByte()
-        this[offset + 3] = ((value shr 24) and 0xFF).toByte()
-    }
-
-    private fun ByteArray.writeShort(value: Int, offset: Int) {
-        this[offset] = (value and 0xFF).toByte()
-        this[offset + 1] = ((value shr 8) and 0xFF).toByte()
-    }
-
-    private fun saveSessionMetadata(session: ConversationRecordingSession) {
-        try {
-            val sessionDir = getSessionDirectory(session.sessionId)
-            val metadataFile = File(sessionDir, METADATA_FILE)
-
-            val metadata = json.encodeToString(session)
-            metadataFile.writeText(metadata)
-
-        } catch (e: Exception) {
-            log.e(tag = TAG) { "Error saving session metadata: ${e.message}" }
-        }
-    }
-
-    private fun updateSessionMetadata(task: AudioRecordingTask) {
-        val session = currentRecordingSession ?: return
-
-        // Incrementar contador de archivos
-        val updatedSession = session.copy(
-            audioFileCount = session.audioFileCount + 1,
-            lastActivityTime = System.currentTimeMillis()
-        )
-
-        currentRecordingSession = updatedSession
-    }
-
-    private fun generateSessionId(): String {
-        return "conv_${System.currentTimeMillis()}_${UUID.randomUUID().toString().take(8)}"
     }
 
     private fun parseDirectionFromFilename(filename: String): TranslationDirection {
@@ -519,20 +657,6 @@ class AudioRecordingManager(
         } catch (e: Exception) {
             0L
         }
-    }
-
-    private fun createZipFile(sourceDir: File, zipFile: File) {
-        // Implementar creación de ZIP
-        // Por simplicidad, aquí solo se indica la estructura
-        // Necesitarías usar java.util.zip.ZipOutputStream
-    }
-
-    fun dispose() {
-        log.d(tag = TAG) { "Disposing AudioRecordingManager" }
-        if (isRecording) {
-            stopRecording()
-        }
-        coroutineScope.cancel()
     }
 }
 
