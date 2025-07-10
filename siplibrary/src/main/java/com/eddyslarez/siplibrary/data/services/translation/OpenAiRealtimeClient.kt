@@ -104,6 +104,8 @@ class OpenAiRealtimeClient(
                 }
 
                 override fun onMessage(webSocket: WebSocket, text: String) {
+                    log.d(tag = TAG) { "Received message: $text" } // 👈 Log del mensaje recibido
+
                     handleServerMessage(text)
                 }
 
@@ -438,6 +440,8 @@ class OpenAiRealtimeClient(
     private fun sendMessage(message: String) {
         try {
             webSocket?.send(message)
+            log.d(tag = TAG) { "Sending message: $message" } // 👈 Log del mensaje enviado
+
         } catch (e: Exception) {
             log.e(tag = TAG) { "Error sending message: ${e.message}" }
             onError?.invoke("Send error: ${e.message}")
