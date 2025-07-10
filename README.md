@@ -1,8 +1,8 @@
 # 📞 EddysSipLibrary - Biblioteca SIP/VoIP para Android
 
-Una biblioteca SIP/VoIP completa y moderna para Android desarrollada por **Eddys Larez**, que proporciona funcionalidades avanzadas para realizar y recibir llamadas SIP usando WebRTC y WebSocket con soporte multi-cuenta.
+Una biblioteca SIP/VoIP completa y moderna para Android desarrollada por **Eddys Larez**, que proporciona funcionalidades avanzadas para realizar y recibir llamadas SIP usando WebRTC y WebSocket con soporte multi-cuenta y **traducción en tiempo real**.
 
-[![Version](https://img.shields.io/badge/version-1.4.0-blue.svg)](https://github.com/eddyslarez/sip-library)
+[![Version](https://img.shields.io/badge/version-1.5.0-blue.svg)](https://github.com/eddyslarez/sip-library)
 [![API](https://img.shields.io/badge/API-24%2B-brightgreen.svg?style=flat)](https://android-arsenal.com/api?level=24)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
@@ -17,6 +17,9 @@ Una biblioteca SIP/VoIP completa y moderna para Android desarrollada por **Eddys
 - 📋 Historial completo de llamadas
 - 🔔 Notificaciones push integradas
 - 🎛️ Control DTMF durante llamadas
+- 🌍 **Traducción en tiempo real con OpenAI Realtime API**
+- 🗣️ **Detección automática de idioma**
+- 🎙️ **Reemplazo de audio con voz sintética traducida**
 
 ### ✅ **Arquitectura Moderna**
 - 🏗️ Estados de llamada unificados y detallados
@@ -32,6 +35,7 @@ Una biblioteca SIP/VoIP completa y moderna para Android desarrollada por **Eddys
 - 🔇 Control de mute/unmute
 - ⏸️ Funciones de hold/resume
 - 🔊 Soporte para audio HD
+- 🌐 **Traducción automática de audio bidireccional**
 
 ## 📱 Instalación
 
@@ -53,7 +57,7 @@ dependencyResolutionManagement {
 
 ```kotlin
 dependencies {
-    implementation("com.github.eddyslarez:sip-library:1.4.0")
+    implementation("com.github.eddyslarez:sip-library:1.5.0")
 }
 ```
 
@@ -102,7 +106,13 @@ class MyApplication : Application() {
             userAgent = "MiApp/1.0.0",
             enableLogs = true,
             enableAutoReconnect = true,
-            pingIntervalMs = 30000L
+            pingIntervalMs = 30000L,
+            translationConfig = TranslationConfig(
+                isEnabled = true,
+                preferredLanguage = "es",
+                voiceGender = VoiceGender.FEMALE,
+                openAiApiKey = "tu-api-key-de-openai"
+            )
         )
         
         // Inicializar la biblioteca
@@ -164,6 +174,25 @@ class MainActivity : ComponentActivity() {
             
             override fun onIncomingCall(callInfo: EddysSipLibrary.IncomingCallInfo) {
                 showNotification("Llamada de ${callInfo.callerNumber}")
+            }
+            
+            override fun onTranslationLanguageDetected(direction: TranslationDirection, language: String) {
+                when (direction) {
+                    TranslationDirection.INCOMING -> {
+                        showMessage("🌍 Idioma detectado del remoto: $language")
+                    }
+                    TranslationDirection.OUTGOING -> {
+                        showMessage("🗣️ Tu idioma: $language")
+                    }
+                }
+            }
+            
+            override fun onTranslationStateChanged(isActive: Boolean, session: TranslationSession?) {
+                if (isActive && session != null) {
+                    showMessage("🌐 Traducción activa: ${session.userLanguage} ↔ ${session.detectedRemoteLanguage}")
+                } else {
+                    showMessage("🌐 Traducción desactivada")
+                }
             }
         })
     }
@@ -239,6 +268,123 @@ sipLibrary.resumeCall()
 // Enviar DTMF
 sipLibrary.sendDtmf('1')
 sipLibrary.sendDtmfSequence("123*")
+```
+
+## 🌍 Sistema de Traducción en Tiempo Real
+
+### Configuración de Traducción
+
+```kotlin
+// Configurar traducción
+val translationConfig = TranslationConfig(
+    isEnabled = true,
+    preferredLanguage = "es", // Tu idioma preferido
+    voiceGender = VoiceGender.FEMALE,
+    openAiApiKey = "tu-api-key-de-openai",
+    autoDetectLanguage = true,
+    translationQuality = TranslationQuality.HIGH
+)
+
+sipLibrary.configureTranslation(translationConfig)
+```
+
+### Uso Durante Llamadas
+
+```kotlin
+// La traducción se inicia automáticamente cuando está habilitada
+// También puedes controlarla manualmente:
+
+// Iniciar traducción manualmente
+val success = sipLibrary.startTranslationForCurrentCall()
+if (success) {
+    showMessage("🌐 Traducción iniciada")
+}
+
+// Detener traducción
+sipLibrary.stopTranslationForCurrentCall()
+
+// Verificar estado
+val isActive = sipLibrary.isTranslationActive()
+val stats = sipLibrary.getTranslationStats()
+
+if (stats != null) {
+    showMessage("Mensajes traducidos: ${stats.translatedMessages}")
+    showMessage("Idioma detectado: ${stats.detectedRemoteLanguage}")
+}
+```
+
+### Idiomas Soportados
+
+```kotlin
+// Obtener idiomas soportados
+val supportedLanguages = sipLibrary.getSupportedTranslationLanguages()
+
+supportedLanguages.forEach { language ->
+    println("${language.displayName} (${language.code})")
+}
+
+// Idiomas disponibles:
+// - Español (es)
+// - English (en) 
+// - Français (fr)
+// - Deutsch (de)
+// - Italiano (it)
+// - Português (pt)
+// - Русский (ru)
+// - 中文 (zh)
+// - 日本語 (ja)
+// - 한국어 (ko)
+```
+
+### Configuración Avanzada de Traducción
+
+```kotlin
+class TranslationSettingsActivity : ComponentActivity() {
+    
+    private fun setupTranslationSettings() {
+        // Configuración personalizada
+        val config = TranslationConfig(
+            isEnabled = true,
+            preferredLanguage = "es",
+            voiceGender = VoiceGender.FEMALE, // MALE, FEMALE, NEUTRAL
+            openAiApiKey = getSecureApiKey(),
+            autoDetectLanguage = true,
+            translationQuality = TranslationQuality.HIGH // FAST, HIGH
+        )
+        
+        sipLibrary.configureTranslation(config)
+        
+        // Observar cambios de idioma
+        sipLibrary.addSipEventListener(object : EddysSipLibrary.SipEventListener {
+            override fun onTranslationLanguageDetected(direction: TranslationDirection, language: String) {
+                runOnUiThread {
+                    when (direction) {
+                        TranslationDirection.INCOMING -> {
+                            updateUI("Idioma del remoto: ${getLanguageName(language)}")
+                        }
+                        TranslationDirection.OUTGOING -> {
+                            updateUI("Tu idioma: ${getLanguageName(language)}")
+                        }
+                    }
+                }
+            }
+            
+            override fun onTranslationStateChanged(isActive: Boolean, session: TranslationSession?) {
+                runOnUiThread {
+                    if (isActive && session != null) {
+                        showTranslationActive(session)
+                    } else {
+                        hideTranslationIndicator()
+                    }
+                }
+            }
+        })
+    }
+    
+    private fun getLanguageName(code: String): String {
+        return SupportedLanguage.fromCode(code)?.displayName ?: code
+    }
+}
 ```
 
 ## 🎧 Gestión de Audio
@@ -835,6 +981,14 @@ Para soporte técnico o preguntas:
 - ✅ **AÑADIDO**: Mejor diagnóstico de sistema
 - ✅ **OPTIMIZADO**: Rendimiento de notificaciones
 
+### v1.5.0 (Nueva)
+- 🌍 **NUEVO**: Traducción en tiempo real con OpenAI Realtime API
+- 🗣️ **NUEVO**: Detección automática de idioma
+- 🎙️ **NUEVO**: Reemplazo de audio con voz sintética
+- 🌐 **NUEVO**: Soporte para 10+ idiomas
+- ⚡ **NUEVO**: Traducción bidireccional en tiempo real
+- 🎛️ **NUEVO**: Configuración avanzada de voz y calidad
+
 ### v1.3.0
 - ✅ Estados detallados de llamada
 - ✅ Soporte multi-cuenta mejorado
@@ -861,6 +1015,6 @@ Para soporte técnico o preguntas:
 
 ---
 
-**Desarrollado con ❤️ por Eddys Larez**
+**Desarrollado con ❤️ por Eddys Larez - Ahora con Traducción en Tiempo Real 🌍**
 
 *¿Te gusta la librería? ¡Dale una ⭐ en GitHub!*

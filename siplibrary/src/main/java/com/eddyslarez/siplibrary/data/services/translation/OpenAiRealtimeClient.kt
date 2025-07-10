@@ -1,5 +1,7 @@
 package com.eddyslarez.siplibrary.data.services.translation
 
+import android.os.Build
+import androidx.annotation.RequiresApi
 import com.eddyslarez.siplibrary.data.models.*
 import com.eddyslarez.siplibrary.utils.log
 import kotlinx.coroutines.*
@@ -10,6 +12,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.java_websocket.client.WebSocketClient
 import org.java_websocket.handshake.ServerHandshake
 import java.net.URI
@@ -139,6 +143,7 @@ class OpenAiRealtimeClient(
             )
 
             webSocketClient = object : WebSocketClient(uri, headers) {
+                @RequiresApi(Build.VERSION_CODES.O)
                 override fun onOpen(handshake: ServerHandshake) {
                     log.d(tag = TAG) { "Connected to OpenAI Realtime API" }
                     _connectionState.value = ConnectionState.CONNECTED
@@ -147,6 +152,7 @@ class OpenAiRealtimeClient(
                     startAudioProcessing()
                 }
 
+                @RequiresApi(Build.VERSION_CODES.O)
                 override fun onMessage(message: String) {
                     handleServerMessage(message)
                 }
@@ -260,6 +266,7 @@ class OpenAiRealtimeClient(
         this.onError = onError
     }
 
+    @RequiresApi(Build.VERSION_CODES.O)
     private fun startAudioProcessing() {
         // Procesar audio entrante (del remoto)
         coroutineScope.launch {
@@ -282,6 +289,7 @@ class OpenAiRealtimeClient(
         coroutineScope.cancel()
     }
 
+    @RequiresApi(Build.VERSION_CODES.O)
     private suspend fun processAudioRequest(request: AudioTranslationRequest) {
         try {
             val session = activeSessions[request.direction]
@@ -321,6 +329,7 @@ class OpenAiRealtimeClient(
         }
     }
 
+    @RequiresApi(Build.VERSION_CODES.O)
     private suspend fun setupLanguageDetectionSession(request: AudioTranslationRequest) {
         val instructions = """
             Listen to the audio and detect the language being spoken. 
@@ -349,11 +358,12 @@ class OpenAiRealtimeClient(
         sendMessage(json.encodeToString(responseEvent))
     }
 
+    @RequiresApi(Build.VERSION_CODES.O)
     private fun handleServerMessage(message: String) {
         try {
             val jsonElement = json.parseToJsonElement(message)
-            val messageObj = jsonElement.asJsonObject
-            val type = messageObj["type"]?.asJsonPrimitive?.content
+            val messageObj = jsonElement.jsonObject
+            val type = messageObj["type"]?.jsonPrimitive?.content
 
             when (type) {
                 "session.created" -> {
@@ -381,8 +391,8 @@ class OpenAiRealtimeClient(
                 }
                 
                 "error" -> {
-                    val error = messageObj["error"]?.asJsonObject
-                    val errorMessage = error?.get("message")?.asJsonPrimitive?.content ?: "Unknown error"
+                    val error = messageObj["error"]?.jsonObject
+                    val errorMessage = error?.get("message")?.jsonPrimitive?.content ?: "Unknown error"
                     log.e(tag = TAG) { "OpenAI API error: $errorMessage" }
                     onError?.invoke("API error: $errorMessage")
                 }
@@ -396,9 +406,10 @@ class OpenAiRealtimeClient(
         }
     }
 
+    @RequiresApi(Build.VERSION_CODES.O)
     private fun handleAudioDelta(messageObj: kotlinx.serialization.json.JsonObject) {
         try {
-            val delta = messageObj["delta"]?.asJsonPrimitive?.content
+            val delta = messageObj["delta"]?.jsonPrimitive?.content
             if (delta != null) {
                 val audioBytes = Base64.getDecoder().decode(delta)
                 
@@ -426,7 +437,7 @@ class OpenAiRealtimeClient(
 
     private fun handleTextResponse(messageObj: kotlinx.serialization.json.JsonObject) {
         try {
-            val text = messageObj["text"]?.asJsonPrimitive?.content
+            val text = messageObj["text"]?.jsonPrimitive?.content
             if (text != null) {
                 // Si es una respuesta de detección de idioma
                 val detectedLang = SupportedLanguage.fromCode(text.trim())
