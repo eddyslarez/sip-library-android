@@ -1,6 +1,8 @@
 package com.eddyslarez.siplibrary.data.models
 
 import android.os.Parcelable
+import com.eddyslarez.siplibrary.data.services.translation.TranslationDirection
+import com.eddyslarez.siplibrary.data.services.translation.VoiceGender
 import kotlinx.parcelize.Parcelize
 
 /**
@@ -9,107 +11,107 @@ import kotlinx.parcelize.Parcelize
  * @author Eddys Larez
  */
 
-@Parcelize
-data class TranslationConfig(
-    val isEnabled: Boolean = false,
-    val preferredLanguage: String = "es", // Idioma preferido del usuario
-    val voiceGender: VoiceGender = VoiceGender.FEMALE,
-    val openAiApiKey: String = "",
-    val autoDetectLanguage: Boolean = true,
-    val translationQuality: TranslationQuality = TranslationQuality.HIGH
-) : Parcelable
-
-@Parcelize
-enum class VoiceGender : Parcelable {
-    MALE,
-    FEMALE,
-    NEUTRAL
-}
-
-@Parcelize
-enum class TranslationQuality : Parcelable {
-    FAST,    // Menor latencia, calidad estándar
-    HIGH     // Mayor latencia, mejor calidad
-}
-
-@Parcelize
-enum class SupportedLanguage(
-    val code: String,
-    val displayName: String,
-    val openAiVoices: Map<VoiceGender, String>
-) : Parcelable {
-    SPANISH("es", "Español", mapOf(
-        VoiceGender.FEMALE to "alloy",
-        VoiceGender.MALE to "echo",
-        VoiceGender.NEUTRAL to "shimmer"
-    )),
-    ENGLISH("en", "English", mapOf(
-        VoiceGender.FEMALE to "nova",
-        VoiceGender.MALE to "onyx", 
-        VoiceGender.NEUTRAL to "shimmer"
-    )),
-    FRENCH("fr", "Français", mapOf(
-        VoiceGender.FEMALE to "alloy",
-        VoiceGender.MALE to "echo",
-        VoiceGender.NEUTRAL to "shimmer"
-    )),
-    GERMAN("de", "Deutsch", mapOf(
-        VoiceGender.FEMALE to "alloy",
-        VoiceGender.MALE to "echo",
-        VoiceGender.NEUTRAL to "shimmer"
-    )),
-    ITALIAN("it", "Italiano", mapOf(
-        VoiceGender.FEMALE to "alloy",
-        VoiceGender.MALE to "echo",
-        VoiceGender.NEUTRAL to "shimmer"
-    )),
-    PORTUGUESE("pt", "Português", mapOf(
-        VoiceGender.FEMALE to "alloy",
-        VoiceGender.MALE to "echo",
-        VoiceGender.NEUTRAL to "shimmer"
-    )),
-    RUSSIAN("ru", "Русский", mapOf(
-        VoiceGender.FEMALE to "alloy",
-        VoiceGender.MALE to "echo",
-        VoiceGender.NEUTRAL to "shimmer"
-    )),
-    CHINESE("zh", "中文", mapOf(
-        VoiceGender.FEMALE to "alloy",
-        VoiceGender.MALE to "echo",
-        VoiceGender.NEUTRAL to "shimmer"
-    )),
-    JAPANESE("ja", "日本語", mapOf(
-        VoiceGender.FEMALE to "alloy",
-        VoiceGender.MALE to "echo",
-        VoiceGender.NEUTRAL to "shimmer"
-    )),
-    KOREAN("ko", "한국어", mapOf(
-        VoiceGender.FEMALE to "alloy",
-        VoiceGender.MALE to "echo",
-        VoiceGender.NEUTRAL to "shimmer"
-    ));
-
-    fun getVoiceForGender(gender: VoiceGender): String {
-        return openAiVoices[gender] ?: openAiVoices[VoiceGender.NEUTRAL] ?: "alloy"
-    }
-
-    companion object {
-        fun fromCode(code: String): SupportedLanguage? {
-            return values().find { it.code.equals(code, ignoreCase = true) }
-        }
-    }
-}
-
-@Parcelize
-data class TranslationSession(
-    val sessionId: String,
-    val callId: String,
-    val userLanguage: String,
-    val detectedRemoteLanguage: String?,
-    val isActive: Boolean,
-    val startTime: Long,
-    val translatedMessages: Int = 0
-) : Parcelable
+//@Parcelize
+//data class TranslationConfig(
+//    val isEnabled: Boolean = false,
+//    val preferredLanguage: String = "es", // Idioma preferido del usuario
+//    val voiceGender: VoiceGender = VoiceGender.FEMALE,
+//    val openAiApiKey: String = "",
+//    val autoDetectLanguage: Boolean = true,
+//    val translationQuality: TranslationQuality = TranslationQuality.HIGH
+//) : Parcelable
+//
+//@Parcelize
+//enum class VoiceGender : Parcelable {
+//    MALE,
+//    FEMALE,
+//    NEUTRAL
+//}
+//
+//@Parcelize
+//enum class TranslationQuality : Parcelable {
+//    FAST,    // Menor latencia, calidad estándar
+//    HIGH     // Mayor latencia, mejor calidad
+//}
+//
+//@Parcelize
+//enum class SupportedLanguage(
+//    val code: String,
+//    val displayName: String,
+//    val openAiVoices: Map<VoiceGender, String>
+//) : Parcelable {
+//    SPANISH("es", "Español", mapOf(
+//        VoiceGender.FEMALE to "alloy",
+//        VoiceGender.MALE to "echo",
+//        VoiceGender.NEUTRAL to "shimmer"
+//    )),
+//    ENGLISH("en", "English", mapOf(
+//        VoiceGender.FEMALE to "nova",
+//        VoiceGender.MALE to "onyx",
+//        VoiceGender.NEUTRAL to "shimmer"
+//    )),
+//    FRENCH("fr", "Français", mapOf(
+//        VoiceGender.FEMALE to "alloy",
+//        VoiceGender.MALE to "echo",
+//        VoiceGender.NEUTRAL to "shimmer"
+//    )),
+//    GERMAN("de", "Deutsch", mapOf(
+//        VoiceGender.FEMALE to "alloy",
+//        VoiceGender.MALE to "echo",
+//        VoiceGender.NEUTRAL to "shimmer"
+//    )),
+//    ITALIAN("it", "Italiano", mapOf(
+//        VoiceGender.FEMALE to "alloy",
+//        VoiceGender.MALE to "echo",
+//        VoiceGender.NEUTRAL to "shimmer"
+//    )),
+//    PORTUGUESE("pt", "Português", mapOf(
+//        VoiceGender.FEMALE to "alloy",
+//        VoiceGender.MALE to "echo",
+//        VoiceGender.NEUTRAL to "shimmer"
+//    )),
+//    RUSSIAN("ru", "Русский", mapOf(
+//        VoiceGender.FEMALE to "alloy",
+//        VoiceGender.MALE to "echo",
+//        VoiceGender.NEUTRAL to "shimmer"
+//    )),
+//    CHINESE("zh", "中文", mapOf(
+//        VoiceGender.FEMALE to "alloy",
+//        VoiceGender.MALE to "echo",
+//        VoiceGender.NEUTRAL to "shimmer"
+//    )),
+//    JAPANESE("ja", "日本語", mapOf(
+//        VoiceGender.FEMALE to "alloy",
+//        VoiceGender.MALE to "echo",
+//        VoiceGender.NEUTRAL to "shimmer"
+//    )),
+//    KOREAN("ko", "한국어", mapOf(
+//        VoiceGender.FEMALE to "alloy",
+//        VoiceGender.MALE to "echo",
+//        VoiceGender.NEUTRAL to "shimmer"
+//    ));
+//
+//    fun getVoiceForGender(gender: VoiceGender): String {
+//        return openAiVoices[gender] ?: openAiVoices[VoiceGender.NEUTRAL] ?: "alloy"
+//    }
+//
+//    companion object {
+//        fun fromCode(code: String): SupportedLanguage? {
+//            return values().find { it.code.equals(code, ignoreCase = true) }
+//        }
+//    }
+//}
+//
+//@Parcelize
+//data class TranslationSession(
+//    val sessionId: String,
+//    val callId: String,
+//    val userLanguage: String,
+//    val detectedRemoteLanguage: String?,
+//    val isActive: Boolean,
+//    val startTime: Long,
+//    val translatedMessages: Int = 0
+//) : Parcelable
 
 @Parcelize
 data class LanguageDetectionResult(
@@ -118,10 +120,10 @@ data class LanguageDetectionResult(
     val timestamp: Long
 ) : Parcelable
 
-enum class TranslationDirection {
-    INCOMING,  // Audio del remoto traducido a mi idioma
-    OUTGOING   // Mi audio traducido al idioma del remoto
-}
+//enum class TranslationDirection {
+//    INCOMING,  // Audio del remoto traducido a mi idioma
+//    OUTGOING   // Mi audio traducido al idioma del remoto
+//}
 
 data class AudioTranslationRequest(
     val audioData: ByteArray,
