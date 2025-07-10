@@ -25,6 +25,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.encodeToString
 import org.webrtc.*
+import java.io.File
 import java.util.Base64
 
 class RealtimeTranslationManager(
@@ -39,7 +40,9 @@ class RealtimeTranslationManager(
         private const val AUDIO_CHANNEL_CONFIG = AudioFormat.CHANNEL_OUT_MONO
         private const val AUDIO_FORMAT = AudioFormat.ENCODING_PCM_16BIT
     }
-
+    private val audioRecordingManager = AudioRecordingManager(application)
+    private val _recordingConfig = MutableStateFlow(AudioRecordingConfig())
+    val recordingConfig: StateFlow<AudioRecordingConfig> = _recordingConfig.asStateFlow()
     private var openAiClient: OpenAiRealtimeClient? = null
     private val coroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
@@ -104,7 +107,7 @@ class RealtimeTranslationManager(
     /**
      * Inicia una sesión de traducción para una llamada
      */
-    suspend fun startTranslationForCall(callId: String): Boolean {
+    suspend fun startTranslationForCall(callId: String, participantName: String? = null): Boolean {
         if (!_config.value.isEnabled) {
             log.w(tag = TAG) { "Translation not enabled" }
             return false
@@ -143,6 +146,12 @@ class RealtimeTranslationManager(
 
             _translationSession.value = session
 
+            // AGREGAR: Iniciar grabación si está habilitada
+            if (_recordingConfig.value.isEnabled) {
+                audioRecordingManager.startRecording(callId, participantName)
+                log.d(tag = TAG) { "Audio recording started for call: $callId" }
+            }
+
             // Configurar interceptor de audio
             setupAudioInterception()
 
@@ -158,6 +167,7 @@ class RealtimeTranslationManager(
         }
     }
 
+
     /**
      * Detiene la sesión de traducción
      */
@@ -167,6 +177,12 @@ class RealtimeTranslationManager(
         val session = _translationSession.value
         if (session != null) {
             _translationSession.value = session.copy(isActive = false)
+
+            // AGREGAR: Detener grabación
+            if (_recordingConfig.value.isEnabled) {
+                val recordingSessionId = audioRecordingManager.stopRecording()
+                log.d(tag = TAG) { "Audio recording stopped. Session ID: $recordingSessionId" }
+            }
         }
 
         stopAudioProcessing()
@@ -176,7 +192,6 @@ class RealtimeTranslationManager(
 
         log.d(tag = TAG) { "Translation session stopped" }
     }
-
     /**
      * Actualiza el idioma detectado para una dirección
      */
@@ -366,6 +381,28 @@ class RealtimeTranslationManager(
             // Determinar la dirección y enviar el audio traducido
             val session = _translationSession.value ?: return
 
+            // AGREGAR: Guardar audio traducido si la grabación está habilitada
+            if (_recordingConfig.value.isEnabled && _recordingConfig.value.saveTranslatedAudio) {
+                val direction = determineTranslationDirection(response.sessionId)
+                val originalLanguage = when (direction) {
+                    TranslationDirection.INCOMING -> _detectedLanguages.value[TranslationDirection.INCOMING]
+                    TranslationDirection.OUTGOING -> session.userLanguage
+                }
+                val translatedLanguage = when (direction) {
+                    TranslationDirection.INCOMING -> session.userLanguage
+                    TranslationDirection.OUTGOING -> _detectedLanguages.value[TranslationDirection.INCOMING]
+                }
+
+                audioRecordingManager.saveTranslatedAudio(
+                    audioData = response.translatedAudio,
+                    direction = direction,
+                    originalLanguage = originalLanguage ?: "unknown",
+                    translatedLanguage = translatedLanguage ?: "unknown",
+                    originalText = response.originalText,
+                    translatedText = response.translatedText
+                )
+            }
+
             // Inyectar el audio traducido en el stream de WebRTC
             injectTranslatedAudio(response.translatedAudio, response.sessionId)
 
@@ -492,6 +529,16 @@ class RealtimeTranslationManager(
             // Agregar al buffer para traducción
             incomingAudioBuffer.offer(audioData)
 
+            // AGREGAR: Guardar audio original si la grabación está habilitada
+            if (_recordingConfig.value.isEnabled && _recordingConfig.value.saveOriginalAudio) {
+                val detectedLanguage = _detectedLanguages.value[TranslationDirection.INCOMING]
+                audioRecordingManager.saveOriginalAudio(
+                    audioData = audioData,
+                    direction = TranslationDirection.INCOMING,
+                    language = detectedLanguage
+                )
+            }
+
             // Si hay traducción disponible, mezclar con el original
             val translatedData = getLatestTranslatedAudio(TranslationDirection.INCOMING)
             if (translatedData != null && _config.value.mixRatio > 0f) {
@@ -519,6 +566,15 @@ class RealtimeTranslationManager(
         try {
             // Agregar al buffer para traducción
             outgoingAudioBuffer.offer(audioData)
+
+            // AGREGAR: Guardar audio original si la grabación está habilitada
+            if (_recordingConfig.value.isEnabled && _recordingConfig.value.saveOriginalAudio) {
+                audioRecordingManager.saveOriginalAudio(
+                    audioData = audioData,
+                    direction = TranslationDirection.OUTGOING,
+                    language = session.userLanguage
+                )
+            }
 
             // Retornar el audio original - la traducción se enviará por separado
             return audioData
@@ -834,10 +890,42 @@ class RealtimeTranslationManager(
     fun getSupportedLanguages(): List<SupportedLanguage> {
         return SupportedLanguage.values().toList()
     }
+    // AGREGAR: Método para configurar la grabación
+    fun configureRecording(config: AudioRecordingConfig) {
+        _recordingConfig.value = config
+        audioRecordingManager.configure(config)
+        log.d(tag = TAG) { "Recording configuration updated" }
+    }
+
+    // AGREGAR: Método para obtener conversaciones guardadas
+    fun getSavedConversations(): List<ConversationRecordingSession> {
+        return audioRecordingManager.getSavedConversations()
+    }
+
+    // AGREGAR: Método para obtener archivos de audio de una sesión
+    fun getSessionAudioFiles(sessionId: String): List<AudioFileInfo> {
+        return audioRecordingManager.getSessionAudioFiles(sessionId)
+    }
+
+    // AGREGAR: Método para eliminar una conversación
+    fun deleteConversation(sessionId: String): Boolean {
+        return audioRecordingManager.deleteConversation(sessionId)
+    }
+
+    // AGREGAR: Método para exportar una conversación
+    fun exportConversation(sessionId: String): File? {
+        return audioRecordingManager.exportConversation(sessionId)
+    }
+
+    // AGREGAR: Método para verificar si la grabación está activa
+    fun isRecordingActive(): Boolean {
+        return _recordingConfig.value.isEnabled
+    }
 
     fun dispose() {
         log.d(tag = TAG) { "Disposing RealtimeTranslationManager" }
         stopTranslationSystem()
+        audioRecordingManager.dispose()
         coroutineScope.cancel()
     }
 }
