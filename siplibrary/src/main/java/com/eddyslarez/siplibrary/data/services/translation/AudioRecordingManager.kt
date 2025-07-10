@@ -59,12 +59,6 @@ class AudioRecordingManager(
                 return false
             }
 
-            // CRÍTICO: Verificar permisos
-            if (!hasRequiredPermissions()) {
-                log.e(tag = TAG) { "Missing required permissions for recording" }
-                return false
-            }
-
             // Crear sesión de grabación
             val sessionId = generateSessionId()
             val timestamp = System.currentTimeMillis()
@@ -154,19 +148,7 @@ class AudioRecordingManager(
         log.d(tag = TAG) { "Queued translated audio: ${audioData.size} bytes, direction: $direction" }
     }
 
-    /**
-     * CORREGIDO: Verificación de permisos
-     */
-    private fun hasRequiredPermissions(): Boolean {
-        val permissions = arrayOf(
-            Manifest.permission.WRITE_EXTERNAL_STORAGE,
-            Manifest.permission.READ_EXTERNAL_STORAGE
-        )
 
-        return permissions.all { permission ->
-            ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
-        }
-    }
 
     /**
      * CORREGIDO: Creación de directorios con mejor manejo de errores
