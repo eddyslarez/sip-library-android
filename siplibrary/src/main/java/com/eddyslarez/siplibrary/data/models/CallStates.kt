@@ -10,7 +10,8 @@ import kotlinx.parcelize.Parcelize
  */
 
 @Parcelize
-enum class DetailedCallState : Parcelable {
+enum class
+CallState : Parcelable {
     // Estados iniciales
     IDLE,
     
@@ -56,8 +57,8 @@ enum class CallErrorReason : Parcelable {
 
 @Parcelize
 data class CallStateInfo(
-    val state: DetailedCallState,
-    val previousState: DetailedCallState?,
+    val state: CallState,
+    val previousState: CallState?,
     val errorReason: CallErrorReason = CallErrorReason.NONE,
     val timestamp: Long,
     val sipCode: Int? = null,
@@ -68,11 +69,11 @@ data class CallStateInfo(
     
     fun isOutgoingCall(): Boolean = direction == CallDirections.OUTGOING
     fun isIncomingCall(): Boolean = direction == CallDirections.INCOMING
-    fun isConnected(): Boolean = state == DetailedCallState.CONNECTED || state == DetailedCallState.STREAMS_RUNNING
-    fun isActive(): Boolean = state != DetailedCallState.IDLE && state != DetailedCallState.ENDED && state != DetailedCallState.ERROR
-    fun hasError(): Boolean = state == DetailedCallState.ERROR || errorReason != CallErrorReason.NONE
-    fun isOnHold(): Boolean = state == DetailedCallState.PAUSED
-    fun isTransitioning(): Boolean = state == DetailedCallState.PAUSING || state == DetailedCallState.RESUMING || state == DetailedCallState.ENDING
+    fun isConnected(): Boolean = state == CallState.CONNECTED || state == CallState.STREAMS_RUNNING
+    fun isActive(): Boolean = state != CallState.IDLE && state != CallState.ENDED && state != CallState.ERROR
+    fun hasError(): Boolean = state == CallState.ERROR || errorReason != CallErrorReason.NONE
+    fun isOnHold(): Boolean = state == CallState.PAUSED
+    fun isTransitioning(): Boolean = state == CallState.PAUSING || state == CallState.RESUMING || state == CallState.ENDING
 }
 
 /**
@@ -116,36 +117,36 @@ object SipErrorMapper {
 object CallStateTransitionValidator {
     
     private val validOutgoingTransitions = mapOf(
-        DetailedCallState.IDLE to setOf(DetailedCallState.OUTGOING_INIT),
-        DetailedCallState.OUTGOING_INIT to setOf(DetailedCallState.OUTGOING_PROGRESS, DetailedCallState.OUTGOING_RINGING, DetailedCallState.ERROR, DetailedCallState.ENDING),
-        DetailedCallState.OUTGOING_PROGRESS to setOf(DetailedCallState.OUTGOING_RINGING, DetailedCallState.CONNECTED, DetailedCallState.ERROR, DetailedCallState.ENDING),
-        DetailedCallState.OUTGOING_RINGING to setOf(DetailedCallState.CONNECTED, DetailedCallState.ERROR, DetailedCallState.ENDING),
-        DetailedCallState.CONNECTED to setOf(DetailedCallState.STREAMS_RUNNING, DetailedCallState.PAUSING, DetailedCallState.ENDING, DetailedCallState.ERROR),
-        DetailedCallState.STREAMS_RUNNING to setOf(DetailedCallState.PAUSING, DetailedCallState.ENDING, DetailedCallState.ERROR),
-        DetailedCallState.PAUSING to setOf(DetailedCallState.PAUSED, DetailedCallState.ERROR),
-        DetailedCallState.PAUSED to setOf(DetailedCallState.RESUMING, DetailedCallState.ENDING, DetailedCallState.ERROR),
-        DetailedCallState.RESUMING to setOf(DetailedCallState.STREAMS_RUNNING, DetailedCallState.ERROR),
-        DetailedCallState.ENDING to setOf(DetailedCallState.ENDED),
-        DetailedCallState.ENDED to setOf(DetailedCallState.IDLE),
-        DetailedCallState.ERROR to setOf(DetailedCallState.ENDED, DetailedCallState.IDLE)
+        CallState.IDLE to setOf(CallState.OUTGOING_INIT),
+        CallState.OUTGOING_INIT to setOf(CallState.OUTGOING_PROGRESS, CallState.OUTGOING_RINGING, CallState.ERROR, CallState.ENDING),
+        CallState.OUTGOING_PROGRESS to setOf(CallState.OUTGOING_RINGING, CallState.CONNECTED, CallState.ERROR, CallState.ENDING),
+        CallState.OUTGOING_RINGING to setOf(CallState.CONNECTED, CallState.ERROR, CallState.ENDING),
+        CallState.CONNECTED to setOf(CallState.STREAMS_RUNNING, CallState.PAUSING, CallState.ENDING, CallState.ERROR),
+        CallState.STREAMS_RUNNING to setOf(CallState.PAUSING, CallState.ENDING, CallState.ERROR),
+        CallState.PAUSING to setOf(CallState.PAUSED, CallState.ERROR),
+        CallState.PAUSED to setOf(CallState.RESUMING, CallState.ENDING, CallState.ERROR),
+        CallState.RESUMING to setOf(CallState.STREAMS_RUNNING, CallState.ERROR),
+        CallState.ENDING to setOf(CallState.ENDED),
+        CallState.ENDED to setOf(CallState.IDLE),
+        CallState.ERROR to setOf(CallState.ENDED, CallState.IDLE)
     )
     
     private val validIncomingTransitions = mapOf(
-        DetailedCallState.IDLE to setOf(DetailedCallState.INCOMING_RECEIVED),
-        DetailedCallState.INCOMING_RECEIVED to setOf(DetailedCallState.CONNECTED, DetailedCallState.ERROR, DetailedCallState.ENDING),
-        DetailedCallState.CONNECTED to setOf(DetailedCallState.STREAMS_RUNNING, DetailedCallState.PAUSING, DetailedCallState.ENDING, DetailedCallState.ERROR),
-        DetailedCallState.STREAMS_RUNNING to setOf(DetailedCallState.PAUSING, DetailedCallState.ENDING, DetailedCallState.ERROR),
-        DetailedCallState.PAUSING to setOf(DetailedCallState.PAUSED, DetailedCallState.ERROR),
-        DetailedCallState.PAUSED to setOf(DetailedCallState.RESUMING, DetailedCallState.ENDING, DetailedCallState.ERROR),
-        DetailedCallState.RESUMING to setOf(DetailedCallState.STREAMS_RUNNING, DetailedCallState.ERROR),
-        DetailedCallState.ENDING to setOf(DetailedCallState.ENDED),
-        DetailedCallState.ENDED to setOf(DetailedCallState.IDLE),
-        DetailedCallState.ERROR to setOf(DetailedCallState.ENDED, DetailedCallState.IDLE)
+        CallState.IDLE to setOf(CallState.INCOMING_RECEIVED),
+        CallState.INCOMING_RECEIVED to setOf(CallState.CONNECTED, CallState.ERROR, CallState.ENDING),
+        CallState.CONNECTED to setOf(CallState.STREAMS_RUNNING, CallState.PAUSING, CallState.ENDING, CallState.ERROR),
+        CallState.STREAMS_RUNNING to setOf(CallState.PAUSING, CallState.ENDING, CallState.ERROR),
+        CallState.PAUSING to setOf(CallState.PAUSED, CallState.ERROR),
+        CallState.PAUSED to setOf(CallState.RESUMING, CallState.ENDING, CallState.ERROR),
+        CallState.RESUMING to setOf(CallState.STREAMS_RUNNING, CallState.ERROR),
+        CallState.ENDING to setOf(CallState.ENDED),
+        CallState.ENDED to setOf(CallState.IDLE),
+        CallState.ERROR to setOf(CallState.ENDED, CallState.IDLE)
     )
     
     fun isValidTransition(
-        from: DetailedCallState,
-        to: DetailedCallState,
+        from: CallState,
+        to: CallState,
         direction: CallDirections
     ): Boolean {
         val validTransitions = if (direction == CallDirections.OUTGOING) {
@@ -158,9 +159,9 @@ object CallStateTransitionValidator {
     }
     
     fun getValidNextStates(
-        currentState: DetailedCallState,
+        currentState: CallState,
         direction: CallDirections
-    ): Set<DetailedCallState> {
+    ): Set<CallState> {
         val validTransitions = if (direction == CallDirections.OUTGOING) {
             validOutgoingTransitions
         } else {

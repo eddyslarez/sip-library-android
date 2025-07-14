@@ -7,13 +7,13 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 
-object RegistrationStateManager {
-    private val _registrationStateFlow = MutableStateFlow(RegistrationState.NONE)
-    val registrationStateFlow: StateFlow<RegistrationState> = _registrationStateFlow.asStateFlow()
-
-    fun updateCallState(newState: RegistrationState) {
-        _registrationStateFlow.value = newState
-    }
-
-    fun getCurrentRegistrationState(): RegistrationState = _registrationStateFlow.value
-}
+//object RegistrationStateManager {
+//    private val _registrationStateFlow = MutableStateFlow(RegistrationState.NONE)
+//    val registrationStateFlow: StateFlow<RegistrationState> = _registrationStateFlow.asStateFlow()
+//
+//    fun updateCallState(newState: RegistrationState) {
+//        _registrationStateFlow.value = newState
+//    }
+//
+//    fun getCurrentRegistrationState(): RegistrationState = _registrationStateFlow.value
+//}

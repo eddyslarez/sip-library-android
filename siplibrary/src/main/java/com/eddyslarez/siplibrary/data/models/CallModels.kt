@@ -10,29 +10,6 @@ import kotlinx.datetime.Clock
  * @author Eddys Larez
  */
 
-@Parcelize
-enum class CallState : Parcelable {
-    IDLE,
-    INCOMING,
-    DIALING,
-    CONNECTED,
-    PAUSED,
-    ENDED,
-    ERROR,
-    OUTGOING,
-    NONE,
-    RINGING,
-    DECLINED,
-    HOLDING,
-    CALLING,
-    FAILED,
-    CANCELLED,
-    ENDING,
-    DECLINING,
-    RESUMING,
-    ACCEPTING,
-    INITIATING,
-}
 
 @Parcelize
 enum class CallDirections : Parcelable {
