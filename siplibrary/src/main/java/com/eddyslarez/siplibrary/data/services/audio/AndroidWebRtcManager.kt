@@ -233,26 +233,37 @@ class AndroidWebRtcManager(
         try {
             log.d(tag = TAG) { "Creating answer for offer" }
 
+            // Debug del SDP entrante
+            debugSdp(offerSdp, "INCOMING_OFFER")
+
             // Create peer connection if not exists
             if (peerConnection == null) {
                 createPeerConnection()
             }
 
-            // Procesar SDP entrante para compatibilidad
-            val processedOfferSdp = processSdpForSipCompatibility(offerSdp)
-            log.d(tag = TAG) { "Processed offer SDP length: ${processedOfferSdp.length}" }
+            // Validar y procesar SDP entrante
+            if (offerSdp.isBlank()) {
+                throw IllegalArgumentException("Offer SDP cannot be blank")
+            }
 
-            // Set remote description (offer) con SDP procesado
-            setRemoteDescription(processedOfferSdp, SdpType.OFFER)
+            val processedOfferSdp = processSdpForSipCompatibility(offerSdp)
+            debugSdp(processedOfferSdp, "PROCESSED_OFFER")
+
+            // Set remote description con manejo de errores mejorado
+            try {
+                setRemoteDescription(processedOfferSdp, SdpType.OFFER)
+            } catch (e: Exception) {
+                log.e(tag = TAG) { "Failed to set remote description, trying with original SDP" }
+                setRemoteDescription(offerSdp, SdpType.OFFER)
+            }
 
             // Add local audio track
             addLocalAudioTrack()
 
-            // Configurar constraints para answer
+            // Crear answer con constraints
             val constraints = MediaConstraints().apply {
                 mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveAudio", "true"))
                 mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", "false"))
-                // Configuraciones específicas para answer
                 mandatory.add(MediaConstraints.KeyValuePair("VoiceActivityDetection", "true"))
                 optional.add(MediaConstraints.KeyValuePair("googUseRtpMUX", "true"))
             }
@@ -290,8 +301,10 @@ class AndroidWebRtcManager(
 
             log.d(tag = TAG) { "Answer created successfully" }
 
-            // Procesar SDP de respuesta para compatibilidad SIP
+            // Procesar y validar SDP de respuesta
             val processedAnswerSdp = processSdpForSipCompatibility(answer.description)
+            debugSdp(processedAnswerSdp, "FINAL_ANSWER")
+
             return@withContext processedAnswerSdp
 
         } catch (e: Exception) {
@@ -306,23 +319,49 @@ class AndroidWebRtcManager(
         try {
             log.d(tag = TAG) { "Setting remote description: $type" }
 
-            // Procesar SDP para compatibilidad antes de aplicar
+            // Validación previa del SDP
+            if (sdp.isBlank()) {
+                throw IllegalArgumentException("SDP cannot be blank")
+            }
+
+            // Procesar SDP para compatibilidad
             val processedSdp = processSdpForSipCompatibility(sdp)
             log.d(tag = TAG) { "Original SDP length: ${sdp.length}, Processed: ${processedSdp.length}" }
 
-            val sessionDescription = SessionDescription(
-                if (type == SdpType.OFFER) SessionDescription.Type.OFFER else SessionDescription.Type.ANSWER,
-                processedSdp
-            )
+            // Validación adicional después del procesamiento
+            if (processedSdp.isBlank()) {
+                throw IllegalArgumentException("Processed SDP is blank")
+            }
 
+            // Crear SessionDescription con validación
+            val sessionDescription = try {
+                SessionDescription(
+                    if (type == SdpType.OFFER) SessionDescription.Type.OFFER else SessionDescription.Type.ANSWER,
+                    processedSdp
+                )
+            } catch (e: Exception) {
+                log.e(tag = TAG) { "Error creating SessionDescription: ${e.message}" }
+                throw IllegalArgumentException("Failed to create SessionDescription: ${e.message}")
+            }
+
+            // Validar que SessionDescription no sea null
+            if (sessionDescription.description.isNullOrBlank()) {
+                throw IllegalStateException("SessionDescription created but description is null/blank")
+            }
+
+            // Intentar establecer la descripción remota
             suspendCancellableCoroutine<Unit> { continuation ->
                 peerConnection?.setRemoteDescription(object : SdpObserver {
                     override fun onSetSuccess() {
+                        log.d(tag = TAG) { "Remote description set successfully" }
                         continuation.resume(Unit, null)
                     }
 
                     override fun onSetFailure(error: String) {
-                        continuation.resumeWithException(Exception("Failed to set remote description: $error"))
+                        val detailedError = "Failed to set remote description: $error"
+                        log.e(tag = TAG) { detailedError }
+                        log.e(tag = TAG) { "SDP that failed: ${processedSdp.take(200)}..." }
+                        continuation.resumeWithException(Exception(detailedError))
                     }
 
                     override fun onCreateSuccess(sessionDescription: SessionDescription) {}
@@ -330,14 +369,42 @@ class AndroidWebRtcManager(
                 }, sessionDescription)
             }
 
-            log.d(tag = TAG) { "Remote description set successfully" }
-
         } catch (e: Exception) {
             log.e(tag = TAG) { "Error setting remote description: ${e.message}" }
             throw e
         }
     }
+    private fun debugSdp(sdp: String, label: String) {
+        try {
+            log.d(tag = TAG) { "=== SDP DEBUG: $label ===" }
+            log.d(tag = TAG) { "Length: ${sdp.length}" }
+            log.d(tag = TAG) { "Starts with: ${sdp.take(50)}" }
+            log.d(tag = TAG) { "Ends with: ${sdp.takeLast(50)}" }
 
+            val lines = sdp.split("\r\n")
+            log.d(tag = TAG) { "Line count: ${lines.size}" }
+
+            // Mostrar primeras líneas
+            lines.take(10).forEachIndexed { index, line ->
+                log.d(tag = TAG) { "Line $index: $line" }
+            }
+
+            // Verificar line endings
+            val crlfCount = sdp.count { it == '\r' }
+            val lfCount = sdp.count { it == '\n' }
+            log.d(tag = TAG) { "CRLF count: $crlfCount, LF count: $lfCount" }
+
+            // Verificar campos obligatorios
+            val requiredFields = listOf("v=", "o=", "s=", "m=")
+            requiredFields.forEach { field ->
+                val hasField = sdp.contains(field)
+                log.d(tag = TAG) { "Has $field: $hasField" }
+            }
+
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error debugging SDP: ${e.message}" }
+        }
+    }
     override suspend fun addIceCandidate(candidate: String, sdpMid: String?, sdpMLineIndex: Int?) {
         checkInitialized()
 
@@ -356,87 +423,85 @@ class AndroidWebRtcManager(
      */
     private fun processSdpForSipCompatibility(originalSdp: String): String {
         try {
+            // Validación básica del SDP
+            if (originalSdp.isBlank()) {
+                log.e(tag = TAG) { "SDP is blank" }
+                return originalSdp
+            }
+
+            // Verificar que tenga líneas básicas requeridas
+            if (!originalSdp.contains("v=") || !originalSdp.contains("o=") || !originalSdp.contains("s=")) {
+                log.e(tag = TAG) { "SDP missing required fields" }
+                return originalSdp
+            }
+
             var processedSdp = originalSdp
 
-            // 1. Agregar grupo BUNDLE si no existe y hay múltiples medios
-            if (!processedSdp.contains("a=group:BUNDLE") && processedSdp.contains("m=audio")) {
-                val mediaLines = mutableListOf<String>()
-                val lines = processedSdp.split("\r\n")
+            // Normalizar line endings PRIMERO
+            processedSdp = processedSdp.replace("\r\n", "\n")
+                .replace("\r", "\n")
+                .replace("\n", "\r\n")
 
-                lines.forEach { line ->
-                    if (line.startsWith("m=")) {
-                        // Extraer el identificador del medio (generalmente el primer token después de m=)
-                        val parts = line.split(" ")
-                        if (parts.size > 0) {
-                            val mediaType = parts[0].substring(2) // Remover "m="
-                            mediaLines.add(mediaType)
-                        }
-                    }
-                }
-
-                if (mediaLines.isNotEmpty()) {
-                    // Insertar línea BUNDLE después de la línea v=
-                    val versionIndex = processedSdp.indexOf("v=0")
-                    if (versionIndex != -1) {
-                        val insertIndex = processedSdp.indexOf("\r\n", versionIndex) + 2
-                        val bundleLine = "a=group:BUNDLE ${mediaLines.joinToString(" ")}\r\n"
-                        processedSdp = processedSdp.substring(0, insertIndex) +
-                                bundleLine +
-                                processedSdp.substring(insertIndex)
-                    }
-                }
-            }
-
-            // 2. Asegurar que hay mid attributes para cada medio
+            // Validar que cada línea termine correctamente
             val lines = processedSdp.split("\r\n").toMutableList()
-            var currentMediaIndex = -1
-            var mediaCount = 0
 
-            for (i in lines.indices) {
-                val line = lines[i]
+            // Remover líneas vacías
+            lines.removeAll { it.isBlank() }
 
-                if (line.startsWith("m=")) {
-                    currentMediaIndex = i
-                    mediaCount++
-
-                    // Buscar si ya existe a=mid después de esta línea m=
-                    var hasMid = false
-                    for (j in (i + 1) until lines.size) {
-                        if (lines[j].startsWith("m=")) break
-                        if (lines[j].startsWith("a=mid:")) {
-                            hasMid = true
-                            break
-                        }
-                    }
-
-                    // Si no tiene mid, agregarlo
-                    if (!hasMid) {
-                        val mediaType = if (line.startsWith("m=audio")) "audio" else "video"
-                        val midLine = "a=mid:$mediaType$mediaCount"
-                        lines.add(i + 1, midLine)
-                    }
-                }
+            // Validar formato de cada línea
+            val validLines = lines.filter { line ->
+                if (line.length < 2) return@filter false
+                val prefix = line.substring(0, 2)
+                prefix.matches(Regex("[a-z]=")) && line.contains("=")
             }
 
-            processedSdp = lines.joinToString("\r\n")
+            if (validLines.size != lines.size) {
+                log.w(tag = TAG) { "Removed ${lines.size - validLines.size} invalid SDP lines" }
+            }
 
-            // 3. Limpiar líneas duplicadas o problemáticas
-            processedSdp = processedSdp.replace(Regex("a=group:BUNDLE.*\r\na=group:BUNDLE.*\r\n"),
-                processedSdp.substringAfter("a=group:BUNDLE").substringBefore("\r\n").let {
-                    "a=group:BUNDLE$it\r\n"
-                })
+            // Reconstruir SDP con líneas válidas
+            processedSdp = validLines.joinToString("\r\n")
 
-            // 4. Asegurar formato correcto de líneas
-            processedSdp = processedSdp.replace("\n", "\r\n")
-                .replace("\r\r\n", "\r\n")
+            // Asegurar que termine con CRLF
+            if (!processedSdp.endsWith("\r\n")) {
+                processedSdp += "\r\n"
+            }
+
+            // Validar estructura básica después del procesamiento
+            if (!validateSdpStructure(processedSdp)) {
+                log.e(tag = TAG) { "Processed SDP has invalid structure" }
+                return originalSdp
+            }
 
             log.d(tag = TAG) { "SDP processing completed successfully" }
             return processedSdp
 
         } catch (e: Exception) {
             log.e(tag = TAG) { "Error processing SDP: ${e.message}" }
-            // En caso de error, devolver el SDP original
             return originalSdp
+        }
+    }
+    private fun validateSdpStructure(sdp: String): Boolean {
+        try {
+            val lines = sdp.split("\r\n")
+
+            // Verificar líneas obligatorias en orden
+            val requiredOrder = listOf("v=", "o=", "s=")
+            var currentIndex = 0
+
+            for (line in lines) {
+                if (line.isBlank()) continue
+
+                if (currentIndex < requiredOrder.size && line.startsWith(requiredOrder[currentIndex])) {
+                    currentIndex++
+                }
+            }
+
+            return currentIndex == requiredOrder.size
+
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error validating SDP structure: ${e.message}" }
+            return false
         }
     }
 
@@ -822,19 +887,15 @@ class AndroidWebRtcManager(
         try {
             log.d(tag = TAG) { "Creating peer connection" }
 
-            // Configuración más flexible para compatibilidad SIP
             val iceServers = listOf(
                 PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer()
             )
 
             val rtcConfig = PeerConnection.RTCConfiguration(iceServers).apply {
-                // Cambiar a BALANCED para mejor compatibilidad con SIP
                 bundlePolicy = PeerConnection.BundlePolicy.BALANCED
                 rtcpMuxPolicy = PeerConnection.RtcpMuxPolicy.REQUIRE
-                // Permitir TCP para mejor compatibilidad
                 tcpCandidatePolicy = PeerConnection.TcpCandidatePolicy.ENABLED
                 continualGatheringPolicy = PeerConnection.ContinualGatheringPolicy.GATHER_CONTINUALLY
-                // Configuraciones adicionales para SIP
                 iceConnectionReceivingTimeout = 30000
                 iceBackupCandidatePairPingInterval = 25000
                 keyType = PeerConnection.KeyType.ECDSA
@@ -846,21 +907,13 @@ class AndroidWebRtcManager(
                 object : PeerConnection.Observer {
                     override fun onIceCandidate(iceCandidate: IceCandidate) {
                         try {
-                            // Agregar a nuestro tracking
                             activeCandidates.add(iceCandidate)
-
-                            // Notificar al listener
                             listener?.onIceCandidate(
                                 iceCandidate.sdp,
                                 iceCandidate.sdpMid,
                                 iceCandidate.sdpMLineIndex
                             )
-
-                            log.d(tag = TAG) {
-                                "New ICE candidate: ${iceCandidate.sdp.take(50)}... " +
-                                        "(Total active: ${activeCandidates.size})"
-                            }
-
+                            log.d(tag = TAG) { "New ICE candidate: ${iceCandidate.sdp.take(50)}..." }
                         } catch (e: Exception) {
                             log.e(tag = TAG) { "Error handling ICE candidate: ${e.message}" }
                         }
@@ -868,59 +921,46 @@ class AndroidWebRtcManager(
 
                     override fun onIceCandidatesRemoved(candidates: Array<out IceCandidate?>?) {
                         try {
-                            log.d(tag = TAG) { "ICE candidates removed: ${candidates?.size ?: 0}" }
-
-                            // Filtrar candidatos nulos y procesar los válidos
                             val validCandidates = candidates?.filterNotNull() ?: emptyList()
-
                             if (validCandidates.isNotEmpty()) {
-                                // Remover de nuestro tracking local
                                 activeCandidates.removeAll(validCandidates.toSet())
-
-                                // Notificar al listener sobre los candidatos removidos
                                 listener?.onIceCandidatesRemoved(validCandidates)
-
-                                // Log detallado para debugging
-                                validCandidates.forEach { candidate ->
-                                    log.d(tag = TAG) {
-                                        "Removed ICE candidate: ${candidate.sdp.take(50)}... " +
-                                                "(MID: ${candidate.sdpMid}, MLineIndex: ${candidate.sdpMLineIndex})"
-                                    }
-                                }
-
-                                // Opcional: Si quedan pocos candidatos, podrías triggerar una nueva gathering
-                                if (activeCandidates.size < 2) {
-                                    log.w(tag = TAG) { "Low ICE candidate count after removal: ${activeCandidates.size}" }
-                                    // Aquí podrías implementar lógica adicional si es necesario
-                                }
                             }
-
                         } catch (e: Exception) {
                             log.e(tag = TAG) { "Error handling removed ICE candidates: ${e.message}" }
-                            listener?.onError("Failed to process removed ICE candidates: ${e.message}")
+                            // NO llamar a listener?.onError aquí para evitar crashes
                         }
                     }
 
                     override fun onConnectionChange(newState: PeerConnection.PeerConnectionState) {
-                        connectionState = when (newState) {
-                            PeerConnection.PeerConnectionState.NEW -> WebRtcConnectionState.NEW
-                            PeerConnection.PeerConnectionState.CONNECTING -> WebRtcConnectionState.CONNECTING
-                            PeerConnection.PeerConnectionState.CONNECTED -> WebRtcConnectionState.CONNECTED
-                            PeerConnection.PeerConnectionState.DISCONNECTED -> WebRtcConnectionState.DISCONNECTED
-                            PeerConnection.PeerConnectionState.FAILED -> WebRtcConnectionState.FAILED
-                            PeerConnection.PeerConnectionState.CLOSED -> WebRtcConnectionState.CLOSED
+                        try {
+                            connectionState = when (newState) {
+                                PeerConnection.PeerConnectionState.NEW -> WebRtcConnectionState.NEW
+                                PeerConnection.PeerConnectionState.CONNECTING -> WebRtcConnectionState.CONNECTING
+                                PeerConnection.PeerConnectionState.CONNECTED -> WebRtcConnectionState.CONNECTED
+                                PeerConnection.PeerConnectionState.DISCONNECTED -> WebRtcConnectionState.DISCONNECTED
+                                PeerConnection.PeerConnectionState.FAILED -> WebRtcConnectionState.FAILED
+                                PeerConnection.PeerConnectionState.CLOSED -> WebRtcConnectionState.CLOSED
+                            }
+                            listener?.onConnectionStateChange(connectionState)
+                        } catch (e: Exception) {
+                            log.e(tag = TAG) { "Error handling connection state change: ${e.message}" }
                         }
-                        listener?.onConnectionStateChange(connectionState)
                     }
 
                     override fun onAddTrack(rtpReceiver: RtpReceiver, mediaStreams: Array<out MediaStream>) {
-                        val track = rtpReceiver.track()
-                        if (track is AudioTrack) {
-                            remoteAudioTrack = track
-                            listener?.onRemoteAudioTrack()
+                        try {
+                            val track = rtpReceiver.track()
+                            if (track is AudioTrack) {
+                                remoteAudioTrack = track
+                                listener?.onRemoteAudioTrack()
+                            }
+                        } catch (e: Exception) {
+                            log.e(tag = TAG) { "Error handling added track: ${e.message}" }
                         }
                     }
 
+                    // Implementar otros métodos con manejo de errores...
                     override fun onSignalingChange(signalingState: PeerConnection.SignalingState) {}
                     override fun onIceConnectionChange(iceConnectionState: PeerConnection.IceConnectionState) {}
                     override fun onIceConnectionReceivingChange(receiving: Boolean) {}
