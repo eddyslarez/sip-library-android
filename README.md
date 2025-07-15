@@ -140,22 +140,22 @@ class MainActivity : ComponentActivity() {
             
             override fun onCallStateChanged(stateInfo: CallStateInfo) {
                 when (stateInfo.state) {
-                    DetailedCallState.INCOMING_RECEIVED -> {
+                    CallState.INCOMING_RECEIVED -> {
                         showMessage("📞 Llamada entrante")
                         showIncomingCallUI()
                     }
-                    DetailedCallState.OUTGOING_RINGING -> {
+                    CallState.OUTGOING_RINGING -> {
                         showMessage("📱 Sonando...")
                     }
-                    DetailedCallState.STREAMS_RUNNING -> {
+                    CallState.STREAMS_RUNNING -> {
                         showMessage("🟢 Llamada conectada")
                         showInCallUI()
                     }
-                    DetailedCallState.ENDED -> {
+                    CallState.ENDED -> {
                         showMessage("📴 Llamada terminada")
                         showMainUI()
                     }
-                    DetailedCallState.ERROR -> {
+                    CallState.ERROR -> {
                         val error = SipErrorMapper.getErrorDescription(stateInfo.errorReason)
                         showMessage("❌ Error: $error")
                     }
@@ -286,7 +286,7 @@ class SipViewModel : ViewModel() {
     val callState: StateFlow<CallStateInfo> = sipLibrary.getCallStateFlow()
         .stateIn(viewModelScope, SharingStarted.Eagerly, 
             CallStateInfo(
-                state = DetailedCallState.IDLE,
+                state = CallState.IDLE,
                 previousState = null,
                 timestamp = System.currentTimeMillis()
             )
@@ -302,8 +302,8 @@ class SipViewModel : ViewModel() {
         viewModelScope.launch {
             callState.collect { stateInfo ->
                 when (stateInfo.state) {
-                    DetailedCallState.STREAMS_RUNNING -> startCallTimer()
-                    DetailedCallState.ENDED -> stopCallTimer()
+                    CallState.STREAMS_RUNNING -> startCallTimer()
+                    CallState.ENDED -> stopCallTimer()
                     else -> {}
                 }
             }
@@ -324,20 +324,20 @@ fun CallScreen(viewModel: SipViewModel) {
         // Estado de la llamada
         CallStatusCard(
             state = callState.state,
-            duration = if (callState.state == DetailedCallState.STREAMS_RUNNING) 
+            duration = if (callState.state == CallState.STREAMS_RUNNING) 
                 calculateDuration() else 0,
             hasError = callState.hasError()
         )
         
         // Controles según el estado
         when (callState.state) {
-            DetailedCallState.INCOMING_RECEIVED -> {
+            CallState.INCOMING_RECEIVED -> {
                 IncomingCallControls(
                     onAccept = { viewModel.acceptCall() },
                     onDecline = { viewModel.declineCall() }
                 )
             }
-            DetailedCallState.STREAMS_RUNNING -> {
+            CallState.STREAMS_RUNNING -> {
                 ActiveCallControls(
                     onMute = { viewModel.toggleMute() },
                     onHold = { viewModel.holdCall() },
@@ -527,26 +527,26 @@ sipLibrary.makeCall(
 sipLibrary.addSipEventListener(object : EddysSipLibrary.SipEventListener {
     override fun onCallStateChanged(stateInfo: CallStateInfo) {
         when (stateInfo.state) {
-            DetailedCallState.OUTGOING_INIT -> showStatus("Iniciando llamada...")
-            DetailedCallState.OUTGOING_PROGRESS -> showStatus("Estableciendo conexión...")
-            DetailedCallState.OUTGOING_RINGING -> {
+            CallState.OUTGOING_INIT -> showStatus("Iniciando llamada...")
+            CallState.OUTGOING_PROGRESS -> showStatus("Estableciendo conexión...")
+            CallState.OUTGOING_RINGING -> {
                 showStatus("Sonando...")
                 startRingbackTone()
             }
-            DetailedCallState.CONNECTED -> showStatus("Conectando audio...")
-            DetailedCallState.STREAMS_RUNNING -> {
+            CallState.CONNECTED -> showStatus("Conectando audio...")
+            CallState.STREAMS_RUNNING -> {
                 showStatus("En llamada")
                 startCallTimer()
             }
-            DetailedCallState.PAUSING -> showStatus("Pausando...")
-            DetailedCallState.PAUSED -> showStatus("En espera")
-            DetailedCallState.RESUMING -> showStatus("Reanudando...")
-            DetailedCallState.ENDING -> showStatus("Finalizando...")
-            DetailedCallState.ENDED -> {
+            CallState.PAUSING -> showStatus("Pausando...")
+            CallState.PAUSED -> showStatus("En espera")
+            CallState.RESUMING -> showStatus("Reanudando...")
+            CallState.ENDING -> showStatus("Finalizando...")
+            CallState.ENDED -> {
                 showStatus("Llamada terminada")
                 stopCallTimer()
             }
-            DetailedCallState.ERROR -> {
+            CallState.ERROR -> {
                 val errorMsg = SipErrorMapper.getErrorDescription(stateInfo.errorReason)
                 showError("Error: $errorMsg")
                 

@@ -1,14 +1,24 @@
 package com.eddyslarez.siplibrary.data.services.translation
 
+import android.Manifest
 import android.media.AudioFormat
+import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.AudioTrack
 import android.media.MediaRecorder
+import androidx.annotation.RequiresPermission
 import com.eddyslarez.siplibrary.utils.log
-import kotlinx.coroutines.*
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable.isActive
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
@@ -50,6 +60,7 @@ class TranslationAudioProcessor {
     /**
      * Inicializar el procesador de audio
      */
+    @RequiresPermission(Manifest.permission.RECORD_AUDIO)
     fun initialize() {
         try {
             val bufferSize = AudioRecord.getMinBufferSize(
@@ -73,7 +84,7 @@ class TranslationAudioProcessor {
             ) * BUFFER_SIZE_FACTOR
             
             audioTrack = AudioTrack(
-                android.media.AudioManager.STREAM_VOICE_CALL,
+                AudioManager.STREAM_VOICE_CALL,
                 SAMPLE_RATE,
                 AudioFormat.CHANNEL_OUT_MONO,
                 AUDIO_FORMAT,

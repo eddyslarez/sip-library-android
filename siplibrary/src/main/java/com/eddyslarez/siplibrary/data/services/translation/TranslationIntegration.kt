@@ -1,6 +1,8 @@
 package com.eddyslarez.siplibrary.data.services.translation
 
+import android.Manifest
 import android.app.Application
+import androidx.annotation.RequiresPermission
 import com.eddyslarez.siplibrary.data.models.AccountInfo
 import com.eddyslarez.siplibrary.data.models.CallData
 import com.eddyslarez.siplibrary.data.models.CallDirections
@@ -43,6 +45,7 @@ class TranslationIntegration(
     /**
      * Inicializar la integración de traducción
      */
+    @RequiresPermission(Manifest.permission.RECORD_AUDIO)
     fun initialize(openAiApiKey: String, defaultLanguage: String = "es") {
         this.openAiApiKey = openAiApiKey
         this.localLanguage = defaultLanguage

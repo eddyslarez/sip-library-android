@@ -26,7 +26,7 @@ class RealtimeTranslationManager(
     companion object {
         private const val TAG = "RealtimeTranslationManager"
         private const val OPENAI_REALTIME_WS_URL = "wss://api.openai.com/v1/realtime"
-        private const val MODEL = "gpt-4o-realtime-preview-2024-12-17"
+        private const val MODEL = "gpt-4o-realtime-preview-2025-06-03"
     }
 
     private var webSocketClient: WebSocketClient? = null
