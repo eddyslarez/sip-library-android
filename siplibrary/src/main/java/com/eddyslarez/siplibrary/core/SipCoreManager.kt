@@ -1,8 +1,10 @@
 package com.eddyslarez.siplibrary.core
 
+import android.annotation.SuppressLint
 import android.app.Application
 import com.eddyslarez.siplibrary.EddysSipLibrary
 import com.eddyslarez.siplibrary.data.models.*
+import com.eddyslarez.siplibrary.data.services.audio.AndroidWebRtcManager
 import com.eddyslarez.siplibrary.data.services.audio.AudioDevice
 import com.eddyslarez.siplibrary.data.services.audio.AudioDeviceManager
 import com.eddyslarez.siplibrary.data.services.audio.CallHoldManager
@@ -11,6 +13,7 @@ import com.eddyslarez.siplibrary.data.services.audio.WebRtcConnectionState
 import com.eddyslarez.siplibrary.data.services.audio.WebRtcEventListener
 import com.eddyslarez.siplibrary.data.services.audio.WebRtcManagerFactory
 import com.eddyslarez.siplibrary.data.services.sip.SipMessageHandler
+import com.eddyslarez.siplibrary.data.services.translation.TranslationIntegration
 import com.eddyslarez.siplibrary.data.services.websocket.MultiplatformWebSocket
 import com.eddyslarez.siplibrary.data.services.websocket.WebSocket
 import com.eddyslarez.siplibrary.data.store.SettingsDataStore
@@ -47,7 +50,8 @@ class SipCoreManager private constructor(
     private var sipCallbacks: EddysSipLibrary.SipCallbacks? = null
     private var isShuttingDown = false
     val callHistoryManager = CallHistoryManager()
-
+    var translationIntegration: TranslationIntegration? = null
+        private set
     // Estados de registro por cuenta
     private val _registrationStates = MutableStateFlow<Map<String, RegistrationState>>(emptyMap())
     val registrationStatesFlow: StateFlow<Map<String, RegistrationState>> = _registrationStates.asStateFlow()
@@ -102,6 +106,7 @@ class SipCoreManager private constructor(
 
     fun getCurrentUsername(): String? = currentAccountInfo?.username
 
+    @SuppressLint("MissingPermission")
     fun initialize() {
         log.d(tag = TAG) { "Initializing SIP Core with optimized call states" }
 
@@ -112,6 +117,14 @@ class SipCoreManager private constructor(
 
         // Inicializar gestor de estados
         CallStateManager.resetToIdle()
+
+        // Inicializar traducción si está habilitada
+        if (config.enableTranslation && config.openAiApiKey != null) {
+            translationIntegration = TranslationIntegration(application)
+            val androidWebRtcManager = webRtcManager as? AndroidWebRtcManager
+            translationIntegration?.initialize(config.openAiApiKey, config.defaultLanguage, androidWebRtcManager)
+            log.d(tag = TAG) { "Translation integration initialized" }
+        }
     }
 
     internal fun setCallbacks(callbacks: EddysSipLibrary.SipCallbacks) {

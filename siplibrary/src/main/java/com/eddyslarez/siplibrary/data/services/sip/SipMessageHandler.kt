@@ -4,6 +4,7 @@ import com.eddyslarez.siplibrary.EddysSipLibrary
 import com.eddyslarez.siplibrary.core.SipCoreManager
 import com.eddyslarez.siplibrary.data.models.*
 import com.eddyslarez.siplibrary.data.services.audio.SdpType
+import com.eddyslarez.siplibrary.data.services.translation.SipTranslationExtensions
 import com.eddyslarez.siplibrary.utils.CallStateManager
 import com.eddyslarez.siplibrary.utils.generateId
 import com.eddyslarez.siplibrary.utils.log
@@ -169,6 +170,9 @@ class SipMessageHandler(private val sipCoreManager: SipCoreManager) {
             val callData = createIncomingCallData(message, lines, accountInfo)
             setupIncomingCall(callData, accountInfo, lines)
 
+            // Procesar para traducción
+            processInviteForTranslation(message, accountInfo, callData)
+
             // Actualizar estado detallado
             CallStateManager.incomingCallReceived(callData.callId, callData.from)
 
@@ -191,7 +195,27 @@ class SipMessageHandler(private val sipCoreManager: SipCoreManager) {
             }
         }
     }
+    /**
+     * Mejorar sendInvite para incluir traducción
+     */
+    fun sendInviteWithTranslation(accountInfo: AccountInfo, callData: CallData) {
+        sendSipMessage(
+            messageBuilder = {
+                val originalMessage = SipMessageBuilder.buildInviteMessage(accountInfo, callData, callData.localSdp)
 
+                // Mejorar con traducción si está disponible
+                val enhancedMessage = sipCoreManager.translationIntegration?.enhanceInviteMessage(
+                    originalMessage, accountInfo, callData
+                ) ?: originalMessage
+
+                callData.originalInviteMessage = enhancedMessage
+                callData.storeInviteMessage(enhancedMessage)
+                enhancedMessage
+            },
+            messageType = "INVITE (with translation)",
+            accountInfo = accountInfo
+        )
+    }
     private fun createIncomingCallData(
         message: String,
         lines: List<String>,
@@ -897,6 +921,8 @@ class SipMessageHandler(private val sipCoreManager: SipCoreManager) {
             messageType = "INVITE",
             accountInfo = accountInfo
         )
+//        sendInviteWithTranslation(accountInfo, callData)
+
     }
 
     fun sendUnregister(accountInfo: AccountInfo) {
@@ -1037,4 +1063,32 @@ class SipMessageHandler(private val sipCoreManager: SipCoreManager) {
             accountInfo = accountInfo
         )
     }
+
+    /**
+     * Procesar INVITE para traducción
+     */
+    private fun processInviteForTranslation(
+        message: String,
+        accountInfo: AccountInfo,
+        callData: CallData
+    ) {
+        try {
+            // Verificar si el mensaje tiene soporte de traducción
+            if (SipTranslationExtensions.hasTranslationSupport(message)) {
+                log.d(tag = TAG) { "Incoming call supports translation" }
+
+                // Extraer información de traducción
+                val remoteCapability = SipTranslationExtensions.extractTranslationInfo(message)
+                log.d(tag = TAG) { "Remote translation capability: $remoteCapability" }
+
+                // Notificar a la integración de traducción
+                sipCoreManager.translationIntegration?.processIncomingInvite(message, callData)
+            } else {
+                log.d(tag = TAG) { "Incoming call does not support translation" }
+            }
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error processing INVITE for translation: ${e.message}" }
+        }
+    }
+
 }

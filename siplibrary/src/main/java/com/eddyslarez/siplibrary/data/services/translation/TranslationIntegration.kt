@@ -25,7 +25,7 @@ class TranslationIntegration(
         private const val TAG = "TranslationIntegration"
     }
 
-    private val realtimeTranslationManager = RealtimeTranslationManager(application)
+    internal val realtimeTranslationManager = RealtimeTranslationManager(application)
     private val audioProcessor = TranslationAudioProcessor()
 
     // Referencia al WebRTC manager para integración de audio

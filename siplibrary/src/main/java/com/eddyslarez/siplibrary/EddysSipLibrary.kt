@@ -187,7 +187,7 @@ class EddysSipLibrary private constructor() {
         }
 
         try {
-            log.d(tag = TAG) { "Initializing EddysSipLibrary v1.5.0 Optimized by Eddys Larez" }
+            log.d(tag = TAG) { "Initializing EddysSipLibrary v1.5.0 with Translation Support" }
 
             this.config = config
             sipCoreManager = SipCoreManager.createInstance(application, config)
@@ -196,14 +196,11 @@ class EddysSipLibrary private constructor() {
             // Configurar listeners internos
             setupInternalListeners()
 
-            // Inicializar traducción si está habilitada
-            if (config.enableTranslation && config.openAiApiKey != null) {
-                translationIntegration = TranslationIntegration(application)
-
-                // Obtener referencia al WebRTC manager para integración
-                val webRtcManager = sipCoreManager?.webRtcManager as? AndroidWebRtcManager
-                translationIntegration?.initialize(config.openAiApiKey, config.defaultLanguage, webRtcManager)
+            // La integración de traducción ya se inicializa en SipCoreManager
+            translationIntegration = sipCoreManager?.translationIntegration
+            if (translationIntegration != null) {
                 setupTranslationCallbacks()
+                log.d(tag = TAG) { "Translation integration configured" }
             }
 
             isInitialized = true
@@ -348,6 +345,7 @@ class EddysSipLibrary private constructor() {
             }
         }
     }
+
 
     // === MÉTODOS DE NOTIFICACIÓN INTERNA ===
 
@@ -677,16 +675,43 @@ class EddysSipLibrary private constructor() {
         translationIntegration?.setTranslationEnabled(enabled)
         log.d(tag = TAG) { "Translation ${if (enabled) "enabled" else "disabled"}" }
     }
+    /**
+     * Configurar modo de prueba para traducción al ruso
+     */
+    fun enableRussianTranslationTest() {
+        checkInitialized()
 
+        translationIntegration?.let { integration ->
+            // Habilitar traducción
+            integration.setTranslationEnabled(true)
+
+            // Configurar el gestor de traducción en tiempo real para modo prueba
+            integration.realtimeTranslationManager.setTestMode(true, "ru")
+
+            log.d(tag = TAG) { "Russian translation test mode enabled" }
+        } ?: run {
+            log.w(tag = TAG) { "Translation not available - not initialized or API key missing" }
+        }
+    }
+
+    /**
+     * Deshabilitar modo de prueba
+     */
+    fun disableTranslationTest() {
+        checkInitialized()
+
+        translationIntegration?.let { integration ->
+            integration.realtimeTranslationManager.setTestMode(false)
+            log.d(tag = TAG) { "Translation test mode disabled" }
+        }
+    }
     /**
      * Verificar si la traducción está disponible para la llamada actual
      */
     fun isTranslationAvailable(): Boolean {
         checkInitialized()
-        val callInfo = getCurrentCallInfo() ?: return false
-        return translationIntegration?.isTranslationAvailableForCall(
-            sipCoreManager?.currentAccountInfo?.currentCallData ?: return false
-        ) ?: false
+        val callData = sipCoreManager?.currentAccountInfo?.currentCallData ?: return false
+        return translationIntegration?.isTranslationAvailableForCall(callData) ?: false
     }
 
     /**
@@ -724,6 +749,8 @@ class EddysSipLibrary private constructor() {
         checkInitialized()
         return translationIntegration?.isTranslationActive?.value ?: false
     }
+
+
 
     /**
      * Obtener diagnóstico de traducción
@@ -929,6 +956,9 @@ class EddysSipLibrary private constructor() {
         sipCoreManager?.enterPushMode(token)
     }
 
+    /**
+     * Obtener reporte de salud del sistema incluyendo traducción
+     */
     fun getSystemHealthReport(): String {
         checkInitialized()
         return buildString {
