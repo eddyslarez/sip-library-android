@@ -5,6 +5,8 @@ import android.content.Context
 import com.eddyslarez.siplibrary.core.SipCoreManager
 import com.eddyslarez.siplibrary.data.models.*
 import com.eddyslarez.siplibrary.data.services.audio.AudioDevice
+import com.eddyslarez.siplibrary.data.services.translation.TranslationIntegration
+import com.eddyslarez.siplibrary.data.services.translation.CallTranslationInfo
 import com.eddyslarez.siplibrary.utils.CallStateManager
 import com.eddyslarez.siplibrary.utils.RegistrationStateManager
 import com.eddyslarez.siplibrary.utils.log
@@ -30,6 +32,10 @@ class EddysSipLibrary private constructor() {
     private var registrationListener: RegistrationListener? = null
     private var callListener: CallListener? = null
     private var incomingCallListener: IncomingCallListener? = null
+    private var translationListener: TranslationListener? = null
+    
+    // Translation integration
+    private var translationIntegration: TranslationIntegration? = null
 
     companion object {
         @Volatile
@@ -49,7 +55,11 @@ class EddysSipLibrary private constructor() {
         val userAgent: String = "",
         val enableLogs: Boolean = true,
         val enableAutoReconnect: Boolean = true,
-        val pingIntervalMs: Long = 30000L
+        val pingIntervalMs: Long = 30000L,
+        // Translation settings
+        val enableTranslation: Boolean = false,
+        val openAiApiKey: String? = null,
+        val defaultLanguage: String = "es"
     )
 
     /**
@@ -65,6 +75,8 @@ class EddysSipLibrary private constructor() {
         fun onDtmfReceived(digit: Char, callInfo: CallInfo) {}
         fun onAudioDeviceChanged(device: AudioDevice) {}
         fun onNetworkStateChanged(isConnected: Boolean) {}
+        fun onTranslationStatusChanged(isActive: Boolean, error: String?) {}
+        fun onTranslationLanguagesDetected(localLanguage: String, remoteLanguage: String) {}
     }
 
     /**
@@ -99,6 +111,16 @@ class EddysSipLibrary private constructor() {
         fun onIncomingCall(callInfo: IncomingCallInfo)
         fun onIncomingCallCancelled(callInfo: IncomingCallInfo)
         fun onIncomingCallTimeout(callInfo: IncomingCallInfo)
+    }
+    
+    /**
+     * Listener específico para eventos de traducción
+     */
+    interface TranslationListener {
+        fun onTranslationEnabled(callInfo: CallInfo, localLanguage: String, remoteLanguage: String)
+        fun onTranslationDisabled(callInfo: CallInfo)
+        fun onTranslationError(error: String, callInfo: CallInfo?)
+        fun onLanguageDetected(language: String, isRemote: Boolean)
     }
 
     /**
@@ -170,6 +192,13 @@ class EddysSipLibrary private constructor() {
 
             // Configurar listeners internos
             setupInternalListeners()
+            
+            // Inicializar traducción si está habilitada
+            if (config.enableTranslation && config.openAiApiKey != null) {
+                translationIntegration = TranslationIntegration(application)
+                translationIntegration?.initialize(config.openAiApiKey, config.defaultLanguage)
+                setupTranslationCallbacks()
+            }
 
             isInitialized = true
             log.d(tag = TAG) { "EddysSipLibrary initialized successfully" }
@@ -284,6 +313,34 @@ class EddysSipLibrary private constructor() {
     fun setIncomingCallListener(listener: IncomingCallListener?) {
         this.incomingCallListener = listener
         log.d(tag = TAG) { "IncomingCallListener configured" }
+    }
+    
+    /**
+     * Configura un listener específico para traducción
+     */
+    fun setTranslationListener(listener: TranslationListener?) {
+        this.translationListener = listener
+        log.d(tag = TAG) { "TranslationListener configured" }
+    }
+    
+    /**
+     * Configurar callbacks de traducción
+     */
+    private fun setupTranslationCallbacks() {
+        translationIntegration?.setTranslationStatusCallback { isActive, error ->
+            listeners.forEach { listener ->
+                try {
+                    listener.onTranslationStatusChanged(isActive, error)
+                } catch (e: Exception) {
+                    log.e(tag = TAG) { "Error in translation status callback: ${e.message}" }
+                }
+            }
+            
+            if (error != null) {
+                val callInfo = getCurrentCallInfo()
+                translationListener?.onTranslationError(error, callInfo)
+            }
+        }
     }
 
     // === MÉTODOS DE NOTIFICACIÓN INTERNA ===
@@ -594,6 +651,53 @@ class EddysSipLibrary private constructor() {
         checkInitialized()
         return sipCoreManager?.getAllRegistrationStates() ?: emptyMap()
     }
+    
+    // === MÉTODOS DE TRADUCCIÓN ===
+    
+    /**
+     * Configurar idioma local para traducción
+     */
+    fun setTranslationLanguage(language: String) {
+        checkInitialized()
+        translationIntegration?.setLocalLanguage(language)
+        log.d(tag = TAG) { "Translation language set to: $language" }
+    }
+    
+    /**
+     * Habilitar/deshabilitar traducción
+     */
+    fun setTranslationEnabled(enabled: Boolean) {
+        checkInitialized()
+        translationIntegration?.setTranslationEnabled(enabled)
+        log.d(tag = TAG) { "Translation ${if (enabled) "enabled" else "disabled"}" }
+    }
+    
+    /**
+     * Verificar si la traducción está disponible para la llamada actual
+     */
+    fun isTranslationAvailable(): Boolean {
+        checkInitialized()
+        val callInfo = getCurrentCallInfo() ?: return false
+        return translationIntegration?.isTranslationAvailableForCall(
+            sipCoreManager?.currentAccountInfo?.currentCallData ?: return false
+        ) ?: false
+    }
+    
+    /**
+     * Obtener información de traducción de la llamada actual
+     */
+    fun getCurrentTranslationInfo(): CallTranslationInfo? {
+        checkInitialized()
+        return translationIntegration?.currentCallTranslationInfo?.value
+    }
+    
+    /**
+     * Verificar si la traducción está activa
+     */
+    fun isTranslationActive(): Boolean {
+        checkInitialized()
+        return translationIntegration?.isTranslationActive?.value ?: false
+    }
 
     /**
      * Flow para observar estados de registro de todas las cuentas
@@ -839,12 +943,15 @@ class EddysSipLibrary private constructor() {
     fun dispose() {
         if (isInitialized) {
             log.d(tag = TAG) { "Disposing EddysSipLibrary" }
+            translationIntegration?.dispose()
             sipCoreManager?.dispose()
             sipCoreManager = null
+            translationIntegration = null
             listeners.clear()
             registrationListener = null
             callListener = null
             incomingCallListener = null
+            translationListener = null
             isInitialized = false
             log.d(tag = TAG) { "EddysSipLibrary disposed" }
         }
