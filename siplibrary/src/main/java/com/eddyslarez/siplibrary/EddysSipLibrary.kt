@@ -1,5 +1,6 @@
 package com.eddyslarez.siplibrary
 
+import android.annotation.SuppressLint
 import android.app.Application
 import android.content.Context
 import com.eddyslarez.siplibrary.core.SipCoreManager
@@ -15,6 +16,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
+import com.eddyslarez.siplibrary.data.services.audio.AndroidWebRtcManager
 
 /**
  * EddysSipLibrary - Biblioteca SIP/VoIP para Android (Versión Optimizada)
@@ -33,7 +35,7 @@ class EddysSipLibrary private constructor() {
     private var callListener: CallListener? = null
     private var incomingCallListener: IncomingCallListener? = null
     private var translationListener: TranslationListener? = null
-    
+
     // Translation integration
     private var translationIntegration: TranslationIntegration? = null
 
@@ -112,7 +114,7 @@ class EddysSipLibrary private constructor() {
         fun onIncomingCallCancelled(callInfo: IncomingCallInfo)
         fun onIncomingCallTimeout(callInfo: IncomingCallInfo)
     }
-    
+
     /**
      * Listener específico para eventos de traducción
      */
@@ -174,6 +176,7 @@ class EddysSipLibrary private constructor() {
         ERROR
     }
 
+    @SuppressLint("MissingPermission")
     fun initialize(
         application: Application,
         config: SipConfig = SipConfig()
@@ -192,11 +195,14 @@ class EddysSipLibrary private constructor() {
 
             // Configurar listeners internos
             setupInternalListeners()
-            
+
             // Inicializar traducción si está habilitada
             if (config.enableTranslation && config.openAiApiKey != null) {
                 translationIntegration = TranslationIntegration(application)
-                translationIntegration?.initialize(config.openAiApiKey, config.defaultLanguage)
+
+                // Obtener referencia al WebRTC manager para integración
+                val webRtcManager = sipCoreManager?.webRtcManager as? AndroidWebRtcManager
+                translationIntegration?.initialize(config.openAiApiKey, config.defaultLanguage, webRtcManager)
                 setupTranslationCallbacks()
             }
 
@@ -314,7 +320,7 @@ class EddysSipLibrary private constructor() {
         this.incomingCallListener = listener
         log.d(tag = TAG) { "IncomingCallListener configured" }
     }
-    
+
     /**
      * Configura un listener específico para traducción
      */
@@ -322,7 +328,7 @@ class EddysSipLibrary private constructor() {
         this.translationListener = listener
         log.d(tag = TAG) { "TranslationListener configured" }
     }
-    
+
     /**
      * Configurar callbacks de traducción
      */
@@ -335,7 +341,7 @@ class EddysSipLibrary private constructor() {
                     log.e(tag = TAG) { "Error in translation status callback: ${e.message}" }
                 }
             }
-            
+
             if (error != null) {
                 val callInfo = getCurrentCallInfo()
                 translationListener?.onTranslationError(error, callInfo)
@@ -651,9 +657,9 @@ class EddysSipLibrary private constructor() {
         checkInitialized()
         return sipCoreManager?.getAllRegistrationStates() ?: emptyMap()
     }
-    
+
     // === MÉTODOS DE TRADUCCIÓN ===
-    
+
     /**
      * Configurar idioma local para traducción
      */
@@ -662,7 +668,7 @@ class EddysSipLibrary private constructor() {
         translationIntegration?.setLocalLanguage(language)
         log.d(tag = TAG) { "Translation language set to: $language" }
     }
-    
+
     /**
      * Habilitar/deshabilitar traducción
      */
@@ -671,7 +677,7 @@ class EddysSipLibrary private constructor() {
         translationIntegration?.setTranslationEnabled(enabled)
         log.d(tag = TAG) { "Translation ${if (enabled) "enabled" else "disabled"}" }
     }
-    
+
     /**
      * Verificar si la traducción está disponible para la llamada actual
      */
@@ -682,7 +688,27 @@ class EddysSipLibrary private constructor() {
             sipCoreManager?.currentAccountInfo?.currentCallData ?: return false
         ) ?: false
     }
-    
+
+    /**
+     * Iniciar traducción para la llamada actual
+     */
+    fun startTranslationForCurrentCall(): Boolean {
+        checkInitialized()
+        val callData = sipCoreManager?.currentAccountInfo?.currentCallData ?: return false
+        val translationInfo = translationIntegration?.currentCallTranslationInfo?.value ?: return false
+
+        translationIntegration?.startTranslationForCall(callData, translationInfo)
+        return true
+    }
+
+    /**
+     * Detener traducción para la llamada actual
+     */
+    fun stopTranslationForCurrentCall() {
+        checkInitialized()
+        translationIntegration?.stopTranslationForCall()
+    }
+
     /**
      * Obtener información de traducción de la llamada actual
      */
@@ -690,13 +716,21 @@ class EddysSipLibrary private constructor() {
         checkInitialized()
         return translationIntegration?.currentCallTranslationInfo?.value
     }
-    
+
     /**
      * Verificar si la traducción está activa
      */
     fun isTranslationActive(): Boolean {
         checkInitialized()
         return translationIntegration?.isTranslationActive?.value ?: false
+    }
+
+    /**
+     * Obtener diagnóstico de traducción
+     */
+    fun getTranslationDiagnostic(): String {
+        checkInitialized()
+        return translationIntegration?.getDiagnosticInfo() ?: "Translation not initialized"
     }
 
     /**
@@ -897,7 +931,14 @@ class EddysSipLibrary private constructor() {
 
     fun getSystemHealthReport(): String {
         checkInitialized()
-        return sipCoreManager?.getSystemHealthReport() ?: "Library not initialized"
+        return buildString {
+            appendLine(sipCoreManager?.getSystemHealthReport() ?: "Library not initialized")
+
+            if (config.enableTranslation) {
+                appendLine("\n=== TRANSLATION SYSTEM ===")
+                appendLine(getTranslationDiagnostic())
+            }
+        }
     }
 
     fun isSystemHealthy(): Boolean {

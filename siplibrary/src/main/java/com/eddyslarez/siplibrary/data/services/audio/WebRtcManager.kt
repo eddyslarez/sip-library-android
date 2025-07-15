@@ -1,6 +1,7 @@
 package com.eddyslarez.siplibrary.data.services.audio
 
 import com.eddyslarez.siplibrary.data.models.AccountInfo
+import org.webrtc.IceCandidate
 
 /**
  * Interface for managing WebRTC functionality across platforms
@@ -121,7 +122,10 @@ interface WebRtcEventListener {
      * Called when a new ICE candidate is generated
      */
     fun onIceCandidate(candidate: String, sdpMid: String, sdpMLineIndex: Int)
-
+    /**
+     * Llamado cuando se remueven candidatos ICE
+     */
+    fun onIceCandidatesRemoved(candidates: List<IceCandidate>) {}
     /**
      * Called when the connection state changes
      */
@@ -133,4 +137,8 @@ interface WebRtcEventListener {
     fun onRemoteAudioTrack()
 
     fun onAudioDeviceChanged(device: AudioDevice?)
+    /**
+     * Llamado cuando hay un error en WebRTC
+     */
+    fun onError(error: String) {}
 }
