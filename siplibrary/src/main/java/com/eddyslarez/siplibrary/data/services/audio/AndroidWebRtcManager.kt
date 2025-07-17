@@ -20,7 +20,14 @@ import android.media.AudioDeviceCallback
 import android.media.AudioDeviceInfo
 import android.media.AudioFocusRequest
 import android.media.AudioManager
+import android.media.AudioRecord
+import android.media.AudioTrack
+import android.media.MediaRecorder
+import android.media.AudioFormat
+import android.media.MediaPlayer
+import android.media.MediaMetadataRetriever
 import android.os.Build
+import android.os.Environment
 import androidx.annotation.RequiresApi
 import androidx.annotation.RequiresPermission
 import androidx.core.content.ContextCompat
@@ -50,10 +57,351 @@ import com.shepeliev.webrtckmp.MediaDevices
 import com.shepeliev.webrtckmp.MediaDeviceInfo
 import com.shepeliev.webrtckmp.MediaStreamTrackKind
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.isActive
+import java.io.File
+import java.io.FileInputStream
+import java.io.FileOutputStream
+import java.io.IOException
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.util.concurrent.atomic.AtomicBoolean
+
+/**
+ * WAV file recorder for audio recording
+ */
+class WavRecorder(
+    private val filePath: String,
+    private val sampleRate: Int = 16000,
+    private val channelCount: Int = 1,
+    private val bitRate: Int = 16
+) {
+    private val TAG = "WavRecorder"
+    private var audioRecord: AudioRecord? = null
+    private var isRecording = AtomicBoolean(false)
+    private var recordingJob: Job? = null
+    private var fileOutputStream: FileOutputStream? = null
+    private var dataSize = 0L
+
+    private val bufferSize = AudioRecord.getMinBufferSize(
+        sampleRate,
+        if (channelCount == 1) AudioFormat.CHANNEL_IN_MONO else AudioFormat.CHANNEL_IN_STEREO,
+        AudioFormat.ENCODING_PCM_16BIT
+    )
+
+    @RequiresPermission(Manifest.permission.RECORD_AUDIO)
+    fun startRecording(coroutineScope: CoroutineScope): Boolean {
+        if (isRecording.get()) {
+            log.w(TAG) { "Recording already in progress" }
+            return false
+        }
+
+        return try {
+            audioRecord = AudioRecord(
+                MediaRecorder.AudioSource.MIC,
+                sampleRate,
+                if (channelCount == 1) AudioFormat.CHANNEL_IN_MONO else AudioFormat.CHANNEL_IN_STEREO,
+                AudioFormat.ENCODING_PCM_16BIT,
+                bufferSize
+            )
+
+            if (audioRecord?.state != AudioRecord.STATE_INITIALIZED) {
+                log.e(TAG) { "AudioRecord initialization failed" }
+                return false
+            }
+
+            fileOutputStream = FileOutputStream(filePath)
+            writeWavHeader()
+
+            audioRecord?.startRecording()
+            isRecording.set(true)
+
+            recordingJob = coroutineScope.launch(Dispatchers.IO) {
+                recordAudio()
+            }
+
+            log.d(TAG) { "WAV recording started: $filePath" }
+            true
+        } catch (e: Exception) {
+            log.e(TAG) { "Error starting recording: ${e.message}" }
+            cleanup()
+            false
+        }
+    }
+
+    fun stopRecording() {
+        if (!isRecording.get()) return
+
+        isRecording.set(false)
+        recordingJob?.cancel()
+
+        audioRecord?.stop()
+        audioRecord?.release()
+        audioRecord = null
+
+        // Update WAV header with final size
+        updateWavHeader()
+
+        fileOutputStream?.close()
+        fileOutputStream = null
+
+        log.d(TAG) { "WAV recording stopped: $filePath" }
+    }
+
+    private fun recordAudio() {
+        val buffer = ByteArray(bufferSize)
+
+        while (isRecording.get()) {
+            try {
+                val bytesRead = audioRecord?.read(buffer, 0, bufferSize) ?: 0
+                if (bytesRead > 0) {
+                    fileOutputStream?.write(buffer, 0, bytesRead)
+                    dataSize += bytesRead
+                }
+            } catch (e: Exception) {
+                log.e(TAG) { "Error recording audio: ${e.message}" }
+                break
+            }
+        }
+    }
+
+    private fun writeWavHeader() {
+        val header = ByteArray(44)
+        val byteBuffer = ByteBuffer.wrap(header).order(ByteOrder.LITTLE_ENDIAN)
+
+        // RIFF header
+        byteBuffer.put("RIFF".toByteArray())
+        byteBuffer.putInt(36) // Placeholder for file size
+        byteBuffer.put("WAVE".toByteArray())
+
+        // fmt chunk
+        byteBuffer.put("fmt ".toByteArray())
+        byteBuffer.putInt(16) // fmt chunk size
+        byteBuffer.putShort(1) // Audio format (PCM)
+        byteBuffer.putShort(channelCount.toShort())
+        byteBuffer.putInt(sampleRate)
+        byteBuffer.putInt(sampleRate * channelCount * bitRate / 8) // Byte rate
+        byteBuffer.putShort((channelCount * bitRate / 8).toShort()) // Block align
+        byteBuffer.putShort(bitRate.toShort()) // Bits per sample
+
+        // data chunk
+        byteBuffer.put("data".toByteArray())
+        byteBuffer.putInt(0) // Placeholder for data size
+
+        fileOutputStream?.write(header)
+    }
+
+    private fun updateWavHeader() {
+        try {
+            val file = File(filePath)
+            val randomAccessFile = java.io.RandomAccessFile(file, "rw")
+
+            // Update file size
+            randomAccessFile.seek(4)
+            randomAccessFile.writeInt(Integer.reverseBytes((dataSize + 36).toInt()))
+
+            // Update data size
+            randomAccessFile.seek(40)
+            randomAccessFile.writeInt(Integer.reverseBytes(dataSize.toInt()))
+
+            randomAccessFile.close()
+        } catch (e: Exception) {
+            log.e(TAG) { "Error updating WAV header: ${e.message}" }
+        }
+    }
+
+    private fun cleanup() {
+        isRecording.set(false)
+        recordingJob?.cancel()
+        audioRecord?.release()
+        audioRecord = null
+        fileOutputStream?.close()
+        fileOutputStream = null
+    }
+}
+
+/**
+ * Audio file player for playing files instead of microphone
+ */
+class AudioFilePlayer(
+    private val filePath: String,
+    private val sampleRate: Int = 16000
+) {
+    private val TAG = "AudioFilePlayer"
+    private var audioTrack: AudioTrack? = null
+    private var isPlaying = AtomicBoolean(false)
+    private var playingJob: Job? = null
+    private var fileInputStream: FileInputStream? = null
+    private var isLooping = false
+
+    fun startPlaying(coroutineScope: CoroutineScope, loop: Boolean = false): Boolean {
+        if (isPlaying.get()) {
+            log.w(TAG) { "Already playing" }
+            return false
+        }
+
+        return try {
+            val file = File(filePath)
+            if (!file.exists()) {
+                log.e(TAG) { "Audio file not found: $filePath" }
+                return false
+            }
+
+            val bufferSize = AudioTrack.getMinBufferSize(
+                sampleRate,
+                AudioFormat.CHANNEL_OUT_MONO,
+                AudioFormat.ENCODING_PCM_16BIT
+            )
+
+            audioTrack = AudioTrack(
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                    .build(),
+                AudioFormat.Builder()
+                    .setSampleRate(sampleRate)
+                    .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                    .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                    .build(),
+                bufferSize,
+                AudioTrack.MODE_STREAM,
+                AudioManager.AUDIO_SESSION_ID_GENERATE
+            )
+
+            fileInputStream = FileInputStream(file)
+            skipWavHeader()
+
+            audioTrack?.play()
+            isPlaying.set(true)
+            isLooping = loop
+
+            playingJob = coroutineScope.launch(Dispatchers.IO) {
+                playAudio()
+            }
+
+            log.d(TAG) { "Audio file playing started: $filePath" }
+            true
+        } catch (e: Exception) {
+            log.e(TAG) { "Error starting audio playback: ${e.message}" }
+            cleanup()
+            false
+        }
+    }
+
+    fun stopPlaying() {
+        if (!isPlaying.get()) return
+
+        isPlaying.set(false)
+        playingJob?.cancel()
+
+        audioTrack?.stop()
+        audioTrack?.release()
+        audioTrack = null
+
+        fileInputStream?.close()
+        fileInputStream = null
+
+        log.d(TAG) { "Audio file playing stopped: $filePath" }
+    }
+
+    private fun playAudio() {
+        val buffer = ByteArray(4096)
+
+        do {
+            try {
+                fileInputStream?.let { inputStream ->
+                    var bytesRead = inputStream.read(buffer)
+                    while (isPlaying.get() && bytesRead > 0) {
+                        audioTrack?.write(buffer, 0, bytesRead)
+                        bytesRead = inputStream.read(buffer)
+                    }
+
+                    if (isLooping && isPlaying.get()) {
+                        inputStream.close()
+                        fileInputStream = FileInputStream(filePath)
+                        skipWavHeader()
+                    }
+                }
+            } catch (e: Exception) {
+                log.e(TAG) { "Error playing audio: ${e.message}" }
+                break
+            }
+        } while (isLooping && isPlaying.get())
+    }
+
+
+    private fun skipWavHeader() {
+        try {
+            // Skip standard WAV header (44 bytes)
+            fileInputStream?.skip(44)
+        } catch (e: Exception) {
+            log.w(TAG) { "Error skipping WAV header: ${e.message}" }
+        }
+    }
+
+    private fun cleanup() {
+        isPlaying.set(false)
+        playingJob?.cancel()
+        audioTrack?.release()
+        audioTrack = null
+        fileInputStream?.close()
+        fileInputStream = null
+    }
+}
+
+/**
+ * Audio file manager for handling recordings and playback
+ */
+class AudioFileManager(private val context: Context) {
+    private val TAG = "AudioFileManager"
+
+    private val audioDirectory: File by lazy {
+        File(context.getExternalFilesDir(Environment.DIRECTORY_MUSIC), "CallRecordings").apply {
+            if (!exists()) mkdirs()
+        }
+    }
+
+    fun createRecordingPath(prefix: String): String {
+        val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
+        return File(audioDirectory, "${prefix}_${timestamp}.wav").absolutePath
+    }
+
+    fun getAudioFiles(): List<File> {
+        return audioDirectory.listFiles { file ->
+            file.isFile && file.extension.equals("wav", ignoreCase = true)
+        }?.toList() ?: emptyList()
+    }
+
+    fun deleteAudioFile(filePath: String): Boolean {
+        return try {
+            File(filePath).delete()
+        } catch (e: Exception) {
+            log.e(TAG) { "Error deleting audio file: ${e.message}" }
+            false
+        }
+    }
+
+    fun getAudioDuration(filePath: String): Long {
+        return try {
+            val retriever = MediaMetadataRetriever()
+            retriever.setDataSource(filePath)
+            val duration = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+            retriever.release()
+            duration?.toLong() ?: 0L
+        } catch (e: Exception) {
+            log.e(TAG) { "Error getting audio duration: ${e.message}" }
+            0L
+        }
+    }
+}
 
 /**
  * Enhanced Android implementation of WebRtcManager interface with comprehensive audio device support
  * FIXED: Bluetooth audio routing issues
+ * ADDED: WAV recording and audio file playback capabilities
  *
  * @author Eddys Larez
  */
@@ -90,11 +438,299 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
     // Device monitoring
     private var deviceChangeListeners = mutableListOf<(List<AudioDevice>) -> Unit>()
 
+    // NUEVO: Audio recording and playback components
+    private var audioFileManager: AudioFileManager = AudioFileManager(context)
+    private var sentAudioRecorder: WavRecorder? = null
+    private var receivedAudioRecorder: WavRecorder? = null
+    private var inputAudioPlayer: AudioFilePlayer? = null
+    private var outputAudioPlayer: AudioFilePlayer? = null
+
+    // NUEVO: Recording state
+    private var isRecordingSentAudio = false
+    private var isRecordingReceivedAudio = false
+    private var isPlayingInputFile = false
+    private var isPlayingOutputFile = false
+    private var currentSentRecordingPath: String? = null
+    private var currentReceivedRecordingPath: String? = null
+
+    // NUEVO: Audio file paths for playback
+    private var inputAudioFilePath: String? = null
+    private var outputAudioFilePath: String? = null
+
     init {
         initializeBluetoothComponents()
         setupAudioDeviceMonitoring()
         setupBluetoothScoReceiver() // FIXED: Add Bluetooth SCO monitoring
     }
+
+    /**
+     * NUEVO: Start recording sent audio (microphone input)
+     */
+    @RequiresPermission(Manifest.permission.RECORD_AUDIO)
+    fun startRecordingSentAudio(): Boolean {
+        if (isRecordingSentAudio) {
+            log.w(TAG) { "Already recording sent audio" }
+            return false
+        }
+
+        return try {
+            currentSentRecordingPath = audioFileManager.createRecordingPath("sent_audio")
+            sentAudioRecorder = WavRecorder(currentSentRecordingPath!!)
+
+            if (sentAudioRecorder?.startRecording(coroutineScope) == true) {
+                isRecordingSentAudio = true
+                log.d(TAG) { "Started recording sent audio: $currentSentRecordingPath" }
+                true
+            } else {
+                sentAudioRecorder = null
+                currentSentRecordingPath = null
+                false
+            }
+        } catch (e: Exception) {
+            log.e(TAG) { "Error starting sent audio recording: ${e.message}" }
+            false
+        }
+    }
+
+    /**
+     * NUEVO: Stop recording sent audio
+     */
+    fun stopRecordingSentAudio(): String? {
+        if (!isRecordingSentAudio) {
+            log.w(TAG) { "Not recording sent audio" }
+            return null
+        }
+
+        return try {
+            sentAudioRecorder?.stopRecording()
+            sentAudioRecorder = null
+            isRecordingSentAudio = false
+
+            val recordingPath = currentSentRecordingPath
+            currentSentRecordingPath = null
+
+            log.d(TAG) { "Stopped recording sent audio: $recordingPath" }
+            recordingPath
+        } catch (e: Exception) {
+            log.e(TAG) { "Error stopping sent audio recording: ${e.message}" }
+            null
+        }
+    }
+
+    /**
+     * NUEVO: Start recording received audio (remote party audio)
+     */
+    @RequiresPermission(Manifest.permission.RECORD_AUDIO)
+    fun startRecordingReceivedAudio(): Boolean {
+        if (isRecordingReceivedAudio) {
+            log.w(TAG) { "Already recording received audio" }
+            return false
+        }
+
+        return try {
+            currentReceivedRecordingPath = audioFileManager.createRecordingPath("received_audio")
+            receivedAudioRecorder = WavRecorder(currentReceivedRecordingPath!!)
+
+            if (receivedAudioRecorder?.startRecording(coroutineScope) == true) {
+                isRecordingReceivedAudio = true
+                log.d(TAG) { "Started recording received audio: $currentReceivedRecordingPath" }
+                true
+            } else {
+                receivedAudioRecorder = null
+                currentReceivedRecordingPath = null
+                false
+            }
+        } catch (e: Exception) {
+            log.e(TAG) { "Error starting received audio recording: ${e.message}" }
+            false
+        }
+    }
+
+    /**
+     * NUEVO: Stop recording received audio
+     */
+    fun stopRecordingReceivedAudio(): String? {
+        if (!isRecordingReceivedAudio) {
+            log.w(TAG) { "Not recording received audio" }
+            return null
+        }
+
+        return try {
+            receivedAudioRecorder?.stopRecording()
+            receivedAudioRecorder = null
+            isRecordingReceivedAudio = false
+
+            val recordingPath = currentReceivedRecordingPath
+            currentReceivedRecordingPath = null
+
+            log.d(TAG) { "Stopped recording received audio: $recordingPath" }
+            recordingPath
+        } catch (e: Exception) {
+            log.e(TAG) { "Error stopping received audio recording: ${e.message}" }
+            null
+        }
+    }
+
+    /**
+     * NUEVO: Start playing audio file instead of microphone input
+     */
+    fun startPlayingInputAudioFile(filePath: String, loop: Boolean = false): Boolean {
+        if (isPlayingInputFile) {
+            log.w(TAG) { "Already playing input audio file" }
+            return false
+        }
+
+        return try {
+            inputAudioFilePath = filePath
+            inputAudioPlayer = AudioFilePlayer(filePath)
+
+            if (inputAudioPlayer?.startPlaying(coroutineScope, loop) == true) {
+                isPlayingInputFile = true
+                // Disable microphone when playing file
+                localAudioTrack?.enabled = false
+                log.d(TAG) { "Started playing input audio file: $filePath" }
+                true
+            } else {
+                inputAudioPlayer = null
+                inputAudioFilePath = null
+                false
+            }
+        } catch (e: Exception) {
+            log.e(TAG) { "Error starting input audio file playback: ${e.message}" }
+            false
+        }
+    }
+
+    /**
+     * NUEVO: Stop playing audio file and return to microphone input
+     */
+    fun stopPlayingInputAudioFile(): Boolean {
+        if (!isPlayingInputFile) {
+            log.w(TAG) { "Not playing input audio file" }
+            return false
+        }
+
+        return try {
+            inputAudioPlayer?.stopPlaying()
+            inputAudioPlayer = null
+            inputAudioFilePath = null
+            isPlayingInputFile = false
+
+            // Re-enable microphone
+            localAudioTrack?.enabled = true
+            log.d(TAG) { "Stopped playing input audio file, returned to microphone" }
+            true
+        } catch (e: Exception) {
+            log.e(TAG) { "Error stopping input audio file playback: ${e.message}" }
+            false
+        }
+    }
+
+    /**
+     * NUEVO: Start playing audio file instead of received audio
+     */
+    fun startPlayingOutputAudioFile(filePath: String, loop: Boolean = false): Boolean {
+        if (isPlayingOutputFile) {
+            log.w(TAG) { "Already playing output audio file" }
+            return false
+        }
+
+        return try {
+            outputAudioFilePath = filePath
+            outputAudioPlayer = AudioFilePlayer(filePath)
+
+            if (outputAudioPlayer?.startPlaying(coroutineScope, loop) == true) {
+                isPlayingOutputFile = true
+                // Disable remote audio when playing file
+                remoteAudioTrack?.enabled = false
+                log.d(TAG) { "Started playing output audio file: $filePath" }
+                true
+            } else {
+                outputAudioPlayer = null
+                outputAudioFilePath = null
+                false
+            }
+        } catch (e: Exception) {
+            log.e(TAG) { "Error starting output audio file playback: ${e.message}" }
+            false
+        }
+    }
+
+    /**
+     * NUEVO: Stop playing audio file and return to received audio
+     */
+    fun stopPlayingOutputAudioFile(): Boolean {
+        if (!isPlayingOutputFile) {
+            log.w(TAG) { "Not playing output audio file" }
+            return false
+        }
+
+        return try {
+            outputAudioPlayer?.stopPlaying()
+            outputAudioPlayer = null
+            outputAudioFilePath = null
+            isPlayingOutputFile = false
+
+            // Re-enable remote audio
+            remoteAudioTrack?.enabled = true
+            log.d(TAG) { "Stopped playing output audio file, returned to received audio" }
+            true
+        } catch (e: Exception) {
+            log.e(TAG) { "Error stopping output audio file playback: ${e.message}" }
+            false
+        }
+    }
+
+    /**
+     * NUEVO: Get list of recorded audio files
+     */
+    fun getRecordedAudioFiles(): List<File> {
+        return audioFileManager.getAudioFiles()
+    }
+
+    /**
+     * NUEVO: Delete recorded audio file
+     */
+    fun deleteRecordedAudioFile(filePath: String): Boolean {
+        return audioFileManager.deleteAudioFile(filePath)
+    }
+
+    /**
+     * NUEVO: Get audio file duration
+     */
+    fun getAudioFileDuration(filePath: String): Long {
+        return audioFileManager.getAudioDuration(filePath)
+    }
+
+    /**
+     * NUEVO: Check if currently recording sent audio
+     */
+    fun isRecordingSentAudio(): Boolean = isRecordingSentAudio
+
+    /**
+     * NUEVO: Check if currently recording received audio
+     */
+    fun isRecordingReceivedAudio(): Boolean = isRecordingReceivedAudio
+
+    /**
+     * NUEVO: Check if currently playing input audio file
+     */
+    fun isPlayingInputAudioFile(): Boolean = isPlayingInputFile
+
+    /**
+     * NUEVO: Check if currently playing output audio file
+     */
+    fun isPlayingOutputAudioFile(): Boolean = isPlayingOutputFile
+
+    /**
+     * NUEVO: Get current input audio file path
+     */
+    fun getCurrentInputAudioFilePath(): String? = inputAudioFilePath
+
+    /**
+     * NUEVO: Get current output audio file path
+     */
+    fun getCurrentOutputAudioFilePath(): String? = outputAudioFilePath
 
     /**
      * FIXED: Setup Bluetooth SCO state monitoring
@@ -1650,7 +2286,10 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
     /**
      * Enhanced current device detection
      */
-    @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
+    @RequiresPermission(allOf = [
+        Manifest.permission.BLUETOOTH_CONNECT,
+        Manifest.permission.RECORD_AUDIO
+    ])
     override fun getCurrentInputDevice(): AudioDevice? {
         if (currentInputDevice != null) {
             return currentInputDevice
@@ -1679,7 +2318,10 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
         }
     }
 
-    @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
+    @RequiresPermission(allOf = [
+        Manifest.permission.BLUETOOTH_CONNECT,
+        Manifest.permission.RECORD_AUDIO
+    ])
     override fun getCurrentOutputDevice(): AudioDevice? {
         if (currentOutputDevice != null) {
             return currentOutputDevice
@@ -1877,6 +2519,20 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
         log.d(TAG) { "Disposing Enhanced WebRtcManager resources..." }
 
         try {
+            // NUEVO: Stop any ongoing audio recording/playback
+            if (isRecordingSentAudio) {
+                stopRecordingSentAudio()
+            }
+            if (isRecordingReceivedAudio) {
+                stopRecordingReceivedAudio()
+            }
+            if (isPlayingInputFile) {
+                stopPlayingInputAudioFile()
+            }
+            if (isPlayingOutputFile) {
+                stopPlayingOutputAudioFile()
+            }
+
             // Clear listeners
             deviceChangeListeners.clear()
 
@@ -2349,6 +3005,15 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
             appendLine("Remote Audio Track: ${remoteAudioTrack != null}")
             appendLine("Remote Audio Enabled: ${remoteAudioTrack?.enabled}")
 
+            // NUEVO: Audio recording and playback state
+            appendLine("\n--- Audio Recording/Playback ---")
+            appendLine("Recording Sent Audio: $isRecordingSentAudio")
+            appendLine("Recording Received Audio: $isRecordingReceivedAudio")
+            appendLine("Playing Input File: $isPlayingInputFile")
+            appendLine("Playing Output File: $isPlayingOutputFile")
+            appendLine("Current Input File: $inputAudioFilePath")
+            appendLine("Current Output File: $outputAudioFilePath")
+
             // AudioManager state
             audioManager?.let { am ->
                 appendLine("\n--- AudioManager State ---")
@@ -2392,6 +3057,19 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
                 appendLine("Connected BT Devices: ${connectedBt.size}")
             } catch (e: Exception) {
                 appendLine("BT Device Check Error: ${e.message}")
+            }
+
+            // NUEVO: Recorded files info
+            appendLine("\n--- Recorded Files ---")
+            try {
+                val recordedFiles = getRecordedAudioFiles()
+                appendLine("Total Recorded Files: ${recordedFiles.size}")
+                recordedFiles.take(5).forEach { file ->
+                    val duration = getAudioFileDuration(file.absolutePath)
+                    appendLine("  - ${file.name} (${duration}ms)")
+                }
+            } catch (e: Exception) {
+                appendLine("Error getting recorded files: ${e.message}")
             }
 
             // Permission status
@@ -2613,6 +3291,20 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
                     log.d(TAG) { "Call ended" }
                     // Release audio focus when call ends
                     releaseAudioFocus()
+
+                    // NUEVO: Stop any ongoing recording/playback when call ends
+                    if (isRecordingSentAudio) {
+                        stopRecordingSentAudio()
+                    }
+                    if (isRecordingReceivedAudio) {
+                        stopRecordingReceivedAudio()
+                    }
+                    if (isPlayingInputFile) {
+                        stopPlayingInputAudioFile()
+                    }
+                    if (isPlayingOutputFile) {
+                        stopPlayingOutputAudioFile()
+                    }
                 }
 
                 else -> {
