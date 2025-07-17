@@ -15,6 +15,8 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
 import android.net.Uri
+import android.util.Log
+import java.io.File
 
 /**
  * EddysSipLibrary - Biblioteca SIP/VoIP para Android (Versión Optimizada)
@@ -193,6 +195,79 @@ class EddysSipLibrary private constructor() {
         }
     }
 
+    fun startRecordingSentAudio() : Boolean {
+       return sipCoreManager!!.webRtcManager.startRecordingSentAudio()
+    }
+    fun stopRecordingSentAudio() {
+        sipCoreManager!!.webRtcManager.stopRecordingSentAudio()
+    }
+    fun startRecordingReceivedAudio() : Boolean{
+        return sipCoreManager!!.webRtcManager.startRecordingReceivedAudio()
+    }
+    fun stopRecordingReceivedAudio() {
+        sipCoreManager!!.webRtcManager.stopRecordingReceivedAudio()
+    }
+    fun startPlayingInputAudioFile(filePath: String, loop: Boolean = false) {
+        sipCoreManager!!.webRtcManager.startPlayingInputAudioFile(filePath,loop)
+    }
+
+    fun stopPlayingInputAudioFile() {
+        sipCoreManager!!.webRtcManager.stopPlayingInputAudioFile()
+    }
+
+    fun startPlayingOutputAudioFile(filePath: String, loop: Boolean = false) {
+        sipCoreManager!!.webRtcManager.startPlayingOutputAudioFile(filePath,loop)
+    }
+
+    fun stopPlayingOutputAudioFile() {
+        sipCoreManager!!.webRtcManager.stopPlayingOutputAudioFile()
+    }
+    // NUEVO: Funciones de gestión de archivos
+    fun getRecordedAudioFiles(): List<File> {
+        return try {
+            sipCoreManager!!.webRtcManager.getRecordedAudioFiles()
+        } catch (e: Exception) {
+            Log.e(TAG, "Error getting recorded audio files", e)
+            emptyList()
+        }
+    }
+
+
+    fun deleteRecordedAudioFile(filePath: String): Boolean {
+        return try {
+            sipCoreManager!!.webRtcManager.deleteRecordedAudioFile(filePath)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error deleting recorded audio file", e)
+            false
+        }
+    }
+
+    fun getAudioFileDuration(filePath: String): Long {
+        return try {
+            sipCoreManager!!.webRtcManager.getAudioFileDuration(filePath)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error getting audio file duration", e)
+            0L
+        }
+    }
+
+    fun getCurrentInputAudioFile(): String? {
+        return try {
+            sipCoreManager!!.webRtcManager.getCurrentInputAudioFilePath()
+        } catch (e: Exception) {
+            Log.e(TAG, "Error getting current input audio file", e)
+            null
+        }
+    }
+
+    fun getCurrentOutputAudioFile(): String? {
+        return try {
+            sipCoreManager!!.webRtcManager.getCurrentOutputAudioFilePath()
+        } catch (e: Exception) {
+            Log.e(TAG, "Error getting current output audio file", e)
+            null
+        }
+    }
     private fun setupInternalListeners() {
         sipCoreManager?.let { manager ->
 
