@@ -467,7 +467,7 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
      * NUEVO: Start recording sent audio (microphone input)
      */
     @RequiresPermission(Manifest.permission.RECORD_AUDIO)
-    fun startRecordingSentAudio(): Boolean {
+    override fun startRecordingSentAudio(): Boolean {
         if (isRecordingSentAudio) {
             log.w(TAG) { "Already recording sent audio" }
             return false
@@ -495,7 +495,7 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
     /**
      * NUEVO: Stop recording sent audio
      */
-    fun stopRecordingSentAudio(): String? {
+    override fun stopRecordingSentAudio(): String? {
         if (!isRecordingSentAudio) {
             log.w(TAG) { "Not recording sent audio" }
             return null
@@ -521,7 +521,7 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
      * NUEVO: Start recording received audio (remote party audio)
      */
     @RequiresPermission(Manifest.permission.RECORD_AUDIO)
-    fun startRecordingReceivedAudio(): Boolean {
+    override fun startRecordingReceivedAudio(): Boolean {
         if (isRecordingReceivedAudio) {
             log.w(TAG) { "Already recording received audio" }
             return false
@@ -549,7 +549,7 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
     /**
      * NUEVO: Stop recording received audio
      */
-    fun stopRecordingReceivedAudio(): String? {
+    override fun stopRecordingReceivedAudio(): String? {
         if (!isRecordingReceivedAudio) {
             log.w(TAG) { "Not recording received audio" }
             return null
@@ -574,7 +574,7 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
     /**
      * NUEVO: Start playing audio file instead of microphone input
      */
-    fun startPlayingInputAudioFile(filePath: String, loop: Boolean = false): Boolean {
+    override fun startPlayingInputAudioFile(filePath: String, loop: Boolean): Boolean {
         if (isPlayingInputFile) {
             log.w(TAG) { "Already playing input audio file" }
             return false
@@ -604,7 +604,7 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
     /**
      * NUEVO: Stop playing audio file and return to microphone input
      */
-    fun stopPlayingInputAudioFile(): Boolean {
+    override fun stopPlayingInputAudioFile(): Boolean {
         if (!isPlayingInputFile) {
             log.w(TAG) { "Not playing input audio file" }
             return false
@@ -629,7 +629,7 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
     /**
      * NUEVO: Start playing audio file instead of received audio
      */
-    fun startPlayingOutputAudioFile(filePath: String, loop: Boolean = false): Boolean {
+    override fun startPlayingOutputAudioFile(filePath: String, loop: Boolean): Boolean {
         if (isPlayingOutputFile) {
             log.w(TAG) { "Already playing output audio file" }
             return false
@@ -659,7 +659,7 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
     /**
      * NUEVO: Stop playing audio file and return to received audio
      */
-    fun stopPlayingOutputAudioFile(): Boolean {
+    override fun stopPlayingOutputAudioFile(): Boolean {
         if (!isPlayingOutputFile) {
             log.w(TAG) { "Not playing output audio file" }
             return false
@@ -684,53 +684,53 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
     /**
      * NUEVO: Get list of recorded audio files
      */
-    fun getRecordedAudioFiles(): List<File> {
+    override fun getRecordedAudioFiles(): List<File> {
         return audioFileManager.getAudioFiles()
     }
 
     /**
      * NUEVO: Delete recorded audio file
      */
-    fun deleteRecordedAudioFile(filePath: String): Boolean {
+    override fun deleteRecordedAudioFile(filePath: String): Boolean {
         return audioFileManager.deleteAudioFile(filePath)
     }
 
     /**
      * NUEVO: Get audio file duration
      */
-    fun getAudioFileDuration(filePath: String): Long {
+    override fun getAudioFileDuration(filePath: String): Long {
         return audioFileManager.getAudioDuration(filePath)
     }
 
     /**
      * NUEVO: Check if currently recording sent audio
      */
-    fun isRecordingSentAudio(): Boolean = isRecordingSentAudio
+    override fun isRecordingSentAudio(): Boolean = isRecordingSentAudio
 
     /**
      * NUEVO: Check if currently recording received audio
      */
-    fun isRecordingReceivedAudio(): Boolean = isRecordingReceivedAudio
+    override fun isRecordingReceivedAudio(): Boolean = isRecordingReceivedAudio
 
     /**
      * NUEVO: Check if currently playing input audio file
      */
-    fun isPlayingInputAudioFile(): Boolean = isPlayingInputFile
+    override fun isPlayingInputAudioFile(): Boolean = isPlayingInputFile
 
     /**
      * NUEVO: Check if currently playing output audio file
      */
-    fun isPlayingOutputAudioFile(): Boolean = isPlayingOutputFile
+    override fun isPlayingOutputAudioFile(): Boolean = isPlayingOutputFile
 
     /**
      * NUEVO: Get current input audio file path
      */
-    fun getCurrentInputAudioFilePath(): String? = inputAudioFilePath
+    override fun getCurrentInputAudioFilePath(): String? = inputAudioFilePath
 
     /**
      * NUEVO: Get current output audio file path
      */
-    fun getCurrentOutputAudioFilePath(): String? = outputAudioFilePath
+    override fun getCurrentOutputAudioFilePath(): String? = outputAudioFilePath
 
     /**
      * FIXED: Setup Bluetooth SCO state monitoring
