@@ -7,6 +7,7 @@ import com.eddyslarez.siplibrary.data.services.audio.AudioDevice
 import com.eddyslarez.siplibrary.data.services.audio.AudioDeviceManager
 import com.eddyslarez.siplibrary.data.services.audio.CallHoldManager
 import com.eddyslarez.siplibrary.data.services.audio.AudioManager
+import com.eddyslarez.siplibrary.data.services.audio.EnhancedWebRtcManager
 import com.eddyslarez.siplibrary.data.services.audio.WebRtcConnectionState
 import com.eddyslarez.siplibrary.data.services.audio.WebRtcEventListener
 import com.eddyslarez.siplibrary.data.services.audio.WebRtcManagerFactory
@@ -71,6 +72,7 @@ class SipCoreManager private constructor(
 
     // WebRTC manager and other managers
     val webRtcManager = WebRtcManagerFactory.createWebRtcManager(application)
+    val enhancedWebRtcManager = EnhancedWebRtcManager(application)
     private val platformRegistration = PlatformRegistration()
     private val callHoldManager = CallHoldManager(webRtcManager)
     private val audioDeviceManager = AudioDeviceManager()
@@ -104,9 +106,10 @@ class SipCoreManager private constructor(
     fun getCurrentUsername(): String? = currentAccountInfo?.username
 
     fun initialize() {
-        log.d(tag = TAG) { "Initializing SIP Core with optimized call states" }
 
+        log.d(tag = TAG) { "Initializing SIP Core with optimized call states" }
         webRtcManager.initialize()
+        enhancedWebRtcManager.initialize()
         setupWebRtcEventListener()
         setupPlatformLifecycleObservers()
         startConnectionHealthCheck()
