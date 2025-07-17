@@ -201,7 +201,9 @@ class EddysSipLibrary private constructor() {
         }
     }
 
-    private fun getEnhancedWebRtcManager(): EnhancedWebRtcManager {
+    fun getEnhancedWebRtcManager(): EnhancedWebRtcManager {
+        checkInitialized()
+
         return sipCoreManager!!.enhancedWebRtcManager
     }
 
