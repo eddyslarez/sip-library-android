@@ -207,20 +207,20 @@ class EddysSipLibrary private constructor() {
     fun stopRecordingReceivedAudio() {
         sipCoreManager!!.webRtcManager.stopRecordingReceivedAudio()
     }
-    fun startPlayingInputAudioFile(filePath: String, loop: Boolean = false) {
-        sipCoreManager!!.webRtcManager.startPlayingInputAudioFile(filePath,loop)
+    fun startPlayingInputAudioFile(filePath: String, loop: Boolean = false) : Boolean{
+       return sipCoreManager!!.webRtcManager.startPlayingInputAudioFile(filePath,loop)
     }
 
-    fun stopPlayingInputAudioFile() {
-        sipCoreManager!!.webRtcManager.stopPlayingInputAudioFile()
+    fun stopPlayingInputAudioFile(): Boolean {
+       return sipCoreManager!!.webRtcManager.stopPlayingInputAudioFile()
     }
 
-    fun startPlayingOutputAudioFile(filePath: String, loop: Boolean = false) {
-        sipCoreManager!!.webRtcManager.startPlayingOutputAudioFile(filePath,loop)
+    fun startPlayingOutputAudioFile(filePath: String, loop: Boolean = false): Boolean {
+       return sipCoreManager!!.webRtcManager.startPlayingOutputAudioFile(filePath,loop)
     }
 
-    fun stopPlayingOutputAudioFile() {
-        sipCoreManager!!.webRtcManager.stopPlayingOutputAudioFile()
+    fun stopPlayingOutputAudioFile() : Boolean {
+       return sipCoreManager!!.webRtcManager.stopPlayingOutputAudioFile()
     }
     // NUEVO: Funciones de gestión de archivos
     fun getRecordedAudioFiles(): List<File> {
