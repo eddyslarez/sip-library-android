@@ -57,7 +57,7 @@ import kotlinx.coroutines.delay
  *
  * @author Eddys Larez
  */
-class AndroidWebRtcManager(private val application: Application) : WebRtcManager {
+open class AndroidWebRtcManager(private val application: Application) : WebRtcManager {
     private val TAG = "AndroidWebRtcManager"
     private val coroutineScope: CoroutineScope = CoroutineScope(Dispatchers.IO)
 

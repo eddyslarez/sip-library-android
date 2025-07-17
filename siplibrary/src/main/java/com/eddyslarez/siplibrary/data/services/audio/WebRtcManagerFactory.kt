@@ -13,6 +13,7 @@ object WebRtcManagerFactory {
      * @return A platform-specific implementation of WebRtcManager
      */
     fun createWebRtcManager(application: Application): WebRtcManager {
-        return AndroidWebRtcManager(application)
+        return EnhancedWebRtcManager(application) // Usar versión mejorada
     }
+
 }

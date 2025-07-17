@@ -46,8 +46,7 @@ object MultiCallManager {
 
         updateCallState(callData.callId, initialState)
 
-        // Asumiendo que tienes un logger disponible
-        // log.d(tag = "MultiCallManager") { "Call added: ${callData.callId} (${callData.direction})" }
+         log.d(tag = "MultiCallManager") { "Call added: ${callData.callId} (${callData.direction})" }
     }
 
     /**
@@ -63,7 +62,7 @@ object MultiCallManager {
         _callStates.value = currentStates
 
         if (removedCall != null) {
-            // log.d(tag = "MultiCallManager") { "Call removed: $callId" }
+             log.d(tag = "MultiCallManager") { "Call removed: $callId" }
         }
     }
 
@@ -89,12 +88,12 @@ object MultiCallManager {
         // Si la llamada terminó, removerla después de un breve delay
         if (newState == CallState.ENDED || newState == CallState.ERROR) {
             scope.launch {
-                delay(1000) // Esperar 1 segundo
+                delay(1000)
                 removeCall(callId)
             }
         }
 
-        // log.d(tag = "MultiCallManager") { "Call state updated: $callId -> $newState" }
+         log.d(tag = "MultiCallManager") { "Call state updated: $callId -> $newState" }
     }
 
     /**
