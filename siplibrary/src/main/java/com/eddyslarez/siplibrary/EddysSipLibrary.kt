@@ -201,6 +201,10 @@ class EddysSipLibrary private constructor() {
         }
     }
 
+    private fun getEnhancedWebRtcManager(): EnhancedWebRtcManager {
+        return sipCoreManager!!.enhancedWebRtcManager
+    }
+
     private fun setupInternalListeners() {
         sipCoreManager?.let { manager ->
 
