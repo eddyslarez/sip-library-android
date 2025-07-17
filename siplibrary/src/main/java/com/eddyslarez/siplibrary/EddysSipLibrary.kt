@@ -1,10 +1,13 @@
 package com.eddyslarez.siplibrary
 
+import android.Manifest
 import android.app.Application
 import android.content.Context
 import com.eddyslarez.siplibrary.core.SipCoreManager
 import com.eddyslarez.siplibrary.data.models.*
 import com.eddyslarez.siplibrary.data.services.audio.AudioDevice
+import com.eddyslarez.siplibrary.data.services.audio.AudioFormatConverter
+import com.eddyslarez.siplibrary.data.services.audio.AudioRecordingManager
 import com.eddyslarez.siplibrary.utils.CallStateManager
 import com.eddyslarez.siplibrary.utils.RegistrationStateManager
 import com.eddyslarez.siplibrary.utils.log
@@ -15,10 +18,15 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
 import android.net.Uri
+import androidx.annotation.RequiresPermission
+import com.eddyslarez.siplibrary.data.services.audio.CustomAudioManager
+import com.eddyslarez.siplibrary.data.services.audio.CustomAudioManager.CustomAudioConfig
+import java.io.File
 
 /**
  * EddysSipLibrary - Biblioteca SIP/VoIP para Android (Versión Optimizada)
  * Versión simplificada usando únicamente los nuevos estados
+ * CON SOPORTE COMPLETO PARA AUDIO PERSONALIZADO
  *
  * @author Eddys Larez
  * @version 1.5.0
@@ -32,6 +40,11 @@ class EddysSipLibrary private constructor() {
     private var registrationListener: RegistrationListener? = null
     private var callListener: CallListener? = null
     private var incomingCallListener: IncomingCallListener? = null
+
+
+    // NUEVO: Gestor de audio personalizado
+    private var customAudioManager: CustomAudioManager? = null
+    private var audioInterceptionListener: AudioInterceptionListener? = null
 
     companion object {
         @Volatile
@@ -53,8 +66,16 @@ class EddysSipLibrary private constructor() {
         val enableAutoReconnect: Boolean = true,
         val pingIntervalMs: Long = 30000L,
         val incomingRingtoneUri: Uri? = null,
-        val outgoingRingtoneUri: Uri? = null
+        val outgoingRingtoneUri: Uri? = null,
+        // NUEVO: Configuración para audio personalizado
+        val enableAudioInterception: Boolean = false,
+        val audioRecordingsDir: String? = null,
+        val maxRecordingSize: Long = 100 * 1024 * 1024, // 100MB
+        val maxRecordingDuration: Long = 3600 * 1000L // 1 hour
     )
+
+
+
 
     /**
      * Listener principal para todos los eventos SIP
@@ -69,6 +90,19 @@ class EddysSipLibrary private constructor() {
         fun onDtmfReceived(digit: Char, callInfo: CallInfo) {}
         fun onAudioDeviceChanged(device: AudioDevice) {}
         fun onNetworkStateChanged(isConnected: Boolean) {}
+        // NUEVO: Eventos de audio personalizado
+        fun onAudioIntercepted(callId: String, isReceived: Boolean, audioData: ByteArray) {}
+        fun onRecordingStarted(callId: String, recordingId: String) {}
+        fun onRecordingEnded(callId: String, recordingInfo: AudioRecordingManager.RecordingInfo) {}
+    }
+
+    /**
+     * NUEVO: Listener específico para intercepción de audio
+     */
+    interface AudioInterceptionListener {
+        fun onAudioReceived(callId: String, audioData: ByteArray, format: AudioFormatConverter.AudioFormat)
+        fun onAudioSent(callId: String, audioData: ByteArray, format: AudioFormatConverter.AudioFormat)
+        fun onCustomAudioProcessed(callId: String, isInput: Boolean, originalData: ByteArray, processedData: ByteArray)
     }
 
     /**
@@ -120,7 +154,11 @@ class EddysSipLibrary private constructor() {
         val localAccount: String,
         val codec: String? = null,
         val state: CallState? = null,
-        val isCurrentCall: Boolean = false
+        val isCurrentCall: Boolean = false,
+        // NUEVO: Información de audio
+        val hasCustomAudio: Boolean = false,
+        val isRecording: Boolean = false,
+        val recordingId: String? = null
     )
 
     /**
@@ -157,6 +195,7 @@ class EddysSipLibrary private constructor() {
         ERROR
     }
 
+
     fun initialize(
         application: Application,
         config: SipConfig = SipConfig()
@@ -167,11 +206,16 @@ class EddysSipLibrary private constructor() {
         }
 
         try {
-            log.d(tag = TAG) { "Initializing EddysSipLibrary v1.5.0 Optimized by Eddys Larez" }
+            log.d(tag = TAG) { "Initializing EddysSipLibrary v1.5.0 Optimized by Eddys Larez with Custom Audio Support" }
 
             this.config = config
             sipCoreManager = SipCoreManager.createInstance(application, config)
             sipCoreManager?.initialize()
+
+            // NUEVO: Inicializar gestor de audio personalizado si está habilitado
+            if (config.enableAudioInterception) {
+                initializeCustomAudioManager(application)
+            }
 
             // Configurar listeners internos
             setupInternalListeners()
@@ -184,12 +228,35 @@ class EddysSipLibrary private constructor() {
                 sipCoreManager?.audioManager?.setOutgoingRingtone(uri)
             }
 
+            // Inicializar gestor de audio personalizado
+            val recordingsDir = File(application.getExternalFilesDir(null), "sip_recordings")
+            customAudioManager = CustomAudioManager(recordingsDir)
+
             isInitialized = true
             log.d(tag = TAG) { "EddysSipLibrary initialized successfully" }
 
         } catch (e: Exception) {
             log.e(tag = TAG) { "Error initializing library: ${e.message}" }
             throw SipLibraryException("Failed to initialize library", e)
+        }
+    }
+
+    /**
+     * NUEVO: Inicializa el gestor de audio personalizado
+     */
+    private fun initializeCustomAudioManager(application: Application) {
+        try {
+            val recordingsDir = if (config.audioRecordingsDir != null) {
+                File(config.audioRecordingsDir)
+            } else {
+                File(application.getExternalFilesDir(null), "sip_recordings")
+            }
+
+            customAudioManager = CustomAudioManager(recordingsDir)
+            log.d(tag = TAG) { "Custom audio manager initialized with directory: ${recordingsDir.absolutePath}" }
+
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error initializing custom audio manager: ${e.message}" }
         }
     }
 
@@ -201,6 +268,19 @@ class EddysSipLibrary private constructor() {
                 override fun onCallTerminated() {
                     log.d(tag = TAG) { "Internal callback: onCallTerminated" }
                     val callInfo = getCurrentCallInfo()
+
+                    // NUEVO: Finalizar sesión de audio personalizado
+                    callInfo?.let { info ->
+                        customAudioManager?.let { cam ->
+                            CoroutineScope(Dispatchers.IO).launch {
+                                val recordingInfo = cam.endCallSession(info.callId)
+                                recordingInfo?.let {
+                                    notifyRecordingEnded(info.callId, it)
+                                }
+                            }
+                        }
+                    }
+
                     notifyCallEnded(callInfo, CallEndReason.NORMAL_HANGUP)
                 }
 
@@ -221,7 +301,25 @@ class EddysSipLibrary private constructor() {
 
                 override fun onCallConnected() {
                     log.d(tag = TAG) { "Internal callback: onCallConnected" }
-                    getCurrentCallInfo()?.let { notifyCallConnected(it) }
+                    getCurrentCallInfo()?.let {
+                        notifyCallConnected(it)
+
+                        // NUEVO: Iniciar sesión de audio personalizado
+                        customAudioManager?.let { cam ->
+                            CoroutineScope(Dispatchers.IO).launch {
+                                val session = cam.startCallSession(
+                                    callId = it.callId,
+                                    enableRecording = config.enableAudioInterception,
+                                    enableCustomInput = false,
+                                    enableCustomOutput = false
+                                )
+
+                                if (session.recordingEnabled && session.recordingSessionId != null) {
+                                    notifyRecordingStarted(it.callId, session.recordingSessionId)
+                                }
+                            }
+                        }
+                    }
                 }
 
                 override fun onCallFailed(error: String) {
@@ -239,25 +337,25 @@ class EddysSipLibrary private constructor() {
                     val enhancedStateInfo = stateInfo.copy(
                         // Agregar información adicional si es necesario
                     )
-                    
+
                     notifyCallStateChanged(enhancedStateInfo)
 
                     // Mapear a eventos específicos para compatibilidad
                     callInfo?.let { info ->
-                    when (stateInfo.state) {
-                        CallState.CONNECTED -> notifyCallConnected(info)
-                        CallState.OUTGOING_RINGING -> notifyCallRinging(info)
-                        CallState.OUTGOING_INIT -> notifyCallInitiated(info)
-                        CallState.INCOMING_RECEIVED -> handleIncomingCall()
-                        CallState.ENDED -> notifyCallEnded(info, CallEndReason.NORMAL_HANGUP)
-                        CallState.PAUSED -> notifyCallHeld(info)
-                        CallState.STREAMS_RUNNING -> notifyCallResumed(info)
-                        CallState.ERROR -> {
-                            val reason = mapErrorReasonToCallEndReason(stateInfo.errorReason)
-                            notifyCallEnded(info, reason)
+                        when (stateInfo.state) {
+                            CallState.CONNECTED -> notifyCallConnected(info)
+                            CallState.OUTGOING_RINGING -> notifyCallRinging(info)
+                            CallState.OUTGOING_INIT -> notifyCallInitiated(info)
+                            CallState.INCOMING_RECEIVED -> handleIncomingCall()
+                            CallState.ENDED -> notifyCallEnded(info, CallEndReason.NORMAL_HANGUP)
+                            CallState.PAUSED -> notifyCallHeld(info)
+                            CallState.STREAMS_RUNNING -> notifyCallResumed(info)
+                            CallState.ERROR -> {
+                                val reason = mapErrorReasonToCallEndReason(stateInfo.errorReason)
+                                notifyCallEnded(info, reason)
+                            }
+                            else -> {}
                         }
-                        else -> {}
-                    }
                     }
                 }
             }
@@ -304,6 +402,15 @@ class EddysSipLibrary private constructor() {
     fun setIncomingCallListener(listener: IncomingCallListener?) {
         this.incomingCallListener = listener
         log.d(tag = TAG) { "IncomingCallListener configured" }
+    }
+
+
+    /**
+     * NUEVO: Configura un listener específico para intercepción de audio
+     */
+    fun setAudioInterceptionListener(listener: AudioInterceptionListener?) {
+        this.audioInterceptionListener = listener
+        log.d(tag = TAG) { "AudioInterceptionListener configured" }
     }
 
     // === MÉTODOS DE NOTIFICACIÓN INTERNA ===
@@ -464,6 +571,36 @@ class EddysSipLibrary private constructor() {
         }
     }
 
+    /**
+     * NUEVO: Notifica el inicio de una grabación
+     */
+    private fun notifyRecordingStarted(callId: String, recordingId: String) {
+        log.d(tag = TAG) { "Notifying recording started for call: $callId" }
+
+        listeners.forEach { listener ->
+            try {
+                listener.onRecordingStarted(callId, recordingId)
+            } catch (e: Exception) {
+                log.e(tag = TAG) { "Error in listener onRecordingStarted: ${e.message}" }
+            }
+        }
+    }
+
+    /**
+     * NUEVO: Notifica el fin de una grabación
+     */
+    private fun notifyRecordingEnded(callId: String, recordingInfo: AudioRecordingManager.RecordingInfo) {
+        log.d(tag = TAG) { "Notifying recording ended for call: $callId" }
+
+        listeners.forEach { listener ->
+            try {
+                listener.onRecordingEnded(callId, recordingInfo)
+            } catch (e: Exception) {
+                log.e(tag = TAG) { "Error in listener onRecordingEnded: ${e.message}" }
+            }
+        }
+    }
+
     private fun handleIncomingCall() {
         // Crear información de llamada entrante desde el core manager
         val manager = sipCoreManager ?: return
@@ -513,19 +650,22 @@ class EddysSipLibrary private constructor() {
     private fun getCallInfoForState(stateInfo: CallStateInfo): CallInfo? {
         val manager = sipCoreManager ?: return null
         val calls = MultiCallManager.getAllCalls()
-        
+
         // Buscar la llamada específica por callId
         val callData = calls.find { it.callId == stateInfo.callId }
             ?: manager.currentAccountInfo?.currentCallData
             ?: return null
 
         val account = manager.currentAccountInfo ?: return null
-        val currentCall1 = calls.size == 1 && 
-            stateInfo.state != CallState.ENDED && 
-            stateInfo.state != CallState.ERROR && 
-            stateInfo.state != CallState.ENDING && 
-            stateInfo.state != CallState.IDLE
-        
+        val currentCall1 = calls.size == 1 &&
+                stateInfo.state != CallState.ENDED &&
+                stateInfo.state != CallState.ERROR &&
+                stateInfo.state != CallState.ENDING &&
+                stateInfo.state != CallState.IDLE
+
+        // NUEVO: Información de audio personalizado
+        val audioSession = customAudioManager?.getSessionInfo(callData.callId)
+
         return try {
             CallInfo(
                 callId = callData.callId,
@@ -537,9 +677,13 @@ class EddysSipLibrary private constructor() {
                 isOnHold = callData.isOnHold ?: false,
                 isMuted = manager.webRtcManager.isMuted(),
                 localAccount = account.username,
-                codec = null,
+                codec = "PCMA/8000", // Siempre PCMA según los requerimientos
                 state = stateInfo.state,
-                isCurrentCall = currentCall1
+                isCurrentCall = currentCall1,
+                // NUEVO: Información de audio personalizado
+                hasCustomAudio = audioSession?.customInputEnabled == true || audioSession?.customOutputEnabled == true,
+                isRecording = audioSession?.recordingEnabled == true,
+                recordingId = audioSession?.recordingSessionId
             )
         } catch (e: Exception) {
             log.e(tag = TAG) { "Error creating CallInfo: ${e.message}" }
@@ -555,14 +699,17 @@ class EddysSipLibrary private constructor() {
         val account = manager.currentAccountInfo ?: return null
         val calls = MultiCallManager.getAllCalls()
         val callData = calls.firstOrNull() ?: account.currentCallData ?: return null
-        
-        val currentCall1 = calls.size == 1 && 
-            CallStateManager.getCurrentState().let { state ->
-                state.state != CallState.ENDED && 
-                state.state != CallState.ERROR && 
-                state.state != CallState.ENDING && 
-                state.state != CallState.IDLE
-            }
+
+        val currentCall1 = calls.size == 1 &&
+                CallStateManager.getCurrentState().let { state ->
+                    state.state != CallState.ENDED &&
+                            state.state != CallState.ERROR &&
+                            state.state != CallState.ENDING &&
+                            state.state != CallState.IDLE
+                }
+
+        // NUEVO: Información de audio personalizado
+        val audioSession = customAudioManager?.getSessionInfo(callData.callId)
 
         return try {
             // Obtener estado actual
@@ -578,9 +725,13 @@ class EddysSipLibrary private constructor() {
                 isOnHold = callData.isOnHold ?: false,
                 isMuted = manager.webRtcManager.isMuted(),
                 localAccount = account.username,
-                codec = null,
+                codec = "PCMA/8000", // Siempre PCMA según los requerimientos
                 state = currentState.state,
-                isCurrentCall = currentCall1
+                isCurrentCall = currentCall1,
+                // NUEVO: Información de audio personalizado
+                hasCustomAudio = audioSession?.customInputEnabled == true || audioSession?.customOutputEnabled == true,
+                isRecording = audioSession?.recordingEnabled == true,
+                recordingId = audioSession?.recordingSessionId
             )
         } catch (e: Exception) {
             log.e(tag = TAG) { "Error creating CallInfo: ${e.message}" }
@@ -764,7 +915,7 @@ class EddysSipLibrary private constructor() {
      */
     fun acceptCall(callId: String? = null) {
         checkInitialized()
-        
+
         val calls = MultiCallManager.getAllCalls()
         val targetCallId = if (callId == null && calls.size == 1) {
             // Llamada única, usar sin callId
@@ -774,7 +925,7 @@ class EddysSipLibrary private constructor() {
         } else {
             callId ?: calls.firstOrNull()?.callId
         }
-        
+
         if (targetCallId != null) {
             log.d(tag = TAG) { "Accepting call: $targetCallId" }
             sipCoreManager?.acceptCall(targetCallId)
@@ -788,7 +939,7 @@ class EddysSipLibrary private constructor() {
      */
     fun declineCall(callId: String? = null) {
         checkInitialized()
-        
+
         val calls = MultiCallManager.getAllCalls()
         val targetCallId = if (callId == null && calls.size == 1) {
             // Llamada única, usar sin callId
@@ -798,7 +949,7 @@ class EddysSipLibrary private constructor() {
         } else {
             callId ?: calls.firstOrNull()?.callId
         }
-        
+
         if (targetCallId != null) {
             log.d(tag = TAG) { "Declining call: $targetCallId" }
             sipCoreManager?.declineCall(targetCallId)
@@ -812,7 +963,7 @@ class EddysSipLibrary private constructor() {
      */
     fun endCall(callId: String? = null) {
         checkInitialized()
-        
+
         val calls = MultiCallManager.getAllCalls()
         val targetCallId = if (callId == null && calls.size == 1) {
             // Llamada única, usar sin callId
@@ -822,7 +973,7 @@ class EddysSipLibrary private constructor() {
         } else {
             callId ?: calls.firstOrNull()?.callId
         }
-        
+
         if (targetCallId != null) {
             log.d(tag = TAG) { "Ending call: $targetCallId" }
             sipCoreManager?.endCall(targetCallId)
@@ -836,7 +987,7 @@ class EddysSipLibrary private constructor() {
      */
     fun holdCall(callId: String? = null) {
         checkInitialized()
-        
+
         val calls = MultiCallManager.getAllCalls()
         val targetCallId = if (callId == null && calls.size == 1) {
             // Llamada única, usar sin callId
@@ -846,7 +997,7 @@ class EddysSipLibrary private constructor() {
         } else {
             callId ?: calls.firstOrNull()?.callId
         }
-        
+
         if (targetCallId != null) {
             log.d(tag = TAG) { "Holding call: $targetCallId" }
             sipCoreManager?.holdCall(targetCallId)
@@ -860,7 +1011,7 @@ class EddysSipLibrary private constructor() {
      */
     fun resumeCall(callId: String? = null) {
         checkInitialized()
-        
+
         val calls = MultiCallManager.getAllCalls()
         val targetCallId = if (callId == null && calls.size == 1) {
             // Llamada única, usar sin callId
@@ -870,7 +1021,7 @@ class EddysSipLibrary private constructor() {
         } else {
             callId ?: calls.firstOrNull()?.callId
         }
-        
+
         if (targetCallId != null) {
             log.d(tag = TAG) { "Resuming call: $targetCallId" }
             sipCoreManager?.resumeCall(targetCallId)
@@ -878,7 +1029,7 @@ class EddysSipLibrary private constructor() {
             log.w(tag = TAG) { "No call to resume" }
         }
     }
-    
+
     /**
      * Alias para resumeCall para compatibilidad
      */
@@ -893,14 +1044,17 @@ class EddysSipLibrary private constructor() {
             try {
                 val account = sipCoreManager?.currentAccountInfo ?: return@mapNotNull null
                 val calls = MultiCallManager.getAllCalls()
-                val currentCall1 = calls.size == 1 && 
-                    CallStateManager.getCurrentState().let { state ->
-                        state.state != CallState.ENDED && 
-                        state.state != CallState.ERROR && 
-                        state.state != CallState.ENDING && 
-                        state.state != CallState.IDLE
-                    }
-                
+                val currentCall1 = calls.size == 1 &&
+                        CallStateManager.getCurrentState().let { state ->
+                            state.state != CallState.ENDED &&
+                                    state.state != CallState.ERROR &&
+                                    state.state != CallState.ENDING &&
+                                    state.state != CallState.IDLE
+                        }
+
+                // NUEVO: Información de audio personalizado
+                val audioSession = customAudioManager?.getSessionInfo(callData.callId)
+
                 CallInfo(
                     callId = callData.callId,
                     phoneNumber = if (callData.direction == CallDirections.INCOMING) callData.from else callData.to,
@@ -911,9 +1065,13 @@ class EddysSipLibrary private constructor() {
                     isOnHold = callData.isOnHold ?: false,
                     isMuted = sipCoreManager?.webRtcManager?.isMuted() ?: false,
                     localAccount = account.username,
-                    codec = null,
+                    codec = "PCMA/8000", // Siempre PCMA según los requerimientos
                     state = CallStateManager.getStateForCall(callData.callId)?.state,
-                    isCurrentCall = currentCall1 && callData.callId == CallStateManager.getCurrentCallId()
+                    isCurrentCall = currentCall1 && callData.callId == CallStateManager.getCurrentCallId(),
+                    // NUEVO: Información de audio personalizado
+                    hasCustomAudio = audioSession?.customInputEnabled == true || audioSession?.customOutputEnabled == true,
+                    isRecording = audioSession?.recordingEnabled == true,
+                    recordingId = audioSession?.recordingSessionId
                 )
             } catch (e: Exception) {
                 log.e(tag = TAG) { "Error creating CallInfo for ${callData.callId}: ${e.message}" }
@@ -967,6 +1125,187 @@ class EddysSipLibrary private constructor() {
         return sipCoreManager?.webRtcManager?.getAllAudioDevices() ?: Pair(emptyList(), emptyList())
     }
 
+    // === MÉTODOS DE AUDIO PERSONALIZADO ===
+
+
+
+    /**
+     * Inicia una sesión de audio personalizado para una llamada
+     */
+    fun startCallAudioSession(
+        callId: String,
+        enableRecording: Boolean = false,
+        enableCustomInput: Boolean = false,
+        enableCustomOutput: Boolean = false
+    ) {
+        checkInitialized()
+
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                customAudioManager?.startCallSession(
+                    callId = callId,
+                    enableRecording = enableRecording,
+                    enableCustomInput = enableCustomInput,
+                    enableCustomOutput = enableCustomOutput
+                )
+
+                // Habilitar reemplazos si se solicita
+                if (enableCustomInput) {
+                    customAudioManager?.enableInputReplacement(callId, true)
+                }
+                if (enableCustomOutput) {
+                    customAudioManager?.enableOutputReplacement(callId, true)
+                }
+
+                log.d(tag = TAG) { "Call audio session started for $callId" }
+            } catch (e: Exception) {
+                log.e(tag = TAG) { "Error starting call audio session: ${e.message}" }
+            }
+        }
+    }
+
+    /**
+     * Habilita/deshabilita el reemplazo de audio de entrada durante una llamada activa
+     */
+    fun enableInputReplacement(callId: String, enable: Boolean) {
+        checkInitialized()
+        customAudioManager?.enableInputReplacement(callId, enable)
+        log.d(tag = TAG) { "Input replacement ${if (enable) "enabled" else "disabled"} for call $callId" }
+    }
+
+    /**
+     * Habilita/deshabilita el reemplazo de audio de salida durante una llamada activa
+     */
+    fun enableOutputReplacement(callId: String, enable: Boolean) {
+        checkInitialized()
+        customAudioManager?.enableOutputReplacement(callId, enable)
+        log.d(tag = TAG) { "Output replacement ${if (enable) "enabled" else "disabled"} for call $callId" }
+    }
+
+    /**
+     * Actualiza el audio personalizado de entrada en tiempo real durante una llamada
+     */
+    fun updateCustomInputAudioRealTime(audioData: ByteArray, format: AudioFormatConverter.AudioFormat = AudioFormatConverter.AudioFormat.PCMA) {
+        checkInitialized()
+        customAudioManager?.updateCustomInputAudioRealTime(audioData, format)
+        log.d(tag = TAG) { "Custom input audio updated in real-time: ${audioData.size} bytes" }
+    }
+
+    /**
+     * Actualiza el audio personalizado de salida en tiempo real durante una llamada
+     */
+    fun updateCustomOutputAudioRealTime(audioData: ByteArray, format: AudioFormatConverter.AudioFormat = AudioFormatConverter.AudioFormat.PCMA) {
+        checkInitialized()
+        customAudioManager?.updateCustomOutputAudioRealTime(audioData, format)
+        log.d(tag = TAG) { "Custom output audio updated in real-time: ${audioData.size} bytes" }
+    }
+
+    /**
+     * Obtiene el audio original recibido (sin reemplazo) para grabación
+     */
+    fun getOriginalReceivedAudio(): ByteArray {
+        checkInitialized()
+        return customAudioManager?.getOriginalReceivedAudio() ?: byteArrayOf()
+    }
+
+    /**
+     * Obtiene el audio original enviado (sin reemplazo) para grabación
+     */
+    fun getOriginalSentAudio(): ByteArray {
+        checkInitialized()
+        return customAudioManager?.getOriginalSentAudio() ?: byteArrayOf()
+    }
+
+    /**
+     * Limpia los buffers de audio
+     */
+    fun clearAudioBuffers() {
+        checkInitialized()
+        customAudioManager?.clearAudioBuffers()
+    }
+
+    /**
+     * Carga y aplica audio personalizado desde archivo en tiempo real
+     */
+    fun loadAndApplyCustomAudioRealTime(inputFile: File?, outputFile: File?) {
+        checkInitialized()
+
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                inputFile?.let { file ->
+                    if (file.exists()) {
+                        val audioData = file.readBytes()
+                        val format = if (file.extension.lowercase() == "pcma") {
+                            AudioFormatConverter.AudioFormat.PCMA
+                        } else {
+                            AudioFormatConverter.AudioFormat.PCM_16BIT
+                        }
+                        updateCustomInputAudioRealTime(audioData, format)
+                    }
+                }
+
+                outputFile?.let { file ->
+                    if (file.exists()) {
+                        val audioData = file.readBytes()
+                        val format = if (file.extension.lowercase() == "pcma") {
+                            AudioFormatConverter.AudioFormat.PCMA
+                        } else {
+                            AudioFormatConverter.AudioFormat.PCM_16BIT
+                        }
+                        updateCustomOutputAudioRealTime(audioData, format)
+                    }
+                }
+
+            } catch (e: Exception) {
+                log.e(tag = TAG) { "Error loading custom audio files: ${e.message}" }
+            }
+        }
+    }
+
+    /**
+     * Inicia una sesión de audio personalizado para una llamada (versión suspendida)
+     */
+    suspend fun startCallAudioSessionSuspend(
+        callId: String,
+        enableRecording: Boolean = false,
+        enableCustomInput: Boolean = false,
+        enableCustomOutput: Boolean = false
+    ): Boolean {
+        checkInitialized()
+        return try {
+            val session = customAudioManager?.startCallSession(
+                callId = callId,
+                enableRecording = enableRecording,
+                enableCustomInput = enableCustomInput,
+                enableCustomOutput = enableCustomOutput
+            )
+
+            // Habilitar reemplazos si se solicita
+            if (enableCustomInput) {
+                customAudioManager?.enableInputReplacement(callId, true)
+            }
+            if (enableCustomOutput) {
+                customAudioManager?.enableOutputReplacement(callId, true)
+            }
+
+            session != null
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error starting call audio session: ${e.message}" }
+            false
+        }
+    }
+
+    /**
+     * Finaliza una sesión de audio personalizado
+     */
+    fun endCallAudioSession(callId: String) {
+        checkInitialized()
+        CoroutineScope(Dispatchers.IO).launch {
+            customAudioManager?.endCallSession(callId)
+        }
+    }
+
+
     fun changeAudioOutput(device: AudioDevice): Boolean {
         checkInitialized()
         return sipCoreManager?.webRtcManager?.changeAudioOutputDeviceDuringCall(device) ?: false
@@ -1007,6 +1346,191 @@ class EddysSipLibrary private constructor() {
         return sipCoreManager?.isSipCoreManagerHealthy() ?: false
     }
 
+    // === NUEVOS MÉTODOS PARA AUDIO PERSONALIZADO ===
+
+    /**
+     * Inicia el sistema de audio personalizado
+     */
+    @RequiresPermission(Manifest.permission.RECORD_AUDIO)
+    fun startCustomAudio(config: CustomAudioConfig = CustomAudioConfig()) {
+        checkInitialized()
+        customAudioManager?.start(config)
+        log.d(tag = TAG) { "Custom audio started" }
+    }
+
+    /**
+     * Detiene el sistema de audio personalizado
+     */
+    fun stopCustomAudio() {
+        checkInitialized()
+        customAudioManager?.stop()
+        log.d(tag = TAG) { "Custom audio stopped" }
+    }
+
+    /**
+     * Configura audio personalizado para entrada (micrófono)
+     */
+    fun setCustomInputAudio(audioData: ByteArray, format: AudioFormatConverter.AudioFormat = AudioFormatConverter.AudioFormat.PCMA) {
+        checkInitialized()
+        customAudioManager?.setCustomInputAudio(audioData, format)
+        log.d(tag = TAG) { "Custom input audio set: ${audioData.size} bytes" }
+    }
+
+    /**
+     * Configura audio personalizado para salida (altavoz)
+     */
+    fun setCustomOutputAudio(audioData: ByteArray, format: AudioFormatConverter.AudioFormat = AudioFormatConverter.AudioFormat.PCMA) {
+        checkInitialized()
+        customAudioManager?.setCustomOutputAudio(audioData, format)
+        log.d(tag = TAG) { "Custom output audio set: ${audioData.size} bytes" }
+    }
+
+    /**
+     * Carga audio personalizado desde archivo para entrada
+     */
+    fun loadCustomInputAudioFromFile(file: File): Boolean {
+        checkInitialized()
+        return customAudioManager?.loadCustomInputAudio(file) ?: false
+    }
+
+    /**
+     * Carga audio personalizado desde archivo para salida
+     */
+    fun loadCustomOutputAudioFromFile(file: File): Boolean {
+        checkInitialized()
+        return customAudioManager?.loadCustomOutputAudio(file) ?: false
+    }
+
+    /**
+     * Habilita/deshabilita la grabación de audio
+     */
+    fun setRecordingEnabled(enabled: Boolean) {
+        checkInitialized()
+        customAudioManager?.setRecordingEnabled(enabled)
+        log.d(tag = TAG) { "Recording enabled: $enabled" }
+    }
+
+    /**
+     * Obtiene todas las grabaciones de audio
+     */
+    fun getAllRecordings(): List<File> {
+        checkInitialized()
+        return customAudioManager?.getAllRecordings() ?: emptyList()
+    }
+
+    /**
+     * Obtiene grabaciones para una llamada específica
+     */
+    fun getRecordingsByCallId(callId: String): List<File> {
+        checkInitialized()
+        return customAudioManager?.getRecordingsByCallId(callId) ?: emptyList()
+    }
+
+    /**
+     * Convierte una grabación PCMA a WAV
+     */
+    fun convertRecordingToWav(pcmaFile: File): File? {
+        checkInitialized()
+        return customAudioManager?.convertRecordingToWav(pcmaFile)
+    }
+
+    /**
+     * Elimina una grabación
+     */
+    fun deleteRecording(file: File): Boolean {
+        checkInitialized()
+        return customAudioManager?.deleteRecording(file) ?: false
+    }
+
+    /**
+     * Elimina todas las grabaciones
+     */
+    fun deleteAllRecordings(): Int {
+        checkInitialized()
+        return customAudioManager?.deleteAllRecordings() ?: 0
+    }
+
+    /**
+     * Elimina grabaciones antiguas
+     */
+    fun deleteOldRecordings(olderThanDays: Int): Int {
+        checkInitialized()
+        return customAudioManager?.deleteOldRecordings(olderThanDays) ?: 0
+    }
+
+    /**
+     * Convierte datos de audio entre formatos
+     */
+    fun convertAudioFormat(
+        inputData: ByteArray,
+        inputFormat: AudioFormatConverter.AudioFormat,
+        outputFormat: AudioFormatConverter.AudioFormat
+    ): ByteArray {
+        checkInitialized()
+        return AudioFormatConverter.convertAudioFormat(inputData, inputFormat, outputFormat)
+    }
+
+    /**
+     * Convierte PCM a PCMA
+     */
+    fun convertPcmToPcma(pcmData: ByteArray): ByteArray {
+        checkInitialized()
+        return AudioFormatConverter.convertToPCMA(pcmData)
+    }
+
+    /**
+     * Convierte PCMA a PCM
+     */
+    fun convertPcmaToPcm(pcmaData: ByteArray): ByteArray {
+        checkInitialized()
+        return AudioFormatConverter.convertFromPCMA(pcmaData)
+    }
+
+    /**
+     * Redimensiona audio para un sample rate específico
+     */
+    fun resampleAudio(
+        inputData: ByteArray,
+        inputSampleRate: Int,
+        outputSampleRate: Int,
+        format: AudioFormatConverter.AudioFormat
+    ): ByteArray {
+        checkInitialized()
+        return AudioFormatConverter.resampleAudio(inputData, inputSampleRate, outputSampleRate, format)
+    }
+
+    /**
+     * Detecta el formato de audio
+     */
+    fun detectAudioFormat(data: ByteArray): AudioFormatConverter.AudioFormat {
+        checkInitialized()
+        return AudioFormatConverter.detectAudioFormat(data)
+    }
+
+    /**
+     * Obtiene información de sesiones de audio activas
+     */
+    fun getActiveAudioSessions(): List<CustomAudioManager.AudioSession> {
+        checkInitialized()
+        return customAudioManager?.getActiveSessions() ?: emptyList()
+    }
+
+    /**
+     * Verifica si hay sesiones de audio activas
+     */
+    fun hasActiveAudioSessions(): Boolean {
+        checkInitialized()
+        return customAudioManager?.hasActiveSessions() ?: false
+    }
+
+    /**
+     * Obtiene información de diagnóstico del audio personalizado
+     */
+    fun getCustomAudioDiagnostics(): String {
+        checkInitialized()
+        return customAudioManager?.getDiagnosticInfo() ?: "Custom audio not initialized"
+    }
+
     private fun checkInitialized() {
         if (!isInitialized || sipCoreManager == null) {
             throw SipLibraryException("Library not initialized. Call initialize() first.")
@@ -1018,14 +1542,17 @@ class EddysSipLibrary private constructor() {
             appendLine("=== LISTENERS DIAGNOSTIC ===")
             appendLine("Library initialized: $isInitialized")
             appendLine("SipCoreManager: ${sipCoreManager != null}")
+            appendLine("Custom audio manager: ${customAudioManager != null}")
             appendLine("General listeners count: ${listeners.size}")
             appendLine("Registration listener: ${registrationListener != null}")
             appendLine("Call listener: ${callListener != null}")
             appendLine("Incoming call listener: ${incomingCallListener != null}")
+            appendLine("Audio interception listener: ${audioInterceptionListener != null}")
 
             appendLine("\n--- Current States ---")
             appendLine("Current call state: ${getCurrentCallState()}")
             appendLine("Registration states: ${getAllRegistrationStates()}")
+            appendLine("Active audio sessions: ${hasActiveAudioSessions()}")
 
             appendLine("\n--- Active Accounts ---")
             sipCoreManager?.let { manager ->
@@ -1039,19 +1566,34 @@ class EddysSipLibrary private constructor() {
             history.takeLast(5).forEach { state ->
                 appendLine("${state.timestamp}: ${state.previousState} -> ${state.state}")
             }
+
+            appendLine("\n--- Custom Audio Status ---")
+            customAudioManager?.let { cam ->
+                appendLine("Active sessions: ${cam.getActiveSessions().size}")
+                appendLine("Total recordings: ${cam.getAllRecordings().size}")
+                appendLine("Has active sessions: ${cam.hasActiveSessions()}")
+            }
         }
     }
 
     fun dispose() {
         if (isInitialized) {
             log.d(tag = TAG) { "Disposing EddysSipLibrary" }
+
+            // Detener audio personalizado
+            customAudioManager?.stop()
+            customAudioManager = null
+
             sipCoreManager?.dispose()
             sipCoreManager = null
             listeners.clear()
             registrationListener = null
             callListener = null
             incomingCallListener = null
+            audioInterceptionListener = null
             isInitialized = false
+            customAudioManager?.stop()
+            customAudioManager = null
             log.d(tag = TAG) { "EddysSipLibrary disposed" }
         }
     }
