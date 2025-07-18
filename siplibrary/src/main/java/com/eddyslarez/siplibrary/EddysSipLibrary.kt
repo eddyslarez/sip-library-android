@@ -139,7 +139,7 @@ class EddysSipLibrary private constructor() {
         fun onIncomingCallTimeout(callInfo: IncomingCallInfo)
     }
     /**
-     * Enable AI audio translation
+     * Enable AI audio translation - ONLY during active calls
      */
     fun enableAudioTranslation(
         apiKey: String? = null,
@@ -147,6 +147,19 @@ class EddysSipLibrary private constructor() {
         model: String = "gpt-4o-realtime-preview-2025-06-03"
     ): Boolean {
         checkInitialized()
+
+        // CRÍTICO: Verificar que hay una llamada activa
+        if (!hasActiveCall()) {
+            log.w(tag = TAG) { "Cannot enable translation: No active call" }
+            return false
+        }
+
+        // Verificar que la llamada está conectada
+        val currentState = getCurrentCallState()
+        if (currentState.state != CallState.CONNECTED && currentState.state != CallState.STREAMS_RUNNING) {
+            log.w(tag = TAG) { "Cannot enable translation: Call not connected (state: ${currentState.state})" }
+            return false
+        }
 
         val finalApiKey = apiKey ?: config.openAIApiKey
         val finalTargetLanguage = targetLanguage ?: config.defaultTargetLanguage
@@ -156,14 +169,24 @@ class EddysSipLibrary private constructor() {
             return false
         }
 
-        log.d(tag = TAG) { "Enabling AI audio translation to $finalTargetLanguage" }
+        log.d(tag = TAG) { "Enabling AI audio translation during active call to $finalTargetLanguage" }
 
         return try {
-            sipCoreManager?.webRtcManager?.enableAudioTranslation(
+            val result = sipCoreManager?.webRtcManager?.enableAudioTranslation(
                 finalApiKey,
                 finalTargetLanguage,
                 model
             ) ?: false
+
+            if (result) {
+                // Notificar a listeners específicos de IA
+                aiTranslationListener?.onTranslationEnabled(finalTargetLanguage)
+
+                // Configurar calidad
+                setTranslationQuality(config.translationQuality)
+            }
+
+            result
         } catch (e: Exception) {
             log.e(tag = TAG) { "Error enabling AI translation: ${e.message}" }
             false
@@ -179,7 +202,13 @@ class EddysSipLibrary private constructor() {
         log.d(tag = TAG) { "Disabling AI audio translation" }
 
         return try {
-            sipCoreManager?.webRtcManager?.disableAudioTranslation() ?: false
+            val result = sipCoreManager?.webRtcManager?.disableAudioTranslation() ?: false
+
+            if (result) {
+                aiTranslationListener?.onTranslationDisabled()
+            }
+
+            result
         } catch (e: Exception) {
             log.e(tag = TAG) { "Error disabling AI translation: ${e.message}" }
             false
@@ -482,6 +511,8 @@ class EddysSipLibrary private constructor() {
             // Observar estados usando el nuevo CallStateManager
             CoroutineScope(Dispatchers.Main).launch {
                 CallStateManager.callStateFlow.collect { stateInfo ->
+                    // Manejar traducción automática basada en estado de llamada
+                    handleTranslationForCallState(stateInfo)
                     // Obtener información completa de la llamada
                     val callInfo = getCallInfoForState(stateInfo)
                     val enhancedStateInfo = stateInfo.copy(
@@ -511,7 +542,51 @@ class EddysSipLibrary private constructor() {
             }
         }
     }
+    /**
+     * NUEVO: Manejar traducción automática basada en estado de llamada
+     */
+    private fun handleTranslationForCallState(stateInfo: CallStateInfo) {
+        try {
+            when (stateInfo.state) {
+                CallState.CONNECTED, CallState.STREAMS_RUNNING -> {
+                    // Llamada conectada - habilitar traducción automática si está configurada
+                    if (config.enableAutoTranslation &&
+                        !config.openAIApiKey.isNullOrEmpty() &&
+                        !isAudioTranslationEnabled()) {
 
+                        log.d(tag = TAG) { "Auto-enabling translation for connected call" }
+
+                        // Delay para asegurar que el audio esté estable
+                        CoroutineScope(Dispatchers.Main).launch {
+                            delay(2000) // Esperar 2 segundos
+
+                            // Verificar nuevamente que la llamada sigue conectada
+                            if (hasActiveCall() && getCurrentCallState().state == CallState.CONNECTED) {
+                                enableAudioTranslation(
+                                    apiKey = config.openAIApiKey,
+                                    targetLanguage = config.defaultTargetLanguage
+                                )
+                            }
+                        }
+                    }
+                }
+
+                CallState.ENDED, CallState.ERROR, CallState.IDLE -> {
+                    // Llamada terminada - deshabilitar traducción automáticamente
+                    if (isAudioTranslationEnabled()) {
+                        log.d(tag = TAG) { "Auto-disabling translation for ended call" }
+                        disableAudioTranslation()
+                    }
+                }
+
+                else -> {
+                    // Otros estados - no hacer nada
+                }
+            }
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error handling translation for call state: ${e.message}" }
+        }
+    }
     // === MÉTODOS PARA CONFIGURAR LISTENERS ===
 
     /**

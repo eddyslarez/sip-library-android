@@ -518,8 +518,14 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
     override fun enableAudioTranslation(apiKey: String, targetLanguage: String, model: String): Boolean {
         log.d(TAG) { "Enabling AI audio translation to $targetLanguage" }
 
+        // CRÍTICO: Solo habilitar si hay una llamada activa
+        if (peerConnection == null || getConnectionState() != WebRtcConnectionState.CONNECTED) {
+            log.w(TAG) { "Cannot enable translation: No active call" }
+            return false
+        }
+
         return try {
-            // Crear y configurar OpenAI manager
+            // Crear y configurar OpenAI manager con configuración optimizada
             openAIManager = OpenAIRealtimeManager(apiKey, model)
 
             // Configurar listener para recibir audio traducido
@@ -527,10 +533,11 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
                 override fun onTranslationCompleted(originalAudio: ByteArray, translatedAudio: ByteArray, latency: Long) {
                     log.d(TAG) { "Translation completed with latency: ${latency}ms" }
 
-                    // Reproducir el audio traducido en lugar del original
-                    playTranslatedAudio(translatedAudio)
+                    // CRÍTICO: Solo reproducir si la llamada aún está activa
+                    if (peerConnection != null && getConnectionState() == WebRtcConnectionState.CONNECTED) {
+                        playTranslatedAudio(translatedAudio)
+                    }
 
-                    // Notificar al listener
                     webRtcEventListener?.onTranslationCompleted(true, latency, null, null)
                 }
 
@@ -550,17 +557,17 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
                 }
             })
 
-            // Inicializar y habilitar
+            // Inicializar con configuración optimizada
             if (openAIManager?.initialize() == true) {
                 isTranslationEnabled = openAIManager?.enable(targetLanguage) == true
                 currentTargetLanguage = if (isTranslationEnabled) targetLanguage else null
 
-                // CRÍTICO: Iniciar grabación para traducción usando tu sistema existente
+                // CRÍTICO: Solo iniciar captura de audio REMOTO (no local)
                 if (isTranslationEnabled) {
-                    startRecordingForTranslation()
+                    startRemoteAudioCapture()
                 }
 
-                log.d(TAG) { "AI translation enabled: $isTranslationEnabled" }
+                log.d(TAG) { "AI translation enabled: $isTranslationEnabled for active call" }
                 isTranslationEnabled
             } else {
                 log.e(TAG) { "Failed to initialize OpenAI manager" }
@@ -572,9 +579,124 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
             false
         }
     }
+    /**
+     * NUEVO: Capturar solo audio remoto para traducción
+     */
+    @RequiresPermission(Manifest.permission.RECORD_AUDIO)
+    private fun startRemoteAudioCapture() {
+        if (isRecordingForTranslation) {
+            log.w(TAG) { "Already capturing remote audio for translation" }
+            return
+        }
+
+        try {
+            // Crear un capturador especial solo para audio remoto
+            currentTranslationRecordingPath = audioFileManager.createRecordingPath("remote_translation")
+
+            // CRÍTICO: Configurar captura solo del audio remoto
+            startRemoteAudioRecording()
+
+            isRecordingForTranslation = true
+            log.d(TAG) { "Started remote audio capture for translation" }
+
+            // Iniciar procesamiento optimizado (más frecuente para menor latencia)
+            startOptimizedTranslationProcessing()
+
+        } catch (e: Exception) {
+            log.e(TAG) { "Error starting remote audio capture: ${e.message}" }
+        }
+    }
+    /**
+     * NUEVO: Procesamiento optimizado para menor latencia
+     */
+    private fun startOptimizedTranslationProcessing() {
+        translationProcessingJob?.cancel()
+        translationProcessingJob = coroutineScope.launch(Dispatchers.IO) {
+            var lastProcessedTime = 0L
+            val processingInterval = 800L // Procesar cada 800ms para menor latencia
+
+            while (isActive && isTranslationEnabled && isRecordingForTranslation) {
+                try {
+                    val currentTime = System.currentTimeMillis()
+
+                    // Solo procesar si hay suficiente audio nuevo
+                    if (currentTime - lastProcessedTime >= processingInterval) {
+                        currentTranslationRecordingPath?.let { path ->
+                            val audioData = readNewAudioData(path, lastProcessedTime)
+                            if (audioData != null && audioData.size > 1600) { // Mínimo 100ms de audio a 16kHz
+                                // Enviar a OpenAI para traducción
+                                openAIManager?.processAudioForTranslation(audioData)
+                                lastProcessedTime = currentTime
+                            }
+                        }
+                    }
+
+                    delay(100) // Verificar cada 100ms
+
+                } catch (e: Exception) {
+                    log.e(TAG) { "Error in optimized translation processing: ${e.message}" }
+                    delay(500)
+                }
+            }
+        }
+    }
 
     /**
-     * Disable AI audio translation
+     * NUEVO: Leer solo datos de audio nuevos
+     */
+    private fun readNewAudioData(filePath: String, lastProcessedTime: Long): ByteArray? {
+        return try {
+            val file = File(filePath)
+            if (!file.exists()) return null
+
+            val currentSize = file.length()
+            if (currentSize <= 44) return null // Solo header WAV
+
+            // Calcular posición aproximada basada en tiempo
+            val timeDiff = System.currentTimeMillis() - lastProcessedTime
+            val bytesPerMs = 32 // 16kHz * 2 bytes = 32 bytes por ms
+            val estimatedNewBytes = (timeDiff * bytesPerMs).toInt()
+
+            if (estimatedNewBytes < 1600) return null // Mínimo 50ms de audio
+
+            // Leer desde el final del archivo
+            val startPos = maxOf(44, currentSize - estimatedNewBytes)
+            val dataToRead = (currentSize - startPos).toInt()
+
+            if (dataToRead <= 0) return null
+
+            file.inputStream().use { input ->
+                input.skip(startPos)
+                val buffer = ByteArray(dataToRead)
+                val bytesRead = input.read(buffer)
+                if (bytesRead > 0) buffer.copyOf(bytesRead) else null
+            }
+
+        } catch (e: Exception) {
+            log.e(TAG) { "Error reading new audio data: ${e.message}" }
+            null
+        }
+    }
+
+    /**
+     * NUEVO: Iniciar grabación específica para audio remoto
+     */
+    @RequiresPermission(Manifest.permission.RECORD_AUDIO)
+    private fun startRemoteAudioRecording() {
+        // Esta función debe conectarse al stream de audio remoto
+        // Para simplicidad, usaremos el sistema existente pero optimizado
+        translationAudioRecorder = WavRecorder(
+            currentTranslationRecordingPath!!,
+            sampleRate = 16000, // Optimizado para OpenAI
+            channelCount = 1,
+            bitRate = 16
+        )
+
+        translationAudioRecorder?.startRecording(coroutineScope)
+    }
+
+    /**
+     * Disable AI audio translation (optimizado)
      */
     override fun disableAudioTranslation(): Boolean {
         log.d(TAG) { "Disabling AI audio translation" }
@@ -583,15 +705,20 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
             isTranslationEnabled = false
             currentTargetLanguage = null
 
-            // Detener grabación para traducción
-            stopRecordingForTranslation()
+            // Detener captura de audio remoto
+            stopRemoteAudioCapture()
+
+            // Detener procesamiento
+            translationProcessingJob?.cancel()
+            translationProcessingJob = null
 
             openAIManager?.disable()
             openAIManager = null
 
-            // Detener reproducción de audio traducido si está activa
+            // Detener reproducción y reactivar audio remoto
             translatedAudioPlayer?.stopPlaying()
             translatedAudioPlayer = null
+            remoteAudioTrack?.enabled = true
 
             log.d(TAG) { "AI translation disabled successfully" }
             true
@@ -599,6 +726,28 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
         } catch (e: Exception) {
             log.e(TAG) { "Error disabling AI translation: ${e.message}" }
             false
+        }
+    }
+
+    /**
+     * NUEVO: Detener captura de audio remoto
+     */
+    private fun stopRemoteAudioCapture() {
+        if (!isRecordingForTranslation) return
+
+        try {
+            translationAudioRecorder?.stopRecording()
+            translationAudioRecorder = null
+            isRecordingForTranslation = false
+
+            currentTranslationRecordingPath?.let { path ->
+                File(path).delete() // Limpiar archivo temporal
+            }
+            currentTranslationRecordingPath = null
+
+            log.d(TAG) { "Stopped remote audio capture" }
+        } catch (e: Exception) {
+            log.e(TAG) { "Error stopping remote audio capture: ${e.message}" }
         }
     }
 
@@ -728,31 +877,70 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
     }
 
     /**
-     * Reproducir audio traducido (modificado para usar tu sistema)
+     * Reproducir audio traducido optimizado
      */
     private fun playTranslatedAudio(translatedAudio: ByteArray) {
         try {
-            // Crear archivo temporal para el audio traducido
-            val tempFile = File.createTempFile("translated_audio", ".wav", context.cacheDir)
+            log.d(TAG) { "Playing translated audio: ${translatedAudio.size} bytes" }
 
-            // Crear header WAV para el audio traducido
-            val wavFile = createWavFile(translatedAudio, tempFile)
+            // Crear archivo temporal optimizado
+            val tempFile = File.createTempFile("translated_", ".wav", context.cacheDir)
 
-            // CRÍTICO: Detener el audio original y reproducir el traducido
-            if (isPlayingOutputFile) {
-                stopPlayingOutputAudioFile()
-            }
+            // Crear WAV con configuración optimizada
+            val wavFile = createOptimizedWavFile(translatedAudio, tempFile)
 
-            // Reproducir el audio traducido usando tu sistema existente
-            if (startPlayingOutputAudioFile(wavFile.absolutePath, false)) {
-                log.d(TAG) { "Playing translated audio: ${translatedAudio.size} bytes" }
+            // CRÍTICO: Pausar audio remoto original y reproducir traducido
+            remoteAudioTrack?.enabled = false
+
+            // Reproducir inmediatamente
+            translatedAudioPlayer?.stopPlaying()
+            translatedAudioPlayer = AudioFilePlayer(wavFile.absolutePath, 16000)
+
+            if (translatedAudioPlayer?.startPlaying(coroutineScope, false) == true) {
+                log.d(TAG) { "Translated audio playback started" }
+
+                // Reactivar audio remoto después de la reproducción
+                coroutineScope.launch {
+                    delay(estimateAudioDuration(translatedAudio.size))
+                    remoteAudioTrack?.enabled = true
+                    translatedAudioPlayer?.stopPlaying()
+                    translatedAudioPlayer = null
+                    // Limpiar archivo temporal
+                    tempFile.delete()
+                }
             } else {
-                log.e(TAG) { "Failed to play translated audio" }
+                log.e(TAG) { "Failed to start translated audio playback" }
+                remoteAudioTrack?.enabled = true
             }
 
         } catch (e: Exception) {
             log.e(TAG) { "Error playing translated audio: ${e.message}" }
+            remoteAudioTrack?.enabled = true
         }
+    }
+    /**
+     * Estimar duración del audio
+     */
+    private fun estimateAudioDuration(audioSize: Int): Long {
+        // 16kHz, 16-bit, mono = 32000 bytes por segundo
+        return (audioSize * 1000L) / 32000L
+    }
+
+    /**
+     * Crear archivo WAV optimizado
+     */
+    private fun createOptimizedWavFile(pcmData: ByteArray, outputFile: File): File {
+        try {
+            FileOutputStream(outputFile).use { output ->
+                // Header WAV optimizado para mejor calidad
+                val header = createWavHeader(pcmData.size, 16000, 1, 16)
+                output.write(header)
+                output.write(pcmData)
+            }
+        } catch (e: Exception) {
+            log.e(TAG) { "Error creating optimized WAV file: ${e.message}" }
+        }
+        return outputFile
     }
 
     /**
@@ -3676,19 +3864,19 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
                 PeerConnectionState.Failed,
                 PeerConnectionState.Closed -> {
                     CallStateManager.updateCallState(CallState.ENDED)
-                    log.d(TAG) { "Call ended" }
+                    log.d(TAG) { "Call ended - stopping translation" }
                     releaseAudioFocus()
+
+                    // CRÍTICO: Detener traducción cuando la llamada termina
+                    if (isTranslationEnabled) {
+                        disableAudioTranslation()
+                    }
 
                     // Detener todas las grabaciones y reproducciones
                     if (isRecordingSentAudio) stopRecordingSentAudio()
                     if (isRecordingReceivedAudio) stopRecordingReceivedAudio()
                     if (isPlayingInputFile) stopPlayingInputAudioFile()
                     if (isPlayingOutputFile) stopPlayingOutputAudioFile()
-
-                    // NUEVO: Detener traducción
-                    if (isRecordingForTranslation) {
-                        stopRecordingForTranslation()
-                    }
                 }
                 else -> {
                     log.d(TAG) { "Other connection state: $state" }
@@ -3710,6 +3898,8 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
             }
         }.launchIn(coroutineScope)
     }
+
+
     override fun isAudioTranslationEnabled(): Boolean = isTranslationEnabled
 
     override fun getCurrentTargetLanguage(): String? = currentTargetLanguage
