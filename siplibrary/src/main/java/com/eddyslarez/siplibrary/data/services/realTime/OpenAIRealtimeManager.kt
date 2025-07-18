@@ -345,7 +345,9 @@ class OpenAIRealtimeManager(
                 put("type", "response.create")
                 put("response", JSONObject().apply {
                     put("modalities", org.json.JSONArray().apply {
-                        put("audio")
+                        put("text")
+                        put("audio")  // <-- Ambos deben estar presentes
+
                     })
                     put("instructions", "Translate the received audio to $targetLanguage and respond with audio in that language.")
                 })
