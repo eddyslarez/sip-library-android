@@ -170,7 +170,8 @@ class OpenAIRealtimeManager(
                     Simply translate the audio content directly to $targetLanguage.
                 """.trimIndent())
 
-                put("voice", "nova") // Voz más natural y rápida
+                put("voice", "ash") // o "alloy", "echo", etc.
+                // Voz más natural y rápida
                 put("input_audio_format", "pcm16")
                 put("output_audio_format", "pcm16")
 
@@ -492,10 +493,11 @@ class OpenAIRealtimeManager(
         this.translationQuality = quality
 
         val (temperature, voice) = when (quality) {
-            WebRtcManager.TranslationQuality.LOW -> Pair(0.1, "alloy")
-            WebRtcManager.TranslationQuality.MEDIUM -> Pair(0.2, "echo")
-            WebRtcManager.TranslationQuality.HIGH -> Pair(0.1, "ash")
+            WebRtcManager.TranslationQuality.LOW -> Pair(0.6, "alloy") // <-- mínimo permitido
+            WebRtcManager.TranslationQuality.MEDIUM -> Pair(0.7, "echo")
+            WebRtcManager.TranslationQuality.HIGH -> Pair(0.8, "ash")
         }
+
 
         val sessionUpdate = JSONObject().apply {
             put("type", "session.update")
