@@ -17,6 +17,7 @@ import kotlinx.coroutines.launch
 import android.net.Uri
 import android.util.Log
 import com.eddyslarez.siplibrary.data.services.audio.WebRtcManager
+import com.eddyslarez.siplibrary.data.services.audio.WebRtcManagerFactory
 import java.io.File
 
 /**
@@ -142,7 +143,7 @@ class EddysSipLibrary private constructor() {
     fun enableAudioTranslation(
         apiKey: String? = null,
         targetLanguage: String? = null,
-        model: String = "gpt-4o-realtime-preview-2024-12-17"
+        model: String = "gpt-4o-realtime-preview-2025-06-03"
     ): Boolean {
         checkInitialized()
 
@@ -309,7 +310,8 @@ class EddysSipLibrary private constructor() {
 
     fun initialize(
         application: Application,
-        config: SipConfig = SipConfig()
+        config: SipConfig = SipConfig(),
+        webRtcManager: WebRtcManager? = null // Nuevo parámetro opcional
     ) {
         if (isInitialized) {
             log.w(tag = TAG) { "Library already initialized" }
@@ -320,21 +322,30 @@ class EddysSipLibrary private constructor() {
             log.d(tag = TAG) { "Initializing EddysSipLibrary v1.5.0 with AI capabilities by Eddys Larez" }
 
             this.config = config
-            sipCoreManager = SipCoreManager.createInstance(application, config)
+
+            // Crear o usar el WebRtcManager proporcionado
+            val finalWebRtcManager = webRtcManager ?: WebRtcManagerFactory.createWebRtcManager(application)
+            finalWebRtcManager.initialize() // Inicializar aquí
+
+            sipCoreManager = SipCoreManager.createInstance(
+                application = application,
+                config = config,
+                webRtcManager = finalWebRtcManager // Pasar el manager ya inicializado
+            )
+
             sipCoreManager?.initialize()
 
-            // Configurar listeners internos
+            // Resto de tu configuración inicial...
             setupInternalListeners()
 
-            // Configurar ringtones personalizados si se proporcionan
             config.incomingRingtoneUri?.let { uri ->
                 sipCoreManager?.audioManager?.setIncomingRingtone(uri)
             }
+
             config.outgoingRingtoneUri?.let { uri ->
                 sipCoreManager?.audioManager?.setOutgoingRingtone(uri)
             }
 
-            // NUEVO: Configurar traducción automática si está habilitada
             if (config.enableAutoTranslation && !config.openAIApiKey.isNullOrEmpty()) {
                 log.d(tag = TAG) { "Auto-enabling AI translation" }
                 enableAudioTranslation(

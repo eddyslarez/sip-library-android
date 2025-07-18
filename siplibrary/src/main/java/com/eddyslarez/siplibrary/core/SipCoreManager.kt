@@ -9,6 +9,7 @@ import com.eddyslarez.siplibrary.data.services.audio.CallHoldManager
 import com.eddyslarez.siplibrary.data.services.audio.AudioManager
 import com.eddyslarez.siplibrary.data.services.audio.WebRtcConnectionState
 import com.eddyslarez.siplibrary.data.services.audio.WebRtcEventListener
+import com.eddyslarez.siplibrary.data.services.audio.WebRtcManager
 import com.eddyslarez.siplibrary.data.services.audio.WebRtcManagerFactory
 import com.eddyslarez.siplibrary.data.services.sip.SipMessageHandler
 import com.eddyslarez.siplibrary.data.services.websocket.MultiplatformWebSocket
@@ -36,10 +37,11 @@ import kotlin.math.pow
 class SipCoreManager private constructor(
     private val application: Application,
     private val config: EddysSipLibrary.SipConfig,
+    val webRtcManager: WebRtcManager, // Ahora viene de fuera
     val audioManager: AudioManager,
     val windowManager: WindowManager,
     val platformInfo: PlatformInfo,
-    val settingsDataStore: SettingsDataStore,
+    val settingsDataStore: SettingsDataStore
 ) {
     private var isRegistrationInProgress = false
     private var healthCheckJob: Job? = null
@@ -70,7 +72,6 @@ class SipCoreManager private constructor(
     private val maxRetryAttempts = 5
 
     // WebRTC manager and other managers
-    val webRtcManager = WebRtcManagerFactory.createWebRtcManager(application)
     private val platformRegistration = PlatformRegistration()
     private val callHoldManager = CallHoldManager(webRtcManager)
     private val audioDeviceManager = AudioDeviceManager()
@@ -82,11 +83,13 @@ class SipCoreManager private constructor(
 
         fun createInstance(
             application: Application,
-            config: EddysSipLibrary.SipConfig
+            config: EddysSipLibrary.SipConfig,
+            webRtcManager: WebRtcManager // Nuevo parámetro
         ): SipCoreManager {
             return SipCoreManager(
                 application = application,
                 config = config,
+                webRtcManager = webRtcManager, // Pasar el manager
                 audioManager = AudioManager(application),
                 windowManager = WindowManager(),
                 platformInfo = PlatformInfo(),
