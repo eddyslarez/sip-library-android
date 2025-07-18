@@ -147,6 +147,7 @@ class OpenAIRealtimeManager(
             put("session", JSONObject().apply {
                 put("modalities", org.json.JSONArray().apply {
                     put("audio")
+                    put("text")
                 })
 
                 // CRÍTICO: Instrucciones optimizadas para traducción pura
@@ -385,6 +386,7 @@ class OpenAIRealtimeManager(
                 put("response", JSONObject().apply {
                     put("modalities", org.json.JSONArray().apply {
                         put("audio")
+                        put("text")
                     })
                     // Sin instrucciones adicionales para máxima velocidad
                 })
@@ -431,8 +433,8 @@ class OpenAIRealtimeManager(
                     Rules: Only translate, no comments, no additions, maintain original meaning.
                     Respond immediately with natural $language speech.
                 """.trimIndent())
-                put("voice", "nova")
-                put("temperature", 0.1)
+                put("voice", "ash")
+                put("temperature", 0.6)
             })
         }
 
@@ -492,7 +494,7 @@ class OpenAIRealtimeManager(
         val (temperature, voice) = when (quality) {
             WebRtcManager.TranslationQuality.LOW -> Pair(0.1, "alloy")
             WebRtcManager.TranslationQuality.MEDIUM -> Pair(0.2, "echo")
-            WebRtcManager.TranslationQuality.HIGH -> Pair(0.1, "nova")
+            WebRtcManager.TranslationQuality.HIGH -> Pair(0.1, "ash")
         }
 
         val sessionUpdate = JSONObject().apply {
