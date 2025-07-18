@@ -148,18 +148,18 @@ class EddysSipLibrary private constructor() {
     ): Boolean {
         checkInitialized()
 
-        // CRÍTICO: Verificar que hay una llamada activa
-        if (!hasActiveCall()) {
-            log.w(tag = TAG) { "Cannot enable translation: No active call" }
-            return false
-        }
+//        // CRÍTICO: Verificar que hay una llamada activa
+//        if (!hasActiveCall()) {
+//            log.w(tag = TAG) { "Cannot enable translation: No active call" }
+//            return false
+//        }
 
         // Verificar que la llamada está conectada
-        val currentState = getCurrentCallState()
-        if (currentState.state != CallState.CONNECTED && currentState.state != CallState.STREAMS_RUNNING) {
-            log.w(tag = TAG) { "Cannot enable translation: Call not connected (state: ${currentState.state})" }
-            return false
-        }
+//        val currentState = getCurrentCallState()
+//        if (currentState.state != CallState.CONNECTED && currentState.state != CallState.STREAMS_RUNNING) {
+//            log.w(tag = TAG) { "Cannot enable translation: Call not connected (state: ${currentState.state})" }
+//            return false
+//        }
 
         val finalApiKey = apiKey ?: config.openAIApiKey
         val finalTargetLanguage = targetLanguage ?: config.defaultTargetLanguage

@@ -518,11 +518,11 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
     override fun enableAudioTranslation(apiKey: String, targetLanguage: String, model: String): Boolean {
         log.d(TAG) { "Enabling AI audio translation to $targetLanguage" }
 
-        // CRÍTICO: Solo habilitar si hay una llamada activa
-        if (peerConnection == null || getConnectionState() != WebRtcConnectionState.CONNECTED) {
-            log.w(TAG) { "Cannot enable translation: No active call" }
-            return false
-        }
+//        // CRÍTICO: Solo habilitar si hay una llamada activa
+//        if (peerConnection == null || getConnectionState() != WebRtcConnectionState.CONNECTED) {
+//            log.w(TAG) { "Cannot enable translation: No active call" }
+//            return false
+//        }
 
         return try {
             // Crear y configurar OpenAI manager con configuración optimizada

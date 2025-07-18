@@ -188,7 +188,7 @@ class OpenAIRealtimeManager(
 
                 put("tools", org.json.JSONArray())
                 put("tool_choice", "none")
-                put("temperature", 0.1) // Más determinista para traducción
+                put("temperature", 0.6) // Más determinista para traducción
                 put("max_response_output_tokens", 1000) // Limitar para respuesta rápida
             })
         }
