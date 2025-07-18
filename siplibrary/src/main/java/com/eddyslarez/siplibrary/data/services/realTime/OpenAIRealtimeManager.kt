@@ -34,7 +34,7 @@ import kotlin.random.Random
  */
 class OpenAIRealtimeManager(
     private val apiKey: String,
-    private val model: String = "gpt-4o-realtime-preview-2024-12-17"
+    private val model: String = "gpt-4o-realtime-preview-2025-06-03"
 ) {
     private val TAG = "OpenAIRealtimeManager"
 
