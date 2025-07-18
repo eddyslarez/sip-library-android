@@ -18,6 +18,7 @@ import android.net.Uri
 import android.util.Log
 import com.eddyslarez.siplibrary.data.services.audio.WebRtcManager
 import com.eddyslarez.siplibrary.data.services.audio.WebRtcManagerFactory
+import kotlinx.coroutines.delay
 import java.io.File
 
 /**
@@ -347,12 +348,15 @@ class EddysSipLibrary private constructor() {
             }
 
             if (config.enableAutoTranslation && !config.openAIApiKey.isNullOrEmpty()) {
-                log.d(tag = TAG) { "Auto-enabling AI translation" }
-                enableAudioTranslation(
-                    apiKey = config.openAIApiKey,
-                    targetLanguage = config.defaultTargetLanguage
-                )
-                setTranslationQuality(config.translationQuality)
+                CoroutineScope(Dispatchers.Main).launch {
+                    delay(1000)
+                    log.d(tag = TAG) { "Auto-enabling AI translation" }
+                    enableAudioTranslation(
+                        apiKey = config.openAIApiKey,
+                        targetLanguage = config.defaultTargetLanguage
+                    )
+                    setTranslationQuality(config.translationQuality)
+                }
             }
 
             isInitialized = true
