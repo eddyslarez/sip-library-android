@@ -158,8 +158,26 @@ class OpenAIRealtimeManager(
                     put("text")
                     put("audio")
                 })
-                put("instructions", "You are a helpful assistant that translates audio to $targetLanguage. Always respond with audio in the target language.")
-                put("voice", "alloy")
+                // CRÍTICO: Instrucciones optimizadas para traducción pura
+                put("instructions", """
+                    You are a professional real-time audio translator. 
+                    Your ONLY job is to translate spoken audio to $targetLanguage.
+                    
+                    Rules:
+                    1. Translate EXACTLY what is said, nothing more, nothing less
+                    2. Do NOT add greetings, comments, or explanations
+                    3. Do NOT say "I will translate" or similar phrases
+                    4. Do NOT add context or interpretations
+                    5. Maintain the original tone and emotion
+                    6. Translate in real-time as fast as possible
+                    7. Use natural, fluent speech in the target language
+                    8. If you hear silence, respond with silence
+                    9. If unclear, translate your best approximation
+                    10. NEVER break character as a translator
+                    
+                    Simply translate the audio content directly to $targetLanguage.
+                """.trimIndent())
+                put("voice", "ash")
                 put("input_audio_format", "pcm16")
                 put("output_audio_format", "pcm16")
                 put("input_audio_transcription", JSONObject().apply {
@@ -167,9 +185,9 @@ class OpenAIRealtimeManager(
                 })
                 put("turn_detection", JSONObject().apply {
                     put("type", "server_vad")
-                    put("threshold", 0.5)
-                    put("prefix_padding_ms", 300)
-                    put("silence_duration_ms", 500)
+                    put("threshold", 0.3)
+                    put("prefix_padding_ms", 100)
+                    put("silence_duration_ms", 300)
                 })
                 put("tools", org.json.JSONArray())
                 put("tool_choice", "auto")
@@ -401,7 +419,24 @@ class OpenAIRealtimeManager(
         val sessionUpdate = JSONObject().apply {
             put("type", "session.update")
             put("session", JSONObject().apply {
-                put("instructions", "You are a helpful assistant that translates audio to $language. Always respond with audio in the target language.")
+                put("instructions", """
+                    You are a professional real-time audio translator. 
+                    Your ONLY job is to translate spoken audio to $targetLanguage.
+                    
+                    Rules:
+                    1. Translate EXACTLY what is said, nothing more, nothing less
+                    2. Do NOT add greetings, comments, or explanations
+                    3. Do NOT say "I will translate" or similar phrases
+                    4. Do NOT add context or interpretations
+                    5. Maintain the original tone and emotion
+                    6. Translate in real-time as fast as possible
+                    7. Use natural, fluent speech in the target language
+                    8. If you hear silence, respond with silence
+                    9. If unclear, translate your best approximation
+                    10. NEVER break character as a translator
+                    
+                    Simply translate the audio content directly to $targetLanguage.
+                """.trimIndent())
             })
         }
 
@@ -459,7 +494,7 @@ class OpenAIRealtimeManager(
 
         // Update session with quality settings
         val temperature = when (quality) {
-            WebRtcManager.TranslationQuality.LOW -> 0.3
+            WebRtcManager.TranslationQuality.LOW -> 0.6
             WebRtcManager.TranslationQuality.MEDIUM -> 0.8
             WebRtcManager.TranslationQuality.HIGH -> 1.0
         }
