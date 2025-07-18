@@ -93,7 +93,7 @@ interface WebRtcManager {
      */
     fun sendDtmfTones(tones: String, duration: Int = 100, gap: Int = 70): Boolean
 
-    // ========== NUEVAS FUNCIONES DE GRABACIÓN Y REPRODUCCIÓN ==========
+    // ========== FUNCIONES DE GRABACIÓN Y REPRODUCCIÓN ==========
 
     /**
      * Start recording sent audio (microphone input) to WAV file
@@ -202,6 +202,86 @@ interface WebRtcManager {
      * @return File path or null if not playing
      */
     fun getCurrentOutputAudioFilePath(): String?
+
+    // ========== FUNCIONES DE IA PARA TRADUCCIÓN DE AUDIO ==========
+
+    /**
+     * Enable AI audio translation for incoming audio
+     * @param apiKey OpenAI API key
+     * @param targetLanguage Target language for translation (e.g., "es" for Spanish)
+     * @param model OpenAI model to use (default: "gpt-4o-realtime-preview-2024-12-17")
+     * @return true if enabled successfully, false otherwise
+     */
+    fun enableAudioTranslation(apiKey: String, targetLanguage: String, model: String = "gpt-4o-realtime-preview-2024-12-17"): Boolean
+
+    /**
+     * Disable AI audio translation
+     * @return true if disabled successfully, false otherwise
+     */
+    fun disableAudioTranslation(): Boolean
+
+    /**
+     * Check if AI audio translation is enabled
+     * @return true if enabled, false otherwise
+     */
+    fun isAudioTranslationEnabled(): Boolean
+
+    /**
+     * Get current target language for translation
+     * @return Target language code or null if not set
+     */
+    fun getCurrentTargetLanguage(): String?
+
+    /**
+     * Set target language for translation
+     * @param targetLanguage Target language code (e.g., "es" for Spanish)
+     * @return true if set successfully, false otherwise
+     */
+    fun setTargetLanguage(targetLanguage: String): Boolean
+
+    /**
+     * Get supported languages for translation
+     * @return List of supported language codes
+     */
+    fun getSupportedLanguages(): List<String>
+
+    /**
+     * Check if AI translation is currently processing audio
+     * @return true if processing, false otherwise
+     */
+    fun isTranslationProcessing(): Boolean
+
+    /**
+     * Get translation processing statistics
+     * @return Translation statistics or null if not available
+     */
+    fun getTranslationStats(): TranslationStats?
+
+    /**
+     * Set translation quality (affects processing speed vs quality)
+     * @param quality Translation quality (LOW, MEDIUM, HIGH)
+     * @return true if set successfully, false otherwise
+     */
+    fun setTranslationQuality(quality: TranslationQuality): Boolean
+
+    /**
+     * Data class for translation statistics
+     */
+    data class TranslationStats(
+        val totalTranslations: Int,
+        val averageLatency: Long,
+        val successRate: Float,
+        val lastTranslationTime: Long
+    )
+
+    /**
+     * Translation quality enum
+     */
+    enum class TranslationQuality {
+        LOW,    // Faster processing, lower quality
+        MEDIUM, // Balanced processing
+        HIGH    // Slower processing, higher quality
+    }
 }
 
 /**
@@ -245,7 +325,7 @@ interface WebRtcEventListener {
 
     fun onAudioDeviceChanged(device: AudioDevice?)
 
-    // ========== NUEVOS CALLBACKS OPCIONALES ==========
+    // ========== CALLBACKS DE GRABACIÓN Y REPRODUCCIÓN ==========
 
     /**
      * Called when recording starts/stops
@@ -262,4 +342,35 @@ interface WebRtcEventListener {
      * @param isInputAudio true for input audio, false for output audio
      */
     fun onAudioFilePlaybackStateChanged(isPlaying: Boolean, filePath: String?, isInputAudio: Boolean) {}
+
+    // ========== CALLBACKS DE IA PARA TRADUCCIÓN ==========
+
+    /**
+     * Called when AI translation state changes
+     * @param isEnabled true if translation is enabled, false otherwise
+     * @param targetLanguage current target language or null if disabled
+     */
+    fun onTranslationStateChanged(isEnabled: Boolean, targetLanguage: String?) {}
+
+    /**
+     * Called when translation processing starts/stops
+     * @param isProcessing true if processing, false if idle
+     * @param audioLength length of audio being processed in milliseconds
+     */
+    fun onTranslationProcessingChanged(isProcessing: Boolean, audioLength: Long = 0) {}
+
+    /**
+     * Called when translation is completed
+     * @param success true if translation was successful, false otherwise
+     * @param latency processing latency in milliseconds
+     * @param originalLanguage detected original language
+     * @param error error message if translation failed
+     */
+    fun onTranslationCompleted(success: Boolean, latency: Long, originalLanguage: String?, error: String?) {}
+
+    /**
+     * Called when translation quality changes
+     * @param quality new translation quality setting
+     */
+    fun onTranslationQualityChanged(quality: WebRtcManager.TranslationQuality) {}
 }

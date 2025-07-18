@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
 import android.net.Uri
 import android.util.Log
+import com.eddyslarez.siplibrary.data.services.audio.WebRtcManager
 import java.io.File
 
 /**
@@ -34,6 +35,7 @@ class EddysSipLibrary private constructor() {
     private var registrationListener: RegistrationListener? = null
     private var callListener: CallListener? = null
     private var incomingCallListener: IncomingCallListener? = null
+    private var aiTranslationListener: AITranslationListener? = null
 
     companion object {
         @Volatile
@@ -46,6 +48,13 @@ class EddysSipLibrary private constructor() {
             }
         }
     }
+    /**
+     * Configura un listener específico para eventos de IA
+     */
+    fun setAITranslationListener(listener: AITranslationListener?) {
+        this.aiTranslationListener = listener
+        log.d(tag = TAG) { "AITranslationListener configured" }
+    }
 
     data class SipConfig(
         val defaultDomain: String = "",
@@ -55,7 +64,11 @@ class EddysSipLibrary private constructor() {
         val enableAutoReconnect: Boolean = true,
         val pingIntervalMs: Long = 30000L,
         val incomingRingtoneUri: Uri? = null,
-        val outgoingRingtoneUri: Uri? = null
+        val outgoingRingtoneUri: Uri? = null,
+        val openAIApiKey: String? = null,
+        val defaultTargetLanguage: String = "es",
+        val translationQuality: WebRtcManager.TranslationQuality = WebRtcManager.TranslationQuality.MEDIUM,
+        val enableAutoTranslation: Boolean = false
     )
 
     /**
@@ -71,8 +84,25 @@ class EddysSipLibrary private constructor() {
         fun onDtmfReceived(digit: Char, callInfo: CallInfo) {}
         fun onAudioDeviceChanged(device: AudioDevice) {}
         fun onNetworkStateChanged(isConnected: Boolean) {}
+        fun onTranslationStateChanged(isEnabled: Boolean, targetLanguage: String?) {}
+        fun onTranslationProcessingChanged(isProcessing: Boolean, audioLength: Long = 0) {}
+        fun onTranslationCompleted(success: Boolean, latency: Long, originalLanguage: String?, error: String?) {}
+        fun onTranslationQualityChanged(quality: WebRtcManager.TranslationQuality) {}
     }
-
+    /**
+     * Listener específico para eventos de IA
+     */
+    interface AITranslationListener {
+        fun onTranslationEnabled(targetLanguage: String)
+        fun onTranslationDisabled()
+        fun onTranslationStarted(audioLength: Long)
+        fun onTranslationProgress(progress: Float)
+        fun onTranslationCompleted(success: Boolean, latency: Long, originalLanguage: String?)
+        fun onTranslationFailed(error: String)
+        fun onTargetLanguageChanged(newLanguage: String)
+        fun onQualityChanged(quality: WebRtcManager.TranslationQuality)
+        fun onStatsUpdated(stats: WebRtcManager.TranslationStats)
+    }
     /**
      * Listener específico para estados de registro
      */
@@ -106,7 +136,125 @@ class EddysSipLibrary private constructor() {
         fun onIncomingCallCancelled(callInfo: IncomingCallInfo)
         fun onIncomingCallTimeout(callInfo: IncomingCallInfo)
     }
+    /**
+     * Enable AI audio translation
+     */
+    fun enableAudioTranslation(
+        apiKey: String? = null,
+        targetLanguage: String? = null,
+        model: String = "gpt-4o-realtime-preview-2024-12-17"
+    ): Boolean {
+        checkInitialized()
 
+        val finalApiKey = apiKey ?: config.openAIApiKey
+        val finalTargetLanguage = targetLanguage ?: config.defaultTargetLanguage
+
+        if (finalApiKey.isNullOrEmpty()) {
+            log.e(tag = TAG) { "OpenAI API key is required for translation" }
+            return false
+        }
+
+        log.d(tag = TAG) { "Enabling AI audio translation to $finalTargetLanguage" }
+
+        return try {
+            sipCoreManager?.webRtcManager?.enableAudioTranslation(
+                finalApiKey,
+                finalTargetLanguage,
+                model
+            ) ?: false
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error enabling AI translation: ${e.message}" }
+            false
+        }
+    }
+
+    /**
+     * Disable AI audio translation
+     */
+    fun disableAudioTranslation(): Boolean {
+        checkInitialized()
+
+        log.d(tag = TAG) { "Disabling AI audio translation" }
+
+        return try {
+            sipCoreManager?.webRtcManager?.disableAudioTranslation() ?: false
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error disabling AI translation: ${e.message}" }
+            false
+        }
+    }
+
+    /**
+     * Check if AI translation is enabled
+     */
+    fun isAudioTranslationEnabled(): Boolean {
+        checkInitialized()
+        return sipCoreManager?.webRtcManager?.isAudioTranslationEnabled() ?: false
+    }
+
+    /**
+     * Get current target language
+     */
+    fun getCurrentTargetLanguage(): String? {
+        checkInitialized()
+        return sipCoreManager?.webRtcManager?.getCurrentTargetLanguage()
+    }
+
+    /**
+     * Set target language for translation
+     */
+    fun setTargetLanguage(targetLanguage: String): Boolean {
+        checkInitialized()
+
+        log.d(tag = TAG) { "Setting target language to: $targetLanguage" }
+
+        return try {
+            sipCoreManager?.webRtcManager?.setTargetLanguage(targetLanguage) ?: false
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error setting target language: ${e.message}" }
+            false
+        }
+    }
+
+    /**
+     * Get supported languages for translation
+     */
+    fun getSupportedTranslationLanguages(): List<String> {
+        checkInitialized()
+        return sipCoreManager?.webRtcManager?.getSupportedLanguages() ?: emptyList()
+    }
+
+    /**
+     * Check if translation is currently processing
+     */
+    fun isTranslationProcessing(): Boolean {
+        checkInitialized()
+        return sipCoreManager?.webRtcManager?.isTranslationProcessing() ?: false
+    }
+
+    /**
+     * Get translation statistics
+     */
+    fun getTranslationStats(): WebRtcManager.TranslationStats? {
+        checkInitialized()
+        return sipCoreManager?.webRtcManager?.getTranslationStats()
+    }
+
+    /**
+     * Set translation quality
+     */
+    fun setTranslationQuality(quality: WebRtcManager.TranslationQuality): Boolean {
+        checkInitialized()
+
+        log.d(tag = TAG) { "Setting translation quality to: $quality" }
+
+        return try {
+            sipCoreManager?.webRtcManager?.setTranslationQuality(quality) ?: false
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error setting translation quality: ${e.message}" }
+            false
+        }
+    }
     /**
      * Información de llamada
      */
@@ -169,7 +317,7 @@ class EddysSipLibrary private constructor() {
         }
 
         try {
-            log.d(tag = TAG) { "Initializing EddysSipLibrary v1.5.0 Optimized by Eddys Larez" }
+            log.d(tag = TAG) { "Initializing EddysSipLibrary v1.5.0 with AI capabilities by Eddys Larez" }
 
             this.config = config
             sipCoreManager = SipCoreManager.createInstance(application, config)
@@ -186,8 +334,18 @@ class EddysSipLibrary private constructor() {
                 sipCoreManager?.audioManager?.setOutgoingRingtone(uri)
             }
 
+            // NUEVO: Configurar traducción automática si está habilitada
+            if (config.enableAutoTranslation && !config.openAIApiKey.isNullOrEmpty()) {
+                log.d(tag = TAG) { "Auto-enabling AI translation" }
+                enableAudioTranslation(
+                    apiKey = config.openAIApiKey,
+                    targetLanguage = config.defaultTargetLanguage
+                )
+                setTranslationQuality(config.translationQuality)
+            }
+
             isInitialized = true
-            log.d(tag = TAG) { "EddysSipLibrary initialized successfully" }
+            log.d(tag = TAG) { "EddysSipLibrary initialized successfully with AI capabilities" }
 
         } catch (e: Exception) {
             log.e(tag = TAG) { "Error initializing library: ${e.message}" }
