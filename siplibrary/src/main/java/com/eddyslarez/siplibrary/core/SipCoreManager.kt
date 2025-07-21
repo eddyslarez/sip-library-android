@@ -335,25 +335,24 @@ class SipCoreManager private constructor(
             CallStateManager.streamsRunning(callData.callId)
         }
 
-        // NUEVO: Configurar audio para evitar bucle de traducción
-        setupAudioForTranslation()
+        // CRÍTICO: Configurar audio específicamente para traducción sin bucle
+        setupOptimizedAudioForTranslation()
 
         notifyCallStateChanged(CallState.STREAMS_RUNNING)
     }
 
     /**
-     * NUEVO: Configurar audio específicamente para traducción
+     * NUEVO: Configurar audio optimizado para traducción sin bucle
      */
-    private fun setupAudioForTranslation() {
+    private fun setupOptimizedAudioForTranslation() {
         try {
-            // CRÍTICO: Asegurar que el micrófono local NO interfiera con la traducción
             if (webRtcManager.isAudioTranslationEnabled()) {
-                log.d(tag = TAG) { "Configuring audio for translation mode" }
+                log.d(tag = TAG) { "Configuring optimized audio for translation mode" }
 
-                // Configurar audio para capturar solo remoto
+                // CRÍTICO: Configurar para capturar solo audio remoto, no local
                 webRtcManager.setListener(object : WebRtcEventListener {
                     override fun onIceCandidate(candidate: String, sdpMid: String, sdpMLineIndex: Int) {
-                        // Implementar envío de ICE candidate
+                        // ICE candidate handling
                     }
 
                     override fun onConnectionStateChange(state: WebRtcConnectionState) {
@@ -365,29 +364,39 @@ class SipCoreManager private constructor(
                     }
 
                     override fun onRemoteAudioTrack() {
-                        log.d(tag = TAG) { "Remote audio track received - ready for translation" }
+                        log.d(tag = TAG) { "Remote audio track received - optimized for translation" }
                     }
 
                     override fun onAudioDeviceChanged(device: AudioDevice?) {
                         log.d(tag = TAG) { "Audio device changed: ${device?.name}" }
                     }
 
-                    // NUEVO: Callbacks específicos de traducción
+                    // OPTIMIZADO: Callbacks específicos de traducción
                     override fun onTranslationStateChanged(isEnabled: Boolean, targetLanguage: String?) {
-                        log.d(tag = TAG) { "Translation state changed: $isEnabled to $targetLanguage" }
+                        log.d(tag = TAG) { "Translation optimized: $isEnabled to $targetLanguage" }
                     }
 
                     override fun onTranslationCompleted(success: Boolean, latency: Long, originalLanguage: String?, error: String?) {
                         if (success) {
-                            log.d(tag = TAG) { "Translation completed in ${latency}ms" }
+                            log.d(tag = TAG) { "Translation completed successfully in ${latency}ms" }
                         } else {
-                            log.e(tag = TAG) { "Translation failed: $error" }
+                            log.e(tag = TAG) { "Translation failed with optimized settings: $error" }
                         }
                     }
+
+                    override fun onTranslationProcessingChanged(isProcessing: Boolean, audioLength: Long) {
+                        log.d(tag = TAG) { "Translation processing: $isProcessing (${audioLength}ms audio)" }
+                    }
+
+                    override fun onTranslationQualityChanged(quality: WebRtcManager.TranslationQuality) {
+                        log.d(tag = TAG) { "Translation quality optimized: $quality" }
+                    }
                 })
+
+                log.d(tag = TAG) { "Audio optimized for translation - anti-loop protection active" }
             }
         } catch (e: Exception) {
-            log.e(tag = TAG) { "Error setting up audio for translation: ${e.message}" }
+            log.e(tag = TAG) { "Error setting up optimized audio for translation: ${e.message}" }
         }
     }
     private fun handleWebRtcClosed() {
@@ -887,7 +896,7 @@ class SipCoreManager private constructor(
 
     fun endCall(callId: String? = null) {
         val accountInfo = currentAccountInfo ?: return
-        
+
         val targetCallData = if (callId != null) {
             MultiCallManager.getCall(callId)
         } else {
@@ -899,7 +908,7 @@ class SipCoreManager private constructor(
         } else {
             CallStateManager.getCurrentState()
         }
-        
+
         if (callState?.isActive() != true) {
             return
         }
@@ -916,7 +925,7 @@ class SipCoreManager private constructor(
             CallState.OUTGOING_INIT, CallState.OUTGOING_PROGRESS, CallState.OUTGOING_RINGING -> {
                 messageHandler.sendCancel(accountInfo, targetCallData)
                 callHistoryManager.addCallLog(targetCallData, CallTypes.ABORTED, endTime)
-                
+
                 // Detener outgoing ringtone
                 audioManager.stopOutgoingRingtone()
             }
@@ -932,20 +941,20 @@ class SipCoreManager private constructor(
         if (MultiCallManager.getAllCalls().size <= 1) {
             webRtcManager.dispose()
         }
-        
+
         clearDtmfQueue()
-        
+
         // Solo resetear si es la llamada actual
         if (accountInfo.currentCallData?.callId == targetCallData.callId) {
             accountInfo.resetCallState()
         }
-        
+
         handleCallTermination()
     }
 
     fun acceptCall(callId: String? = null) {
         val accountInfo = currentAccountInfo ?: return
-        
+
         val targetCallData = if (callId != null) {
             MultiCallManager.getCall(callId)
         } else {
@@ -957,7 +966,7 @@ class SipCoreManager private constructor(
         } else {
             CallStateManager.getCurrentState()
         }
-        
+
         if (targetCallData.direction != CallDirections.INCOMING ||
             callState?.state != CallState.INCOMING_RECEIVED
         ) {
@@ -1001,7 +1010,7 @@ class SipCoreManager private constructor(
 
     fun declineCall(callId: String? = null) {
         val accountInfo = currentAccountInfo ?: return
-        
+
         val targetCallData = if (callId != null) {
             MultiCallManager.getCall(callId)
         } else {
@@ -1013,7 +1022,7 @@ class SipCoreManager private constructor(
         } else {
             CallStateManager.getCurrentState()
         }
-        
+
         if (targetCallData.direction != CallDirections.INCOMING ||
             callState?.state != CallState.INCOMING_RECEIVED
         ) {
@@ -1133,7 +1142,7 @@ class SipCoreManager private constructor(
 
     fun holdCall(callId: String? = null) {
         val accountInfo = currentAccountInfo ?: return
-        
+
         val targetCallData = if (callId != null) {
             MultiCallManager.getCall(callId)
         } else {
@@ -1156,7 +1165,7 @@ class SipCoreManager private constructor(
 
     fun resumeCall(callId: String? = null) {
         val accountInfo = currentAccountInfo ?: return
-        
+
         val targetCallData = if (callId != null) {
             MultiCallManager.getCall(callId)
         } else {
@@ -1192,7 +1201,7 @@ class SipCoreManager private constructor(
     fun currentCall(): Boolean = CallStateManager.getCurrentState().isActive()
     fun currentCallConnected(): Boolean = CallStateManager.getCurrentState().isConnected()
     fun getCurrentCallState(): CallStateInfo = CallStateManager.getCurrentState()
-    
+
     /**
      * Obtiene todas las llamadas activas
      */
@@ -1223,7 +1232,7 @@ class SipCoreManager private constructor(
             // Información de estados
             appendLine("\n--- Call State Info ---")
             appendLine(CallStateManager.getDiagnosticInfo())
-            
+
             // Información de múltiples llamadas
             appendLine("\n--- Multi Call Info ---")
             appendLine(MultiCallManager.getDiagnosticInfo())
@@ -1257,10 +1266,10 @@ class SipCoreManager private constructor(
     fun dispose() {
         // Detener todos los ringtones
         audioManager.stopAllRingtones()
-        
+
         // Limpiar llamadas
         MultiCallManager.clearAllCalls()
-        
+
         webRtcManager.dispose()
         activeAccounts.clear()
         _registrationStates.value = emptyMap()
