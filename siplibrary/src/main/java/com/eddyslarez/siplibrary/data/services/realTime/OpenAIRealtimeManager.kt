@@ -1,6 +1,8 @@
 package com.eddyslarez.siplibrary.data.services.realTime
 
+import android.os.Build
 import android.util.Log
+import androidx.annotation.RequiresApi
 import com.eddyslarez.siplibrary.data.services.audio.WebRtcManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -21,6 +23,7 @@ import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
 import java.nio.ByteBuffer
+import java.util.Base64
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
@@ -54,6 +57,7 @@ class OpenAIRealtimeManager(
     private val totalLatency = AtomicLong(0)
     private val successfulTranslations = AtomicInteger(0)
     private val lastTranslationTime = AtomicLong(0)
+    private var onAudioCallback: ((ByteArray) -> Unit)? = null
 
     // Audio processing
     private var audioQueue = mutableListOf<ByteArray>()
@@ -120,6 +124,7 @@ class OpenAIRealtimeManager(
                     initializeSession()
                 }
 
+                @RequiresApi(Build.VERSION_CODES.O)
                 override fun onMessage(webSocket: WebSocket, text: String) {
                     handleRealtimeMessage(text)
                 }
@@ -177,7 +182,7 @@ class OpenAIRealtimeManager(
                     
                     Simply translate the audio content directly to $targetLanguage.
                 """.trimIndent())
-                put("voice", "ash")
+                put("voice", "alloy")
                 put("input_audio_format", "pcm16")
                 put("output_audio_format", "pcm16")
                 put("input_audio_transcription", JSONObject().apply {
@@ -185,13 +190,13 @@ class OpenAIRealtimeManager(
                 })
                 put("turn_detection", JSONObject().apply {
                     put("type", "server_vad")
-                    put("threshold", 0.3)
-                    put("prefix_padding_ms", 100)
-                    put("silence_duration_ms", 300)
+                    put("threshold", 0.5f)
+                    put("prefix_padding_ms", 300)
+                    put("silence_duration_ms", 500)
                 })
-                put("tools", org.json.JSONArray())
+//                put("tools", org.json.JSONArray())
                 put("tool_choice", "auto")
-                put("temperature", 0.8)
+                put("temperature", 0.6)
                 put("max_response_output_tokens", 4096)
             })
         }
@@ -202,6 +207,7 @@ class OpenAIRealtimeManager(
     /**
      * Handle realtime messages from OpenAI
      */
+    @RequiresApi(Build.VERSION_CODES.O)
     private fun handleRealtimeMessage(message: String) {
         try {
             val json = JSONObject(message)
@@ -265,11 +271,15 @@ class OpenAIRealtimeManager(
     /**
      * Handle translated audio chunks
      */
+    @RequiresApi(Build.VERSION_CODES.O)
     private fun handleTranslatedAudioChunk(audioData: String) {
         try {
             // Decode base64 audio data
-            val audioBytes = android.util.Base64.decode(audioData, android.util.Base64.DEFAULT)
-
+            val audioBytes = Base64.getDecoder().decode(audioData)
+//            val audioBytes = android.util.Base64.decode(audioData, android.util.Base64.DEFAULT)
+            CoroutineScope(Dispatchers.Main).launch {
+                onAudioCallback?.invoke(audioBytes)
+            }
             // Store audio chunk for assembly
             synchronized(audioQueue) {
                 audioQueue.add(audioBytes)
