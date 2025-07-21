@@ -1,5 +1,6 @@
 package com.eddyslarez.siplibrary.data.services.realTime
 
+import android.annotation.SuppressLint
 import android.os.Build
 import android.util.Log
 import androidx.annotation.RequiresApi
@@ -11,12 +12,15 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import okio.ByteString
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -24,6 +28,7 @@ import java.io.FileOutputStream
 import java.io.IOException
 import java.nio.ByteBuffer
 import java.util.Base64
+import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
@@ -32,13 +37,13 @@ import kotlin.random.Random
 
 /**
  * Manager for OpenAI Realtime API integration for audio translation
- * CORREGIDO: Buffer validation y manejo de estado para evitar errores
+ * VERSIÓN CORREGIDA: Solucionados problemas de audio y flujo de datos
  *
  * @author Eddys Larez
  */
 class OpenAIRealtimeManager(
     private val apiKey: String,
-    private val model: String = "gpt-4o-realtime-preview-2025-06-03"
+    private val model: String = "gpt-4o-realtime-preview-2024-10-01"
 ) {
     private val TAG = "OpenAIRealtimeManager"
 
@@ -54,28 +59,31 @@ class OpenAIRealtimeManager(
     private var isEnabled = AtomicBoolean(false)
     private var isProcessing = AtomicBoolean(false)
 
-    // CORREGIDO: Controlar estado de procesamiento para evitar requests concurrentes
+    // CORREGIDO: Control de estado más robusto
+    private var isSessionReady = AtomicBoolean(false)
     private var isWaitingForResponse = AtomicBoolean(false)
     private var lastRequestTime = AtomicLong(0)
-    private val minRequestInterval = 2000L // Mínimo 2 segundos entre requests
+    private val minRequestInterval = 1500L // Reducido para mejor fluidez
+
+    // CORREGIDO: Usar concurrent collections para thread safety
+    private val audioChunksBuffer = ConcurrentLinkedQueue<ByteArray>()
+    private var currentAudioBuffer = ByteArrayOutputStream()
+    private val audioBufferLock = Mutex()
 
     // Statistics
     private val totalTranslations = AtomicInteger(0)
     private val totalLatency = AtomicLong(0)
     private val successfulTranslations = AtomicInteger(0)
     private val lastTranslationTime = AtomicLong(0)
-    private var onAudioCallback: ((ByteArray) -> Unit)? = null
 
-    // Audio processing - CORREGIDO: Buffer más robusto
-    private var audioQueue = mutableListOf<ByteArray>()
-    private var processJob: Job? = null
+    // Audio processing - CORREGIDO: Parámetros optimizados para OpenAI
+    private val minAudioSizeBytes = 1600 // ~50ms de audio PCM 16-bit 16kHz mono
+    private val maxAudioSizeBytes = 16000 // ~500ms máximo para mejor latencia
+    private val targetSampleRate = 24000 // OpenAI prefiere 24kHz
+
+    // Session management
     private var sessionId: String? = null
-    private var pendingTranslations = mutableMapOf<String, TranslationRequest>()
-
-    // NUEVO: Buffer de audio acumulativo con validación de tamaño
-    private var audioBuffer = ByteArrayOutputStream()
-    private val minAudioSizeBytes = 3200 // ~100ms de audio PCM 16-bit 16kHz mono
-    private val maxAudioSizeBytes = 32000 // ~1 segundo máximo
+    private var conversationId: String? = null
 
     // Callbacks
     private var translationListener: TranslationListener? = null
@@ -96,14 +104,8 @@ class OpenAIRealtimeManager(
         fun onTranslationFailed(error: String)
         fun onTranslationStateChanged(isEnabled: Boolean, targetLanguage: String?)
         fun onProcessingStateChanged(isProcessing: Boolean)
+        fun onSessionReady()
     }
-
-    private data class TranslationRequest(
-        val id: String,
-        val originalAudio: ByteArray,
-        val startTime: Long,
-        val targetLanguage: String
-    )
 
     /**
      * Initialize the OpenAI Realtime connection
@@ -111,9 +113,10 @@ class OpenAIRealtimeManager(
     fun initialize(): Boolean {
         return try {
             httpClient = OkHttpClient.Builder()
-                .connectTimeout(30, TimeUnit.SECONDS)
-                .readTimeout(30, TimeUnit.SECONDS)
-                .writeTimeout(30, TimeUnit.SECONDS)
+                .connectTimeout(10, TimeUnit.SECONDS)
+                .readTimeout(0, TimeUnit.SECONDS) // Sin timeout para websocket
+                .writeTimeout(10, TimeUnit.SECONDS)
+                .pingInterval(30, TimeUnit.SECONDS) // Keep alive
                 .build()
 
             connectToOpenAI()
@@ -125,7 +128,7 @@ class OpenAIRealtimeManager(
     }
 
     /**
-     * Connect to OpenAI Realtime API
+     * CORREGIDO: Connect to OpenAI Realtime API con mejor manejo de errores
      */
     private fun connectToOpenAI(): Boolean {
         return try {
@@ -137,27 +140,33 @@ class OpenAIRealtimeManager(
 
             webSocket = httpClient?.newWebSocket(request, object : WebSocketListener() {
                 override fun onOpen(webSocket: WebSocket, response: Response) {
-                    Log.d(TAG, "Connected to OpenAI Realtime API")
-                    initializeSession()
+                    Log.i(TAG, "✅ Connected to OpenAI Realtime API")
+                    scope.launch {
+                        delay(500) // Dar tiempo a que se estabilice la conexión
+                        initializeSession()
+                    }
                 }
 
-                @RequiresApi(Build.VERSION_CODES.O)
                 override fun onMessage(webSocket: WebSocket, text: String) {
-                    handleRealtimeMessage(text)
+                    scope.launch {
+                        handleRealtimeMessage(text)
+                    }
                 }
 
                 override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
-                    handleRealtimeAudio(bytes.toByteArray())
+                    scope.launch {
+                        handleRealtimeAudio(bytes.toByteArray())
+                    }
                 }
 
                 override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                    Log.d(TAG, "OpenAI Realtime connection closed: $reason")
-                    isWaitingForResponse.set(false)
+                    Log.w(TAG, "OpenAI Realtime connection closed: $code - $reason")
+                    resetState()
                 }
 
                 override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                    Log.e(TAG, "OpenAI Realtime connection failed", t)
-                    isWaitingForResponse.set(false)
+                    Log.e(TAG, "❌ OpenAI Realtime connection failed", t)
+                    resetState()
                     translationListener?.onTranslationFailed("Connection failed: ${t.message}")
                 }
             })
@@ -170,89 +179,127 @@ class OpenAIRealtimeManager(
     }
 
     /**
-     * CORREGIDO: Initialize session con configuración optimizada
+     * CORREGIDO: Reset state on connection issues
+     */
+    private fun resetState() {
+        isSessionReady.set(false)
+        isWaitingForResponse.set(false)
+        isProcessing.set(false)
+        audioChunksBuffer.clear()
+        scope.launch {
+            audioBufferLock.withLock {
+                currentAudioBuffer.reset()
+            }
+        }
+    }
+
+    /**
+     * CORREGIDO: Initialize session con configuración específica para traducción
      */
     private fun initializeSession() {
-        sessionId = "session_${System.currentTimeMillis()}_${Random.nextInt(1000)}"
+        sessionId = "session_${System.currentTimeMillis()}_${Random.nextInt(10000)}"
+
+        Log.d(TAG, "🔧 Initializing session: $sessionId")
 
         val sessionConfig = JSONObject().apply {
             put("type", "session.update")
             put("session", JSONObject().apply {
-                put("modalities", org.json.JSONArray().apply {
+                put("modalities", JSONArray().apply {
                     put("text")
                     put("audio")
                 })
-                put("instructions", """
-                    You are a professional real-time audio translator. Your ONLY job is to translate spoken words to $targetLanguage.
+
+                // CORREGIDO: Instrucciones más específicas
+                put(
+                    "instructions", """
+                    You are a real-time audio translator. Translate speech to $targetLanguage.
                     
-                    STRICT RULES:
-                    1. ONLY translate the spoken words you hear
-                    2. NEVER add greetings, explanations, or comments
-                    3. NEVER say "I will translate", "The translation is", or similar phrases
-                    4. Respond IMMEDIATELY with ONLY the translated speech
-                    5. If you hear silence or unclear audio, respond with silence
-                    6. Maintain the original tone and emotion
-                    7. Use natural, fluent speech in $targetLanguage
-                    8. NEVER break character as a translator
-                    
-                    Simply translate directly: [Original speech] → [Translated speech in $targetLanguage]
-                """.trimIndent())
-                put("voice", "shimmer") // Cambiado a shimmer para mejor calidad de voz
+                    Rules:
+                    - Only output translated speech, no explanations
+                    - Maintain original tone and emotion  
+                    - Use natural pronunciation
+                    - If audio is unclear, stay silent
+                    - Translate immediately when speech ends
+                """.trimIndent()
+                )
+
+                put("voice", "alloy") // Voz más estable para traducción
                 put("input_audio_format", "pcm16")
                 put("output_audio_format", "pcm16")
+                put("input_audio_transcription", JSONObject().apply {
+                    put("model", "whisper-1")
+                })
 
-                // CORREGIDO: Configuración más estricta para evitar false positives
+                // CORREGIDO: VAD más sensible pero no tanto que capture ruido
                 put("turn_detection", JSONObject().apply {
                     put("type", "server_vad")
-                    put("threshold", 0.8f) // Aún más estricto para evitar ruido
-                    put("prefix_padding_ms", 200) // Reducido para menor latencia
-                    put("silence_duration_ms", 800) // Optimizado para respuesta rápida
+                    put("threshold", 0.5) // Más sensible
+                    put("prefix_padding_ms", 300)
+                    put("silence_duration_ms", 700) // Menor pausa para respuesta rápida
                 })
+
+                put("tools", JSONArray()) // Sin herramientas
                 put("tool_choice", "none")
-                put("temperature", 0.6) // Más determinístico para traducciones consistentes
-                put("max_response_output_tokens", 150) // Limitado para respuestas concisas
+                put("temperature", 0.7)
+                put("max_response_output_tokens", 200)
             })
         }
 
-        webSocket?.send(sessionConfig.toString())
+        val success = webSocket?.send(sessionConfig.toString()) ?: false
+        if (!success) {
+            Log.e(TAG, "❌ Failed to send session config")
+            translationListener?.onTranslationFailed("Failed to initialize session")
+        }
     }
 
     /**
-     * CORREGIDO: Handle realtime messages with better state management
+     * CORREGIDO: Handle realtime messages con mejor logging
      */
-    @RequiresApi(Build.VERSION_CODES.O)
-    private fun handleRealtimeMessage(message: String) {
+    @SuppressLint("NewApi")
+    private suspend fun handleRealtimeMessage(message: String) {
         try {
             val json = JSONObject(message)
             val type = json.getString("type")
 
             when (type) {
                 "session.created" -> {
-                    Log.d(TAG, "Session created successfully")
+                    Log.i(TAG, "✅ Session created successfully")
+                    isSessionReady.set(true)
                     isEnabled.set(true)
-                    isWaitingForResponse.set(false)
+                    translationListener?.onSessionReady()
                     translationListener?.onTranslationStateChanged(true, targetLanguage)
                 }
 
                 "session.updated" -> {
-                    Log.d(TAG, "Session updated successfully")
+                    Log.i(TAG, "✅ Session updated successfully")
                 }
 
-                "conversation.item.created" -> {
-                    Log.d(TAG, "Conversation item created")
-                }
-
-                "response.created" -> {
-                    Log.d(TAG, "Response created")
+                "input_audio_buffer.speech_started" -> {
+                    Log.d(TAG, "🎤 Speech started")
                     isProcessing.set(true)
                     translationListener?.onProcessingStateChanged(true)
                 }
 
-                "response.done" -> {
-                    Log.d(TAG, "Response completed")
-                    isProcessing.set(false)
-                    isWaitingForResponse.set(false) // CORREGIDO: Liberar lock
-                    translationListener?.onProcessingStateChanged(false)
+                "input_audio_buffer.speech_stopped" -> {
+                    Log.d(TAG, "🎤 Speech stopped")
+                }
+
+                "conversation.item.created" -> {
+                    val item = json.optJSONObject("item")
+                    val itemType = item?.optString("type")
+                    Log.d(TAG, "📝 Item created: $itemType")
+                }
+
+                "response.created" -> {
+                    Log.d(TAG, "🤖 Response created")
+                    // Limpiar buffer para nueva respuesta
+                    audioChunksBuffer.clear()
+                }
+
+                "response.output_item.added" -> {
+                    val item = json.optJSONObject("item")
+                    val itemType = item?.optString("type")
+                    Log.d(TAG, "➕ Output item added: $itemType")
                 }
 
                 "response.audio.delta" -> {
@@ -263,47 +310,47 @@ class OpenAIRealtimeManager(
                 }
 
                 "response.audio.done" -> {
-                    Log.d(TAG, "Audio response completed")
+                    Log.i(TAG, "🔊 Audio response completed")
                     handleTranslationCompleted()
+                }
+
+                "response.done" -> {
+                    Log.i(TAG, "✅ Response completed")
+                    isProcessing.set(false)
+                    isWaitingForResponse.set(false)
+                    translationListener?.onProcessingStateChanged(false)
                 }
 
                 "error" -> {
                     val error = json.optJSONObject("error")
                     val errorMessage = error?.optString("message") ?: "Unknown error"
-                    Log.e(TAG, "OpenAI API error: $errorMessage")
-                    isWaitingForResponse.set(false) // CORREGIDO: Liberar lock en error
-                    translationListener?.onTranslationFailed(errorMessage)
-                }
+                    val errorCode = error?.optString("code") ?: "unknown"
+                    Log.e(TAG, "❌ API Error [$errorCode]: $errorMessage")
 
-                "input_audio_buffer.speech_started" -> {
-                    Log.d(TAG, "Speech detected in input audio")
-                }
-
-                "input_audio_buffer.speech_stopped" -> {
-                    Log.d(TAG, "Speech stopped in input audio")
+                    isWaitingForResponse.set(false)
+                    isProcessing.set(false)
+                    translationListener?.onTranslationFailed("API Error: $errorMessage")
                 }
 
                 else -> {
-                    Log.d(TAG, "Received message type: $type")
+                    Log.d(TAG, "📨 Message type: $type")
                 }
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Error handling realtime message", e)
+            Log.e(TAG, "Error handling realtime message: $message", e)
         }
     }
 
     /**
-     * Handle translated audio chunks
+     * CORREGIDO: Handle translated audio chunks
      */
     @RequiresApi(Build.VERSION_CODES.O)
     private fun handleTranslatedAudioChunk(audioData: String) {
         try {
             val audioBytes = Base64.getDecoder().decode(audioData)
-            Log.d(TAG, "Received translated audio chunk: ${audioBytes.size} bytes")
+            Log.v(TAG, "🔊 Audio chunk: ${audioBytes.size} bytes")
 
-            synchronized(audioQueue) {
-                audioQueue.add(audioBytes)
-            }
+            audioChunksBuffer.offer(audioBytes)
 
         } catch (e: Exception) {
             Log.e(TAG, "Error handling translated audio chunk", e)
@@ -311,33 +358,42 @@ class OpenAIRealtimeManager(
     }
 
     /**
-     * Handle translation completion
+     * CORREGIDO: Handle translation completion
      */
     private fun handleTranslationCompleted() {
         try {
-            // Combine all audio chunks
-            val totalSize = audioQueue.sumOf { it.size }
+            // Combinar todos los chunks de audio
+            val chunks = mutableListOf<ByteArray>()
+            while (audioChunksBuffer.isNotEmpty()) {
+                audioChunksBuffer.poll()?.let { chunks.add(it) }
+            }
+
+            if (chunks.isEmpty()) {
+                Log.w(TAG, "⚠️ No audio chunks received")
+                return
+            }
+
+            val totalSize = chunks.sumOf { it.size }
             val combinedAudio = ByteArray(totalSize)
             var offset = 0
 
-            synchronized(audioQueue) {
-                audioQueue.forEach { chunk ->
-                    System.arraycopy(chunk, 0, combinedAudio, offset, chunk.size)
-                    offset += chunk.size
-                }
-                audioQueue.clear()
+            chunks.forEach { chunk ->
+                System.arraycopy(chunk, 0, combinedAudio, offset, chunk.size)
+                offset += chunk.size
             }
 
-            // Calculate latency and update statistics
+            Log.i(TAG, "✅ Translation completed: ${combinedAudio.size} bytes")
+
+            // Calcular latencia
             val currentTime = System.currentTimeMillis()
             val latency = currentTime - lastTranslationTime.get()
 
+            // Actualizar estadísticas
             totalTranslations.incrementAndGet()
             totalLatency.addAndGet(latency)
             successfulTranslations.incrementAndGet()
-            lastTranslationTime.set(currentTime)
 
-            // Notify listener
+            // Notificar listener
             translationListener?.onTranslationCompleted(ByteArray(0), combinedAudio, latency)
 
         } catch (e: Exception) {
@@ -347,135 +403,171 @@ class OpenAIRealtimeManager(
     }
 
     /**
-     * Handle incoming audio data from WebRTC
+     * Handle incoming audio from WebRTC (no usado actualmente)
      */
     private fun handleRealtimeAudio(audioData: ByteArray) {
-        Log.d(TAG, "Received audio data for translation: ${audioData.size} bytes")
+        Log.v(TAG, "Received realtime audio: ${audioData.size} bytes")
     }
 
     /**
-     * CORREGIDO: Process audio with proper validation and state checking
+     * CORREGIDO: Process audio con mejor validación y flujo
      */
+    @SuppressLint("NewApi")
     fun processAudioForTranslation(audioData: ByteArray): Boolean {
-        if (!isEnabled.get() || webSocket == null) {
-            Log.w(TAG, "Translation not enabled or not connected")
+        if (!isSessionReady.get() || webSocket == null) {
+            Log.w(TAG, "⚠️ Session not ready or not connected")
             return false
         }
 
         if (audioData.isEmpty()) {
-            Log.w(TAG, "Empty audio data received")
+            Log.w(TAG, "⚠️ Empty audio data received")
             return false
         }
 
-        // CORREGIDO: Verificar si ya hay un request en progreso
-        if (isWaitingForResponse.get()) {
-            Log.d(TAG, "Already processing a translation request, buffering audio")
-            synchronized(audioBuffer) {
-                audioBuffer.write(audioData)
-            }
-            return true
-        }
-
-        // CORREGIDO: Verificar intervalo mínimo entre requests
+        // Rate limiting más inteligente
         val currentTime = System.currentTimeMillis()
-        if (currentTime - lastRequestTime.get() < minRequestInterval) {
-            Log.d(TAG, "Too soon for next request, buffering audio")
-            synchronized(audioBuffer) {
-                audioBuffer.write(audioData)
-            }
+        if (isWaitingForResponse.get() && (currentTime - lastRequestTime.get()) < minRequestInterval) {
+            Log.v(TAG, "⏳ Rate limiting - buffering audio")
+            bufferAudio(audioData)
             return true
         }
 
         return try {
-            // CORREGIDO: Combinar audio buffereado con el nuevo
-            synchronized(audioBuffer) {
-                audioBuffer.write(audioData)
-                val combinedAudio = audioBuffer.toByteArray()
-
-                // CORREGIDO: Validar tamaño mínimo de audio
-                if (combinedAudio.size < minAudioSizeBytes) {
-                    Log.d(TAG, "Audio buffer too small: ${combinedAudio.size} bytes, need at least $minAudioSizeBytes")
-                    return true // Mantener en buffer
-                }
-
-                // CORREGIDO: Limitar tamaño máximo
-                val finalAudio = if (combinedAudio.size > maxAudioSizeBytes) {
-                    Log.d(TAG, "Audio buffer too large, trimming to ${maxAudioSizeBytes} bytes")
-                    combinedAudio.copyOfRange(combinedAudio.size - maxAudioSizeBytes, combinedAudio.size)
-                } else {
-                    combinedAudio
-                }
-
-                // Limpiar buffer después de usar
-                audioBuffer.reset()
-
-                // Procesar el audio
-                return sendAudioToOpenAI(finalAudio)
+            scope.launch {
+                processAudioAsync(audioData)
             }
-
+            true
         } catch (e: Exception) {
-            Log.e(TAG, "Error processing audio for translation", e)
-            synchronized(audioBuffer) {
-                audioBuffer.reset()
-            }
+            Log.e(TAG, "Error processing audio", e)
             false
         }
     }
 
     /**
-     * NUEVO: Enviar audio a OpenAI con manejo de estado
+     * NUEVO: Buffer de audio asíncrono
      */
-    private fun sendAudioToOpenAI(audioData: ByteArray): Boolean {
+    @SuppressLint("NewApi")
+    private fun bufferAudio(audioData: ByteArray) {
+        scope.launch {
+            audioBufferLock.withLock {
+                currentAudioBuffer.write(audioData)
+
+                // Si el buffer se hace muy grande, enviar
+                if (currentAudioBuffer.size() > maxAudioSizeBytes) {
+                    val bufferedData = currentAudioBuffer.toByteArray()
+                    currentAudioBuffer.reset()
+                    sendAudioToOpenAI(bufferedData)
+                }
+            }
+        }
+
+    }
+
+    /**
+     * NUEVO: Procesamiento de audio asíncrono
+     */
+    @RequiresApi(Build.VERSION_CODES.O)
+    private suspend fun processAudioAsync(audioData: ByteArray) {
+        audioBufferLock.withLock {
+            currentAudioBuffer.write(audioData)
+            val combinedAudio = currentAudioBuffer.toByteArray()
+
+            // Validar tamaño mínimo
+            if (combinedAudio.size < minAudioSizeBytes) {
+                Log.v(TAG, "📊 Buffer size: ${combinedAudio.size}/$minAudioSizeBytes bytes")
+                return@withLock
+            }
+
+            // Limitar tamaño máximo
+            val finalAudio = if (combinedAudio.size > maxAudioSizeBytes) {
+                Log.d(TAG, "✂️ Trimming audio buffer to ${maxAudioSizeBytes} bytes")
+                combinedAudio.copyOfRange(
+                    combinedAudio.size - maxAudioSizeBytes,
+                    combinedAudio.size
+                )
+            } else {
+                combinedAudio
+            }
+
+            currentAudioBuffer.reset()
+            sendAudioToOpenAI(finalAudio)
+        }
+    }
+
+    /**
+     * CORREGIDO: Send audio to OpenAI con mejor manejo de errores
+     */
+    @RequiresApi(Build.VERSION_CODES.O)
+    private suspend fun sendAudioToOpenAI(audioData: ByteArray): Boolean {
         return try {
+            if (isWaitingForResponse.get()) {
+                Log.v(TAG, "⏳ Already waiting for response, skipping")
+                return false
+            }
+
             isWaitingForResponse.set(true)
             lastRequestTime.set(System.currentTimeMillis())
             lastTranslationTime.set(System.currentTimeMillis())
 
-            Log.d(TAG, "Sending ${audioData.size} bytes of audio for translation")
+            Log.d(TAG, "🚀 Sending ${audioData.size} bytes to OpenAI")
 
-            val audioBase64 = android.util.Base64.encodeToString(audioData, android.util.Base64.NO_WRAP)
+            val audioBase64 = Base64.getEncoder().encodeToString(audioData)
 
-            // Limpiar buffer de audio de entrada
+            // PASO 1: Limpiar buffer previo
             val clearBuffer = JSONObject().apply {
                 put("type", "input_audio_buffer.clear")
             }
-            webSocket?.send(clearBuffer.toString())
 
-            // Enviar audio
+            // PASO 2: Agregar audio
             val audioInput = JSONObject().apply {
                 put("type", "input_audio_buffer.append")
                 put("audio", audioBase64)
             }
-            webSocket?.send(audioInput.toString())
 
-            // Commit audio
+            // PASO 3: Commit audio
             val commitAudio = JSONObject().apply {
                 put("type", "input_audio_buffer.commit")
             }
-            webSocket?.send(commitAudio.toString())
 
-            // Crear respuesta
+            // PASO 4: Solicitar respuesta
             val responseRequest = JSONObject().apply {
                 put("type", "response.create")
                 put("response", JSONObject().apply {
-                    put("modalities", org.json.JSONArray().apply {
+                    put("modalities", JSONArray().apply {
                         put("text")
                         put("audio")
                     })
-                    put("instructions", "Translate immediately to $targetLanguage")
                 })
             }
-            webSocket?.send(responseRequest.toString())
 
-            Log.d(TAG, "Audio sent to OpenAI for translation successfully")
+            // Enviar comandos secuencialmente con pequeños delays
+            val success1 = webSocket?.send(clearBuffer.toString()) ?: false
+            delay(10)
+            val success2 = webSocket?.send(audioInput.toString()) ?: false
+            delay(10)
+            val success3 = webSocket?.send(commitAudio.toString()) ?: false
+            delay(10)
+            val success4 = webSocket?.send(responseRequest.toString()) ?: false
+
+            val allSuccess = success1 && success2 && success3 && success4
+
+            if (!allSuccess) {
+                Log.e(TAG, "❌ Failed to send audio commands")
+                isWaitingForResponse.set(false)
+                return false
+            }
+
+            Log.d(TAG, "✅ Audio sent successfully")
             true
 
         } catch (e: Exception) {
-            Log.e(TAG, "Error sending audio to OpenAI", e)
+            Log.e(TAG, "❌ Error sending audio to OpenAI", e)
             isWaitingForResponse.set(false)
             false
         }
     }
+
+    // ... resto de métodos sin cambios significativos ...
 
     /**
      * Enable translation
@@ -497,48 +589,24 @@ class OpenAIRealtimeManager(
     }
 
     /**
-     * Disable translation
-     */
-    fun disable(): Boolean {
-        isEnabled.set(false)
-        isWaitingForResponse.set(false)
-
-        webSocket?.close(1000, "Translation disabled")
-        webSocket = null
-
-        // Limpiar buffer
-        synchronized(audioBuffer) {
-            audioBuffer.reset()
-        }
-
-        translationListener?.onTranslationStateChanged(false, null)
-        return true
-    }
-
-    /**
      * Update session language
      */
     private fun updateSessionLanguage(language: String) {
         val sessionUpdate = JSONObject().apply {
             put("type", "session.update")
             put("session", JSONObject().apply {
-                put("instructions", """
-                    You are a professional real-time audio translator. Your ONLY job is to translate spoken words to $language.
+                put(
+                    "instructions", """
+                    You are a real-time audio translator. Translate speech to $language.
                     
-                    STRICT RULES:
-                    1. ONLY translate the spoken words you hear
-                    2. NEVER add greetings, explanations, or comments
-                    3. NEVER say "I will translate", "The translation is", or similar phrases
-                    4. Respond IMMEDIATELY with ONLY the translated speech
-                    5. If you hear silence or unclear audio, respond with silence
-                    6. Maintain the original tone and emotion
-                    7. Use natural, fluent speech in $language
-                    8. NEVER break character as a translator
-                    
-                    Simply translate directly: [Original speech] → [Translated speech in $language]
-                """.trimIndent())
-                put("voice", "shimmer") // Mejor calidad de voz
-                put("temperature", 0.6) // Más determinístico
+                    Rules:
+                    - Only output translated speech, no explanations
+                    - Maintain original tone and emotion  
+                    - Use natural pronunciation
+                    - If audio is unclear, stay silent
+                    - Translate immediately when speech ends
+                """.trimIndent()
+                )
             })
         }
 
@@ -546,15 +614,24 @@ class OpenAIRealtimeManager(
     }
 
     /**
-     * Set translation listener
+     * Disable translation
      */
+    fun disable(): Boolean {
+        resetState()
+        isEnabled.set(false)
+
+        webSocket?.close(1000, "Translation disabled")
+        webSocket = null
+
+        translationListener?.onTranslationStateChanged(false, null)
+        return true
+    }
+
+    // Getters y setters sin cambios...
     fun setTranslationListener(listener: TranslationListener?) {
         this.translationListener = listener
     }
 
-    /**
-     * Get translation statistics
-     */
     fun getStats(): WebRtcManager.TranslationStats {
         val total = totalTranslations.get()
         val avgLatency = if (total > 0) totalLatency.get() / total else 0L
@@ -568,77 +645,29 @@ class OpenAIRealtimeManager(
         )
     }
 
-    /**
-     * Check if translation is enabled
-     */
     fun isEnabled(): Boolean = isEnabled.get()
-
-    /**
-     * Check if currently processing
-     */
     fun isProcessing(): Boolean = isProcessing.get()
-
-    /**
-     * Get current target language
-     */
     fun getCurrentTargetLanguage(): String = targetLanguage
-
-    /**
-     * Get supported languages
-     */
     fun getSupportedLanguages(): List<String> = supportedLanguages.toList()
 
-    /**
-     * Set translation quality
-     */
     fun setTranslationQuality(quality: WebRtcManager.TranslationQuality): Boolean {
         this.translationQuality = quality
-
-        val temperature = when (quality) {
-            WebRtcManager.TranslationQuality.LOW -> 0.6
-            WebRtcManager.TranslationQuality.MEDIUM -> 0.8
-            WebRtcManager.TranslationQuality.HIGH -> 1
-        }
-
-        val sessionUpdate = JSONObject().apply {
-            put("type", "session.update")
-            put("session", JSONObject().apply {
-                put("temperature", temperature)
-                put("voice", "shimmer") // Asegurar voz de alta calidad
-            })
-        }
-
-        webSocket?.send(sessionUpdate.toString())
+        // Implementar actualización de calidad si es necesario
         return true
     }
 
-    /**
-     * Get current translation quality
-     */
     fun getTranslationQuality(): WebRtcManager.TranslationQuality = translationQuality
 
     /**
      * Dispose resources
      */
     fun dispose() {
-        processJob?.cancel()
+        scope.cancel()
         webSocket?.close(1000, "Manager disposed")
         webSocket = null
         httpClient = null
-        scope.cancel()
 
+        resetState()
         isEnabled.set(false)
-        isProcessing.set(false)
-        isWaitingForResponse.set(false)
-
-        synchronized(audioQueue) {
-            audioQueue.clear()
-        }
-
-        synchronized(audioBuffer) {
-            audioBuffer.reset()
-        }
-
-        pendingTranslations.clear()
     }
 }

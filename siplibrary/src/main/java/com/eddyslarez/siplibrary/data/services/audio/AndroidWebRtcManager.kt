@@ -650,6 +650,10 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
                 override fun onProcessingStateChanged(isProcessing: Boolean) {
                     webRtcEventListener?.onTranslationProcessingChanged(isProcessing)
                 }
+
+                override fun onSessionReady() {
+                    TODO("Not yet implemented")
+                }
             })
 
             if (openAIManager?.initialize() == true) {
