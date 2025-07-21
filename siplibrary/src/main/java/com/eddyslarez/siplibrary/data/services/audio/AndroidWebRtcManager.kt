@@ -657,7 +657,13 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
                             }
 
                             remoteAudioBuffer.clear()
-
+                            // NUEVO: Verificar que tenemos suficiente audio (mínimo 100ms)
+                            val minAudioSize =
+                                (16000 * 2 * 0.1).toInt() // 100ms de audio PCM 16-bit 16kHz
+                            if (totalSize < minAudioSize) {
+                                log.d(TAG) { "Audio buffer too small: $totalSize bytes, need at least $minAudioSize" }
+                                return@synchronized
+                            }
                             if (combinedAudio.isNotEmpty()) {
                                 log.d(TAG) { "Sending ${combinedAudio.size} bytes of remote audio to translation" }
                                 openAIManager?.processAudioForTranslation(combinedAudio)
@@ -668,6 +674,21 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
 
                 } catch (e: Exception) {
                     log.e(TAG) { "Error in remote audio translation processing: ${e.message}" }
+                    // NUEVO: Filtrar audio muy pequeño o silencio
+//                    if (audioData.size < 160) { // Menos de 10ms de audio
+//                        return
+//                    }
+//
+//                    // NUEVO: Verificar que no es solo silencio
+//                    val hasSignal = audioData.any { byte ->
+//                        val sample = (byte.toInt() and 0xFF) - 128
+//                        kotlin.math.abs(sample) > 10 // Umbral mínimo de señal
+//                    }
+//
+//                    if (!hasSignal) {
+//                        return
+//                    }
+
                     delay(1000)
                 }
             }
