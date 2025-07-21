@@ -209,7 +209,7 @@ class OpenAIRealtimeManager(
                     put("silence_duration_ms", 800) // Optimizado para respuesta rápida
                 })
                 put("tool_choice", "none")
-                put("temperature", 0.3) // Más determinístico para traducciones consistentes
+                put("temperature", 0.6) // Más determinístico para traducciones consistentes
                 put("max_response_output_tokens", 150) // Limitado para respuestas concisas
             })
         }
@@ -595,9 +595,9 @@ class OpenAIRealtimeManager(
         this.translationQuality = quality
 
         val temperature = when (quality) {
-            WebRtcManager.TranslationQuality.LOW -> 0.2
-            WebRtcManager.TranslationQuality.MEDIUM -> 0.3
-            WebRtcManager.TranslationQuality.HIGH -> 0.4
+            WebRtcManager.TranslationQuality.LOW -> 0.6
+            WebRtcManager.TranslationQuality.MEDIUM -> 0.8
+            WebRtcManager.TranslationQuality.HIGH -> 1
         }
 
         val sessionUpdate = JSONObject().apply {
