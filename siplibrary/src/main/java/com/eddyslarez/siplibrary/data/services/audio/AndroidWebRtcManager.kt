@@ -652,7 +652,7 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
                 }
 
                 override fun onSessionReady() {
-                    TODO("Not yet implemented")
+                    log.w(TAG) { "onSessionReady" }
                 }
             })
 
