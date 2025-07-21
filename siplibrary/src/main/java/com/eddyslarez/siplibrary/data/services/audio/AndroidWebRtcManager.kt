@@ -435,7 +435,9 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
     private var currentTargetLanguage: String? = null
     private var translationQuality: WebRtcManager.TranslationQuality =
         WebRtcManager.TranslationQuality.MEDIUM
-
+    // NUEVO: Control de audio remoto
+    private var isRemoteAudioMuted = false
+    private var originalRemoteAudioVolume = 1.0f
     // NUEVO: Grabador especial para traducción (usa el mismo sistema que ya tienes)
     private var translationAudioRecorder: WavRecorder? = null
     private var isRecordingForTranslation = false
@@ -540,29 +542,100 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
     /**
      * Enable AI audio translation for incoming audio
      */
+    /**
+     * MODIFICADO: Enable AI translation with complete remote audio muting
+     */
+//    override fun enableAudioTranslation(
+//        apiKey: String,
+//        targetLanguage: String,
+//        model: String
+//    ): Boolean {
+//        log.d(TAG) { "Enabling AI audio translation with remote audio muting to $targetLanguage" }
+//
+//        return try {
+//            openAIManager = OpenAIRealtimeManager(apiKey, model)
+//
+//            openAIManager?.setTranslationListener(object : OpenAIRealtimeManager.TranslationListener {
+//                override fun onTranslationCompleted(
+//                    originalAudio: ByteArray,
+//                    translatedAudio: ByteArray,
+//                    latency: Long
+//                ) {
+//                    log.d(TAG) { "Translation completed with latency: ${latency}ms, audio size: ${translatedAudio.size} bytes" }
+//
+//                    // Reproducir SOLO el audio traducido
+//                    playTranslatedAudioOnly(translatedAudio)
+//                    webRtcEventListener?.onTranslationCompleted(true, latency, null, null)
+//                }
+//
+//                override fun onTranslationFailed(error: String) {
+//                    log.e(TAG) { "Translation failed: $error" }
+//                    webRtcEventListener?.onTranslationCompleted(false, 0, null, error)
+//                }
+//
+//                override fun onTranslationStateChanged(isEnabled: Boolean, targetLanguage: String?) {
+//                    webRtcEventListener?.onTranslationStateChanged(isEnabled, targetLanguage)
+//                }
+//
+//                override fun onProcessingStateChanged(isProcessing: Boolean) {
+//                    webRtcEventListener?.onTranslationProcessingChanged(isProcessing)
+//                }
+//            })
+//
+//            if (openAIManager?.initialize() == true) {
+//                isTranslationEnabled = openAIManager?.enable(targetLanguage) == true
+//                currentTargetLanguage = if (isTranslationEnabled) targetLanguage else null
+//
+//                if (isTranslationEnabled) {
+//                    // CRÍTICO: Silenciar completamente el audio remoto
+//                    muteRemoteAudioCompletely()
+//
+//                    // Iniciar procesamiento de audio remoto interceptado
+//                    startRemoteAudioTranslationProcessing()
+//                }
+//
+//                log.d(TAG) { "AI translation enabled with remote audio muted: $isTranslationEnabled" }
+//                isTranslationEnabled
+//            } else {
+//                log.e(TAG) { "Failed to initialize OpenAI manager" }
+//                false
+//            }
+//
+//        } catch (e: Exception) {
+//            log.e(TAG) { "Error enabling AI translation: ${e.message}" }
+//            false
+//        }
+//    }
+
     override fun enableAudioTranslation(
         apiKey: String,
         targetLanguage: String,
         model: String
     ): Boolean {
-        log.d(TAG) { "Enabling AI audio translation for REMOTE audio only to $targetLanguage" }
+        log.d(TAG) { "Enabling AI audio translation to $targetLanguage" }
 
         return try {
+            // Limpiar estado anterior
+            disableAudioTranslation()
+
             openAIManager = OpenAIRealtimeManager(apiKey, model)
 
-            openAIManager?.setTranslationListener(object :
-                OpenAIRealtimeManager.TranslationListener {
+            openAIManager?.setTranslationListener(object : OpenAIRealtimeManager.TranslationListener {
                 override fun onTranslationCompleted(
                     originalAudio: ByteArray,
                     translatedAudio: ByteArray,
                     latency: Long
                 ) {
-                    log.d(TAG) { "Translation completed with latency: ${latency}ms" }
+                    log.d(TAG) { "Translation completed with latency: ${latency}ms, audio size: ${translatedAudio.size} bytes" }
 
-                    // CRÍTICO: Detener audio remoto temporalmente y reproducir traducción
-                    replaceRemoteAudioWithTranslation(translatedAudio)
-
-                    webRtcEventListener?.onTranslationCompleted(true, latency, null, null)
+                    // CORREGIDO: Reproducir SOLO el audio traducido
+                    if (translatedAudio.isNotEmpty()) {
+                        playTranslatedAudioOnly(translatedAudio)
+                        webRtcEventListener?.onTranslationCompleted(true, latency, null, null)
+                    } else {
+                        log.w(TAG) { "Received empty translated audio" }
+                        webRtcEventListener?.onTranslationCompleted(false, latency, null, "Empty translation")
+                    }
                 }
 
                 override fun onTranslationFailed(error: String) {
@@ -570,10 +643,7 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
                     webRtcEventListener?.onTranslationCompleted(false, 0, null, error)
                 }
 
-                override fun onTranslationStateChanged(
-                    isEnabled: Boolean,
-                    targetLanguage: String?
-                ) {
+                override fun onTranslationStateChanged(isEnabled: Boolean, targetLanguage: String?) {
                     webRtcEventListener?.onTranslationStateChanged(isEnabled, targetLanguage)
                 }
 
@@ -586,14 +656,13 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
                 isTranslationEnabled = openAIManager?.enable(targetLanguage) == true
                 currentTargetLanguage = if (isTranslationEnabled) targetLanguage else null
 
-                // MODIFICADO: Solo iniciar procesamiento de audio remoto
                 if (isTranslationEnabled) {
-//                    startRemoteAudioProcessing()
-                    startRemoteAudioTranslationProcessing()
+                    // CRÍTICO: Silenciar completamente el audio remoto
+                    muteRemoteAudioCompletely()
 
+                    log.d(TAG) { "AI translation enabled with remote audio muted: $isTranslationEnabled" }
                 }
 
-                log.d(TAG) { "AI translation enabled for remote audio only: $isTranslationEnabled" }
                 isTranslationEnabled
             } else {
                 log.e(TAG) { "Failed to initialize OpenAI manager" }
@@ -605,27 +674,56 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
             false
         }
     }
+    private fun playTranslatedAudioOnly(translatedAudio: ByteArray) {
+        try {
+            // Crear archivo temporal para el audio traducido
+            val tempFile = File.createTempFile("translated_audio", ".wav", context.cacheDir)
 
+            // Crear header WAV para el audio traducido
+            val wavFile = createWavFile(translatedAudio, tempFile)
+
+            // Detener cualquier reproducción anterior
+            stopTranslatedAudioPlayback()
+
+            // Reproducir el audio traducido usando AudioTrack directamente
+            playTranslatedAudioDirectly(translatedAudio)
+
+            log.d(TAG) { "Playing translated audio only: ${translatedAudio.size} bytes" }
+
+            // Limpiar archivo temporal después de un tiempo
+            coroutineScope.launch {
+                delay(calculateAudioDuration(translatedAudio) + 1000)
+                tempFile.delete()
+            }
+
+        } catch (e: Exception) {
+            log.e(TAG) { "Error playing translated audio only: ${e.message}" }
+        }
+    }
     /**
-     * MODIFICADO: Disable AI audio translation
+     * MODIFICADO: Disable AI translation and restore remote audio
      */
     override fun disableAudioTranslation(): Boolean {
-        log.d(TAG) { "Disabling AI audio translation" }
+        log.d(TAG) { "Disabling AI audio translation and restoring remote audio" }
 
         return try {
             isTranslationEnabled = false
             currentTargetLanguage = null
 
-//            stopRemoteAudioProcessing()
+            // Detener procesamiento de audio
             stopRemoteAudioTranslationProcessing()
 
+            // CRÍTICO: Restaurar audio remoto
+            unmuteRemoteAudio()
+
+            // Detener traducción
             openAIManager?.disable()
             openAIManager = null
 
             // Detener reproducción de audio traducido
             stopTranslatedAudioPlayback()
 
-            log.d(TAG) { "AI translation disabled successfully" }
+            log.d(TAG) { "AI translation disabled and remote audio restored" }
             true
 
         } catch (e: Exception) {
@@ -633,9 +731,63 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
             false
         }
     }
+    /**
+     * CORREGIDO: Silenciar completamente el audio remoto sin usar volume
+     */
+    private fun muteRemoteAudioCompletely() {
+        try {
+            // Método principal: Deshabilitar el track de audio remoto
+            remoteAudioTrack?.enabled = false
+            isRemoteAudioMuted = true
+
+            // Configurar AudioManager para minimizar volumen de llamada
+            audioManager?.let { manager ->
+                try {
+                    originalRemoteAudioVolume = manager.getStreamVolume(AudioManager.STREAM_VOICE_CALL).toFloat()
+                    manager.setStreamVolume(AudioManager.STREAM_VOICE_CALL, 0, 0)
+                } catch (e: Exception) {
+                    log.e(TAG) { "Error setting stream volume: ${e.message}" }
+                }
+            }
+
+            log.d(TAG) { "Remote audio completely muted for translation" }
+
+        } catch (e: Exception) {
+            log.e(TAG) { "Error muting remote audio: ${e.message}" }
+        }
+    }
+
 
     /**
-     * NUEVO: Iniciar procesamiento solo de audio remoto
+     * CORREGIDO: Restaurar audio remoto sin usar volume
+     */
+    private fun unmuteRemoteAudio() {
+        try {
+            // Restaurar track de audio remoto
+            remoteAudioTrack?.enabled = true
+            isRemoteAudioMuted = false
+
+            // Restaurar volumen original
+            audioManager?.let { manager ->
+                try {
+                    manager.setStreamVolume(
+                        AudioManager.STREAM_VOICE_CALL,
+                        originalRemoteAudioVolume.toInt(),
+                        0
+                    )
+                } catch (e: Exception) {
+                    log.e(TAG) { "Error restoring stream volume: ${e.message}" }
+                }
+            }
+
+            log.d(TAG) { "Remote audio restored" }
+
+        } catch (e: Exception) {
+            log.e(TAG) { "Error restoring remote audio: ${e.message}" }
+        }
+    }
+    /**
+     * CORREGIDO: Iniciar procesamiento de audio remoto con validaciones mejoradas
      */
     private fun startRemoteAudioTranslationProcessing() {
         if (remoteAudioProcessingJob?.isActive == true) return
@@ -644,10 +796,21 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
             while (isActive && isTranslationEnabled) {
                 try {
                     delay(translationIntervalMs)
+
                     synchronized(remoteAudioBuffer) {
                         if (remoteAudioBuffer.isNotEmpty()) {
                             // Combinar todo el audio acumulado
                             val totalSize = remoteAudioBuffer.sumOf { it.size }
+
+                            // CORREGIDO: Validar tamaño mínimo más estricto
+                            val minAudioSize = (16000 * 2 * 0.5).toInt() // 500ms de audio PCM 16-bit 16kHz
+
+                            if (totalSize < minAudioSize) {
+                                log.d(TAG) { "Audio buffer too small: $totalSize bytes, need at least $minAudioSize (500ms)" }
+                                // No limpiar el buffer, mantener para próxima iteración
+                                return@synchronized
+                            }
+
                             val combinedAudio = ByteArray(totalSize)
                             var offset = 0
 
@@ -656,44 +819,78 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
                                 offset += chunk.size
                             }
 
+                            // Limpiar buffer después de procesar
                             remoteAudioBuffer.clear()
-                            // NUEVO: Verificar que tenemos suficiente audio (mínimo 100ms)
-                            val minAudioSize =
-                                (16000 * 2 * 0.1).toInt() // 100ms de audio PCM 16-bit 16kHz
-                            if (totalSize < minAudioSize) {
-                                log.d(TAG) { "Audio buffer too small: $totalSize bytes, need at least $minAudioSize" }
-                                return@synchronized
-                            }
-                            if (combinedAudio.isNotEmpty()) {
-                                log.d(TAG) { "Sending ${combinedAudio.size} bytes of remote audio to translation" }
+
+                            log.d(TAG) { "Sending ${combinedAudio.size} bytes of remote audio to translation" }
+
+                            // CORREGIDO: Verificar que OpenAI no esté procesando antes de enviar
+                            if (openAIManager?.isProcessing() != true) {
                                 openAIManager?.processAudioForTranslation(combinedAudio)
                                 lastTranslationSent = System.currentTimeMillis()
+                            } else {
+                                log.d(TAG) { "OpenAI is busy, queuing audio for next cycle" }
+                                // Devolver el audio al buffer para próximo ciclo
+                                remoteAudioBuffer.add(0, combinedAudio)
                             }
                         }
                     }
 
                 } catch (e: Exception) {
                     log.e(TAG) { "Error in remote audio translation processing: ${e.message}" }
-                    // NUEVO: Filtrar audio muy pequeño o silencio
-//                    if (audioData.size < 160) { // Menos de 10ms de audio
-//                        return
-//                    }
-//
-//                    // NUEVO: Verificar que no es solo silencio
-//                    val hasSignal = audioData.any { byte ->
-//                        val sample = (byte.toInt() and 0xFF) - 128
-//                        kotlin.math.abs(sample) > 10 // Umbral mínimo de señal
-//                    }
-//
-//                    if (!hasSignal) {
-//                        return
-//                    }
-
-                    delay(1000)
+                    delay(2000) // Esperar más tiempo en caso de error
                 }
             }
         }
     }
+
+//    /**
+//     * NUEVO: Iniciar procesamiento solo de audio remoto
+//     */
+//    private fun startRemoteAudioTranslationProcessing() {
+//        if (remoteAudioProcessingJob?.isActive == true) return
+//
+//        remoteAudioProcessingJob = coroutineScope.launch(Dispatchers.IO) {
+//            while (isActive && isTranslationEnabled) {
+//                try {
+//                    delay(translationIntervalMs)
+//                    synchronized(remoteAudioBuffer) {
+//                        if (remoteAudioBuffer.isNotEmpty()) {
+//                            // Combinar todo el audio acumulado
+//                            val totalSize = remoteAudioBuffer.sumOf { it.size }
+//                            val combinedAudio = ByteArray(totalSize)
+//                            var offset = 0
+//
+//                            remoteAudioBuffer.forEach { chunk ->
+//                                System.arraycopy(chunk, 0, combinedAudio, offset, chunk.size)
+//                                offset += chunk.size
+//                            }
+//
+//                            remoteAudioBuffer.clear()
+//                            // NUEVO: Verificar que tenemos suficiente audio (mínimo 100ms)
+//                            val minAudioSize =
+//                                (16000 * 2 * 0.1).toInt() // 100ms de audio PCM 16-bit 16kHz
+//                            if (totalSize < minAudioSize) {
+//                                log.d(TAG) { "Audio buffer too small: $totalSize bytes, need at least $minAudioSize" }
+//                                return@synchronized
+//                            }
+//                            if (combinedAudio.isNotEmpty()) {
+//                                log.d(TAG) { "Sending ${combinedAudio.size} bytes of remote audio to translation" }
+//                                openAIManager?.processAudioForTranslation(combinedAudio)
+//                                lastTranslationSent = System.currentTimeMillis()
+//                            }
+//                        }
+//                    }
+//
+//                } catch (e: Exception) {
+//                    log.e(TAG) { "Error in remote audio translation processing: ${e.message}" }
+//
+//
+//                    delay(1000)
+//                }
+//            }
+//        }
+//    }
 
     /**
      * NUEVO: Detener procesamiento de audio remoto
@@ -705,16 +902,45 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
         synchronized(remoteAudioBuffer) {
             remoteAudioBuffer.clear()
         }
+
+        log.d(TAG) { "Stopped remote audio translation processing" }
     }
 
+//    private fun stopRemoteAudioTranslationProcessing() {
+//        remoteAudioProcessingJob?.cancel()
+//        remoteAudioProcessingJob = null
+//
+//        synchronized(remoteAudioBuffer) {
+//            remoteAudioBuffer.clear()
+//        }
+//    }
     /**
-     * NUEVO: Combinar buffers de audio
+     * CORREGIDO: Interceptar audio remoto con validación de datos
      */
     private fun interceptRemoteAudioForTranslation(audioData: ByteArray) {
         if (!isTranslationEnabled) return
 
+        // CORREGIDO: Validar que los datos de audio no estén vacíos
+        if (audioData.isEmpty()) {
+            log.w(TAG) { "Received empty audio data for translation" }
+            return
+        }
+
         try {
             synchronized(remoteAudioBuffer) {
+                // CORREGIDO: Limitar el tamaño total del buffer para evitar acumulación excesiva
+                val maxBufferSize = 16000 * 2 * 10 // 10 segundos máximo
+                val currentBufferSize = remoteAudioBuffer.sumOf { it.size }
+
+                if (currentBufferSize + audioData.size > maxBufferSize) {
+                    log.w(TAG) { "Audio buffer full, removing oldest chunks" }
+                    // Remover chunks más antiguos
+                    while (remoteAudioBuffer.isNotEmpty() &&
+                        remoteAudioBuffer.sumOf { it.size } + audioData.size > maxBufferSize) {
+                        remoteAudioBuffer.removeAt(0)
+                    }
+                }
+
                 remoteAudioBuffer.add(audioData.copyOf())
             }
 
@@ -723,6 +949,22 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
             log.e(TAG) { "Error intercepting remote audio: ${e.message}" }
         }
     }
+//    /**
+//     * NUEVO: Combinar buffers de audio
+//     */
+//    private fun interceptRemoteAudioForTranslation(audioData: ByteArray) {
+//        if (!isTranslationEnabled) return
+//
+//        try {
+//            synchronized(remoteAudioBuffer) {
+//                remoteAudioBuffer.add(audioData.copyOf())
+//            }
+//
+//            log.d(TAG) { "Intercepted ${audioData.size} bytes of remote audio for translation" }
+//        } catch (e: Exception) {
+//            log.e(TAG) { "Error intercepting remote audio: ${e.message}" }
+//        }
+//    }
 
     /**
      * NUEVO: Reemplazar audio remoto con traducción
@@ -737,7 +979,7 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
             createWavFileFromPcm(translatedAudio, tempFile)
 
             // Reproducir audio traducido en lugar del remoto
-            playTranslatedAudioDirectly(tempFile.absolutePath)
+//            playTranslatedAudioDirectly(tempFile.absolutePath)
 
             // Re-habilitar audio remoto después de la traducción
             coroutineScope.launch {
@@ -752,38 +994,105 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
             remoteAudioTrack?.enabled = true
         }
     }
-
-    /**
-     * NUEVO: Reproducir audio traducido directamente
-     */
-    private fun playTranslatedAudioDirectly(audioPath: String) {
+    private fun playTranslatedAudioDirectly(translatedAudio: ByteArray) {
         try {
             stopTranslatedAudioPlayback()
 
-            translatedAudioPlayer = AudioFilePlayer(audioPath, 16000)
-            isPlayingTranslatedAudio =
-                translatedAudioPlayer?.startPlaying(coroutineScope, false) == true
+            coroutineScope.launch(Dispatchers.IO) {
+                try {
+                    val sampleRate = 16000
+                    val channelConfig = AudioFormat.CHANNEL_OUT_MONO
+                    val audioFormat = AudioFormat.ENCODING_PCM_16BIT
 
-            if (isPlayingTranslatedAudio) {
-                log.d(TAG) { "Playing translated audio directly" }
+                    val bufferSize = AudioTrack.getMinBufferSize(sampleRate, channelConfig, audioFormat)
+
+                    val audioTrack = AudioTrack(
+                        AudioManager.STREAM_VOICE_CALL,
+                        sampleRate,
+                        channelConfig,
+                        audioFormat,
+                        maxOf(bufferSize, translatedAudio.size),
+                        AudioTrack.MODE_STREAM
+                    )
+
+                    audioTrack.play()
+
+                    // Escribir audio en chunks
+                    val chunkSize = 1024
+                    var offset = 0
+
+                    while (offset < translatedAudio.size && isTranslationEnabled) {
+                        val remainingBytes = translatedAudio.size - offset
+                        val bytesToWrite = minOf(chunkSize, remainingBytes)
+
+                        val written = audioTrack.write(translatedAudio, offset, bytesToWrite)
+                        if (written > 0) {
+                            offset += written
+                        } else {
+                            delay(10) // Esperar un poco si no se pudo escribir
+                        }
+                    }
+
+                    // Esperar a que termine la reproducción
+                    delay(calculateAudioDuration(translatedAudio))
+
+                    audioTrack.stop()
+                    audioTrack.release()
+
+                    isPlayingTranslatedAudio = false
+
+                    log.d(TAG) { "Finished playing translated audio directly" }
+
+                } catch (e: Exception) {
+                    log.e(TAG) { "Error in direct audio playback: ${e.message}" }
+                }
             }
 
+            isPlayingTranslatedAudio = true
+
         } catch (e: Exception) {
-            log.e(TAG) { "Error playing translated audio: ${e.message}" }
+            log.e(TAG) { "Error starting direct audio playback: ${e.message}" }
         }
     }
+
+//    /**
+//     * NUEVO: Reproducir audio traducido directamente
+//     */
+//    private fun playTranslatedAudioDirectly(audioPath: String) {
+//        try {
+//            stopTranslatedAudioPlayback()
+//
+//            translatedAudioPlayer = AudioFilePlayer(audioPath, 16000)
+//            isPlayingTranslatedAudio =
+//                translatedAudioPlayer?.startPlaying(coroutineScope, false) == true
+//
+//            if (isPlayingTranslatedAudio) {
+//                log.d(TAG) { "Playing translated audio directly" }
+//            }
+//
+//        } catch (e: Exception) {
+//            log.e(TAG) { "Error playing translated audio: ${e.message}" }
+//        }
+//    }
 
     /**
      * NUEVO: Detener reproducción de audio traducido
      */
+//    private fun stopTranslatedAudioPlayback() {
+//        if (isPlayingTranslatedAudio) {
+//            translatedAudioPlayer?.stopPlaying()
+//            translatedAudioPlayer = null
+//            isPlayingTranslatedAudio = false
+//        }
+//    }
     private fun stopTranslatedAudioPlayback() {
         if (isPlayingTranslatedAudio) {
             translatedAudioPlayer?.stopPlaying()
             translatedAudioPlayer = null
             isPlayingTranslatedAudio = false
+            log.d(TAG) { "Stopped translated audio playback" }
         }
     }
-
     /**
      * NUEVO: Calcular duración de audio PCM
      */
@@ -1107,24 +1416,32 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
 
         return try {
             currentReceivedRecordingPath = audioFileManager.createRecordingPath("received_audio")
-            // MODIFICADO: Crear grabador personalizado que también intercepte para traducción
-            receivedAudioRecorder = object : WavRecorder(currentReceivedRecordingPath!!) {
 
+            // CORREGIDO: Crear grabador personalizado mejorado
+            receivedAudioRecorder = object : WavRecorder(currentReceivedRecordingPath!!) {
                 override fun onAudioDataReceived(audioData: ByteArray) {
                     // Llamar al método padre para grabación normal
                     super.onAudioDataReceived(audioData)
 
-                    // NUEVO: También interceptar para traducción
-                    interceptRemoteAudioForTranslation(audioData)
+                    // CORREGIDO: Interceptar para traducción solo si está habilitada
+                    // y los datos no están vacíos
+                    if (isTranslationEnabled && audioData.isNotEmpty()) {
+                        interceptRemoteAudioForTranslation(audioData)
+                    }
                 }
             }
+
             if (receivedAudioRecorder?.startRecording(coroutineScope) == true) {
                 isRecordingReceivedAudio = true
                 log.d(TAG) { "Started recording received audio: $currentReceivedRecordingPath" }
 
-                // NUEVO: Si la traducción está habilitada, iniciar procesamiento
+                // CORREGIDO: Iniciar procesamiento solo después de confirmar grabación
                 if (isTranslationEnabled) {
-                    startRemoteAudioTranslationProcessing()
+                    // Esperar un poco para que se acumule audio antes de procesar
+                    coroutineScope.launch {
+                        delay(1000)
+                        startRemoteAudioTranslationProcessing()
+                    }
                 }
 
                 true
@@ -1138,6 +1455,47 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
             false
         }
     }
+
+//    @RequiresPermission(Manifest.permission.RECORD_AUDIO)
+//    override fun startRecordingReceivedAudio(): Boolean {
+//        if (isRecordingReceivedAudio) {
+//            log.w(TAG) { "Already recording received audio" }
+//            return false
+//        }
+//
+//        return try {
+//            currentReceivedRecordingPath = audioFileManager.createRecordingPath("received_audio")
+//            // MODIFICADO: Crear grabador personalizado que también intercepte para traducción
+//            receivedAudioRecorder = object : WavRecorder(currentReceivedRecordingPath!!) {
+//
+//                override fun onAudioDataReceived(audioData: ByteArray) {
+//                    // Llamar al método padre para grabación normal
+//                    super.onAudioDataReceived(audioData)
+//
+//                    // NUEVO: También interceptar para traducción
+//                    interceptRemoteAudioForTranslation(audioData)
+//                }
+//            }
+//            if (receivedAudioRecorder?.startRecording(coroutineScope) == true) {
+//                isRecordingReceivedAudio = true
+//                log.d(TAG) { "Started recording received audio: $currentReceivedRecordingPath" }
+//
+//                // NUEVO: Si la traducción está habilitada, iniciar procesamiento
+//                if (isTranslationEnabled) {
+//                    startRemoteAudioTranslationProcessing()
+//                }
+//
+//                true
+//            } else {
+//                receivedAudioRecorder = null
+//                currentReceivedRecordingPath = null
+//                false
+//            }
+//        } catch (e: Exception) {
+//            log.e(TAG) { "Error starting received audio recording: ${e.message}" }
+//            false
+//        }
+//    }
 
     /**
      * Modificar stopRecordingReceivedAudio para también detener traducción
