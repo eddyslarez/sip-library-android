@@ -197,7 +197,7 @@ class OpenAIRealtimeManager(
                     
                     Simply translate directly: [Original speech] → [Translated speech in $targetLanguage]
                 """.trimIndent())
-                put("voice", "nova") // Cambiado a nova para mejor calidad de voz
+                put("voice", "shimmer") // Cambiado a shimmer para mejor calidad de voz
                 put("input_audio_format", "pcm16")
                 put("output_audio_format", "pcm16")
 
@@ -537,7 +537,7 @@ class OpenAIRealtimeManager(
                     
                     Simply translate directly: [Original speech] → [Translated speech in $language]
                 """.trimIndent())
-                put("voice", "nova") // Mejor calidad de voz
+                put("voice", "shimmer") // Mejor calidad de voz
                 put("temperature", 0.6) // Más determinístico
             })
         }
@@ -604,7 +604,7 @@ class OpenAIRealtimeManager(
             put("type", "session.update")
             put("session", JSONObject().apply {
                 put("temperature", temperature)
-                put("voice", "nova") // Asegurar voz de alta calidad
+                put("voice", "shimmer") // Asegurar voz de alta calidad
             })
         }
 
