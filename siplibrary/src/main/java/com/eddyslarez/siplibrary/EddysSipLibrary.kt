@@ -16,6 +16,8 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
 import android.net.Uri
 import android.util.Log
+import com.eddyslarez.siplibrary.data.services.audio.WebRtcConnectionState
+import com.eddyslarez.siplibrary.data.services.audio.WebRtcEventListener
 import com.eddyslarez.siplibrary.data.services.audio.WebRtcManager
 import com.eddyslarez.siplibrary.data.services.audio.WebRtcManagerFactory
 import kotlinx.coroutines.delay
@@ -156,20 +158,70 @@ class EddysSipLibrary private constructor() {
             return false
         }
 
-        log.d(tag = TAG) { "Enabling AI audio translation to $finalTargetLanguage" }
+        log.d(tag = TAG) { "Enabling AI audio translation to $finalTargetLanguage (anti-loop mode)" }
 
         return try {
-            sipCoreManager?.webRtcManager?.enableAudioTranslation(
+            val result = sipCoreManager?.webRtcManager?.enableAudioTranslation(
                 finalApiKey,
                 finalTargetLanguage,
                 model
             ) ?: false
+
+            if (result) {
+                // NUEVO: Configurar listener específico para traducción
+                sipCoreManager?.webRtcManager?.setListener(object : WebRtcEventListener {
+                    override fun onIceCandidate(candidate: String, sdpMid: String, sdpMLineIndex: Int) {}
+                    override fun onConnectionStateChange(state: WebRtcConnectionState) {}
+                    override fun onRemoteAudioTrack() {}
+                    override fun onAudioDeviceChanged(device: AudioDevice?) {}
+
+                    override fun onTranslationStateChanged(isEnabled: Boolean, targetLanguage: String?) {
+                        aiTranslationListener?.let { listener ->
+                            if (isEnabled && targetLanguage != null) {
+                                listener.onTranslationEnabled(targetLanguage)
+                            } else {
+                                listener.onTranslationDisabled()
+                            }
+                        }
+                    }
+
+                    override fun onTranslationProcessingChanged(isProcessing: Boolean, audioLength: Long) {
+                        aiTranslationListener?.let { listener ->
+                            if (isProcessing) {
+                                listener.onTranslationStarted(audioLength)
+                            }
+                        }
+                    }
+
+                    override fun onTranslationCompleted(success: Boolean, latency: Long, originalLanguage: String?, error: String?) {
+                        aiTranslationListener?.let { listener ->
+                            if (success) {
+                                listener.onTranslationCompleted(success, latency, originalLanguage)
+
+                                // Actualizar estadísticas
+                                getTranslationStats()?.let { stats ->
+                                    listener.onStatsUpdated(stats)
+                                }
+                            } else {
+                                listener.onTranslationFailed(error ?: "Unknown error")
+                            }
+                        }
+                    }
+
+                    override fun onTranslationQualityChanged(quality: WebRtcManager.TranslationQuality) {
+                        aiTranslationListener?.onQualityChanged(quality)
+                    }
+                })
+
+                log.d(tag = TAG) { "AI translation enabled successfully with anti-loop configuration" }
+            }
+
+            result
         } catch (e: Exception) {
             log.e(tag = TAG) { "Error enabling AI translation: ${e.message}" }
             false
         }
     }
-
     /**
      * Disable AI audio translation
      */

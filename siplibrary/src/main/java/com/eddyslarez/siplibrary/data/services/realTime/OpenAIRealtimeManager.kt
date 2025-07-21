@@ -48,7 +48,8 @@ class OpenAIRealtimeManager(
 
     // Configuration
     private var targetLanguage: String = "es" // Default to Spanish
-    private var translationQuality: WebRtcManager.TranslationQuality = WebRtcManager.TranslationQuality.MEDIUM
+    private var translationQuality: WebRtcManager.TranslationQuality =
+        WebRtcManager.TranslationQuality.MEDIUM
     private var isEnabled = AtomicBoolean(false)
     private var isProcessing = AtomicBoolean(false)
 
@@ -75,7 +76,12 @@ class OpenAIRealtimeManager(
     )
 
     interface TranslationListener {
-        fun onTranslationCompleted(originalAudio: ByteArray, translatedAudio: ByteArray, latency: Long)
+        fun onTranslationCompleted(
+            originalAudio: ByteArray,
+            translatedAudio: ByteArray,
+            latency: Long
+        )
+
         fun onTranslationFailed(error: String)
         fun onTranslationStateChanged(isEnabled: Boolean, targetLanguage: String?)
         fun onProcessingStateChanged(isProcessing: Boolean)
@@ -153,6 +159,9 @@ class OpenAIRealtimeManager(
     /**
      * Initialize session with OpenAI
      */
+    /**
+     * MODIFICADO: Initialize session con configuración optimizada para velocidad
+     */
     private fun initializeSession() {
         sessionId = "session_${System.currentTimeMillis()}_${Random.nextInt(1000)}"
 
@@ -160,44 +169,40 @@ class OpenAIRealtimeManager(
             put("type", "session.update")
             put("session", JSONObject().apply {
                 put("modalities", org.json.JSONArray().apply {
-                    put("text")
-                    put("audio")
+                    put("audio") // SOLO audio, no texto para mayor velocidad
                 })
-                // CRÍTICO: Instrucciones optimizadas para traducción pura
-                put("instructions", """
-                    You are a professional real-time audio translator. 
-                    Your ONLY job is to translate spoken audio to $targetLanguage.
+                // CRÍTICO: Instrucciones optimizadas para traducción ultrarrápida
+                put(
+                    "instructions", """
+                    You are an ultra-fast real-time audio translator. 
+                    CRITICAL RULES:
+                    1. ONLY translate the audio to $targetLanguage
+                    2. NO introductions, explanations, or extra words
+                    3. NO "I will translate" or similar phrases  
+                    4. START translating immediately upon hearing audio
+                    5. Maintain exact meaning and emotion
+                    6. Use the most natural speech in $targetLanguage
+                    7. Be as fast as possible - speed is critical
+                    8. If unclear, translate your best interpretation
+                    9. NEVER break character or add commentary
                     
-                    Rules:
-                    1. Translate EXACTLY what is said, nothing more, nothing less
-                    2. Do NOT add greetings, comments, or explanations
-                    3. Do NOT say "I will translate" or similar phrases
-                    4. Do NOT add context or interpretations
-                    5. Maintain the original tone and emotion
-                    6. Translate in real-time as fast as possible
-                    7. Use natural, fluent speech in the target language
-                    8. If you hear silence, respond with silence
-                    9. If unclear, translate your best approximation
-                    10. NEVER break character as a translator
-                    
-                    Simply translate the audio content directly to $targetLanguage.
-                """.trimIndent())
+                    Translate directly and immediately.
+                """.trimIndent()
+                )
                 put("voice", "alloy")
                 put("input_audio_format", "pcm16")
                 put("output_audio_format", "pcm16")
-                put("input_audio_transcription", JSONObject().apply {
-                    put("model", "whisper-1")
-                })
+
+                // MODIFICADO: Configuración optimizada para velocidad
                 put("turn_detection", JSONObject().apply {
                     put("type", "server_vad")
-                    put("threshold", 0.5f)
-                    put("prefix_padding_ms", 300)
-                    put("silence_duration_ms", 500)
+                    put("threshold", 0.3f) // Más sensible
+                    put("prefix_padding_ms", 200) // Reducido
+                    put("silence_duration_ms", 300) // Más rápido
                 })
-//                put("tools", org.json.JSONArray())
-                put("tool_choice", "auto")
-                put("temperature", 0.6)
-                put("max_response_output_tokens", 4096)
+                put("tool_choice", "none") // Sin herramientas para mayor velocidad
+                put("temperature", 0.3) // Más determinístico = más rápido
+                put("max_response_output_tokens", 2048) // Reducido para respuestas más cortas
             })
         }
 
@@ -219,22 +224,27 @@ class OpenAIRealtimeManager(
                     isEnabled.set(true)
                     translationListener?.onTranslationStateChanged(true, targetLanguage)
                 }
+
                 "session.updated" -> {
                     Log.d(TAG, "Session updated successfully")
                 }
+
                 "conversation.item.created" -> {
                     Log.d(TAG, "Conversation item created")
                 }
+
                 "response.created" -> {
                     Log.d(TAG, "Response created")
                     isProcessing.set(true)
                     translationListener?.onProcessingStateChanged(true)
                 }
+
                 "response.done" -> {
                     Log.d(TAG, "Response completed")
                     isProcessing.set(false)
                     translationListener?.onProcessingStateChanged(false)
                 }
+
                 "response.audio.delta" -> {
                     // Audio chunk received
                     if (json.has("delta")) {
@@ -242,23 +252,28 @@ class OpenAIRealtimeManager(
                         handleTranslatedAudioChunk(audioData)
                     }
                 }
+
                 "response.audio.done" -> {
                     // Audio response completed
                     Log.d(TAG, "Audio response completed")
                     handleTranslationCompleted()
                 }
+
                 "error" -> {
                     val error = json.optJSONObject("error")
                     val errorMessage = error?.optString("message") ?: "Unknown error"
                     Log.e(TAG, "OpenAI API error: $errorMessage")
                     translationListener?.onTranslationFailed(errorMessage)
                 }
+
                 "input_audio_buffer.speech_started" -> {
                     Log.d(TAG, "Speech detected in input audio")
                 }
+
                 "input_audio_buffer.speech_stopped" -> {
                     Log.d(TAG, "Speech stopped in input audio")
                 }
+
                 else -> {
                     Log.d(TAG, "Received message type: $type")
                 }
@@ -338,50 +353,52 @@ class OpenAIRealtimeManager(
     /**
      * Process audio for translation
      */
+    /**
+     * MODIFICADO: Process audio for translation - optimizado para velocidad
+     */
     fun processAudioForTranslation(audioData: ByteArray): Boolean {
         if (!isEnabled.get() || webSocket == null) {
             Log.w(TAG, "Translation not enabled or not connected")
             return false
         }
-
+        if (audioData.isEmpty()) {
+            Log.w(TAG, "Empty audio data received")
+            return false
+        }
         return try {
             lastTranslationTime.set(System.currentTimeMillis())
+            Log.d(TAG, "Processing ${audioData.size} bytes of audio for translation")
+            // OPTIMIZADO: Enviar audio directamente sin chunking para menor latencia
+            val audioBase64 =
+                android.util.Base64.encodeToString(audioData, android.util.Base64.NO_WRAP)
+            // MODIFICADO: Usar input_audio_buffer para streaming más rápido
+            val audioInput = JSONObject().apply {
+                put("type", "input_audio_buffer.append")
+                put("audio", audioBase64)
 
-            // Convert audio to base64
-            val audioBase64 = android.util.Base64.encodeToString(audioData, android.util.Base64.NO_WRAP)
-
-            // Create conversation item with audio
-            val audioItem = JSONObject().apply {
-                put("type", "conversation.item.create")
-                put("item", JSONObject().apply {
-                    put("type", "message")
-                    put("role", "user")
-                    put("content", org.json.JSONArray().apply {
-                        put(JSONObject().apply {
-                            put("type", "input_audio")
-                            put("audio", audioBase64)
-                        })
-                    })
-                })
             }
+            webSocket?.send(audioInput.toString())
 
-            // Send audio to OpenAI
-            webSocket?.send(audioItem.toString())
+            // OPTIMIZADO: Commit inmediato para procesamiento rápido
+            val commitAudio = JSONObject().apply {
+                put("type", "input_audio_buffer.commit")
+            }
+            webSocket?.send(commitAudio.toString())
 
-            // Create response request
+            // OPTIMIZADO: Crear respuesta con configuración de velocidad
             val responseRequest = JSONObject().apply {
                 put("type", "response.create")
                 put("response", JSONObject().apply {
                     put("modalities", org.json.JSONArray().apply {
-                        put("text")
-                        put("audio")  // <-- Ambos deben estar presentes
-
+                        put("audio") // Solo audio
                     })
-                    put("instructions", "Translate the received audio to $targetLanguage and respond with audio in that language.")
+                    put("instructions", "Translate immediately to $targetLanguage")
+
                 })
             }
 
             webSocket?.send(responseRequest.toString())
+            Log.d(TAG, "Audio sent to OpenAI for translation")
 
             true
         } catch (e: Exception) {
@@ -429,7 +446,8 @@ class OpenAIRealtimeManager(
         val sessionUpdate = JSONObject().apply {
             put("type", "session.update")
             put("session", JSONObject().apply {
-                put("instructions", """
+                put(
+                    "instructions", """
                     You are a professional real-time audio translator. 
                     Your ONLY job is to translate spoken audio to $targetLanguage.
                     
@@ -446,7 +464,8 @@ class OpenAIRealtimeManager(
                     10. NEVER break character as a translator
                     
                     Simply translate the audio content directly to $targetLanguage.
-                """.trimIndent())
+                """.trimIndent()
+                )
             })
         }
 

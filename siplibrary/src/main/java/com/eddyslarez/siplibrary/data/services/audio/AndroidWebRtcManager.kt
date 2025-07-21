@@ -74,7 +74,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 /**
  * WAV file recorder for audio recording
  */
-class WavRecorder(
+open class WavRecorder(
     private val filePath: String,
     private val sampleRate: Int = 16000,
     private val channelCount: Int = 1,
@@ -92,6 +92,13 @@ class WavRecorder(
         if (channelCount == 1) AudioFormat.CHANNEL_IN_MONO else AudioFormat.CHANNEL_IN_STEREO,
         AudioFormat.ENCODING_PCM_16BIT
     )
+
+    /**
+    +     * NUEVO: Método virtual para interceptar datos de audio
+    +     */
+    protected open fun onAudioDataReceived(audioData: ByteArray) {
+        // Método base vacío - las subclases pueden sobrescribirlo
+    }
 
     @RequiresPermission(Manifest.permission.RECORD_AUDIO)
     fun startRecording(coroutineScope: CoroutineScope): Boolean {
@@ -159,6 +166,9 @@ class WavRecorder(
             try {
                 val bytesRead = audioRecord?.read(buffer, 0, bufferSize) ?: 0
                 if (bytesRead > 0) {
+                    // NUEVO: Llamar al método de interceptación antes de escribir
+                    val audioData = buffer.copyOfRange(0, bytesRead)
+                    onAudioDataReceived(audioData)
                     fileOutputStream?.write(buffer, 0, bytesRead)
                     dataSize += bytesRead
                 }
@@ -417,31 +427,47 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
     private var isInitialized = false
     private var isLocalAudioReady = false
     private var context: Context = application.applicationContext
+
     // NUEVO: Variables para traducción de IA
+    // NUEVO: Variables para traducción de IA - solo audio remoto
     private var openAIManager: OpenAIRealtimeManager? = null
     private var isTranslationEnabled = false
     private var currentTargetLanguage: String? = null
-    private var translationQuality: WebRtcManager.TranslationQuality = WebRtcManager.TranslationQuality.MEDIUM
+    private var translationQuality: WebRtcManager.TranslationQuality =
+        WebRtcManager.TranslationQuality.MEDIUM
 
     // NUEVO: Grabador especial para traducción (usa el mismo sistema que ya tienes)
     private var translationAudioRecorder: WavRecorder? = null
     private var isRecordingForTranslation = false
     private var currentTranslationRecordingPath: String? = null
     private var translationProcessingJob: Job? = null
-    private var translatedAudioPlayer: AudioFilePlayer? = null
+
+    // MODIFICADO: Solo capturar audio remoto para traducción
+    // MODIFICADO: Buffer para audio remoto interceptado
+    private var remoteAudioBuffer = mutableListOf<ByteArray>()
+    private var remoteAudioProcessingJob: Job? = null
+    private var lastTranslationSent = 0L
+    private val translationIntervalMs = 1000L
 
     // Buffer para acumular audio antes de enviar a traducción
     private val translationAudioBuffer = mutableListOf<ByteArray>()
-    private var lastTranslationSent = 0L
-    private val translationIntervalMs = 2000L // Enviar cada 2 segundos para traducción
+
+    // MODIFICADO: Solo capturar audio remoto para traducción
+    private var remoteAudioProcessor: Job? = null
+    private var isProcessingRemoteAudio = false
+    private var lastRemoteAudioProcessed = 0L
+    private val remoteAudioProcessingInterval = 1500L // Reducido para menor latencia
 
     // Enhanced audio management fields
-    private var audioManager: AudioManager? = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+    private var audioManager: AudioManager? =
+        context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
     private var bluetoothAdapter: BluetoothAdapter? = null
     private var bluetoothManager: BluetoothManager? = null
     private var audioDeviceCallback: AudioDeviceCallback? = null
     private var currentInputDevice: AudioDevice? = null
     private var currentOutputDevice: AudioDevice? = null
+    private var translatedAudioPlayer: AudioFilePlayer? = null
+    private var isPlayingTranslatedAudio = false
 
     // FIXED: Add Bluetooth SCO state tracking
     private var isBluetoothScoRequested = false
@@ -514,23 +540,28 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
     /**
      * Enable AI audio translation for incoming audio
      */
-    @RequiresPermission(Manifest.permission.RECORD_AUDIO)
-    override fun enableAudioTranslation(apiKey: String, targetLanguage: String, model: String): Boolean {
-        log.d(TAG) { "Enabling AI audio translation to $targetLanguage" }
+    override fun enableAudioTranslation(
+        apiKey: String,
+        targetLanguage: String,
+        model: String
+    ): Boolean {
+        log.d(TAG) { "Enabling AI audio translation for REMOTE audio only to $targetLanguage" }
 
         return try {
-            // Crear y configurar OpenAI manager
             openAIManager = OpenAIRealtimeManager(apiKey, model)
 
-            // Configurar listener para recibir audio traducido
-            openAIManager?.setTranslationListener(object : OpenAIRealtimeManager.TranslationListener {
-                override fun onTranslationCompleted(originalAudio: ByteArray, translatedAudio: ByteArray, latency: Long) {
+            openAIManager?.setTranslationListener(object :
+                OpenAIRealtimeManager.TranslationListener {
+                override fun onTranslationCompleted(
+                    originalAudio: ByteArray,
+                    translatedAudio: ByteArray,
+                    latency: Long
+                ) {
                     log.d(TAG) { "Translation completed with latency: ${latency}ms" }
 
-                    // Reproducir el audio traducido en lugar del original
-                    playTranslatedAudio(translatedAudio)
+                    // CRÍTICO: Detener audio remoto temporalmente y reproducir traducción
+                    replaceRemoteAudioWithTranslation(translatedAudio)
 
-                    // Notificar al listener
                     webRtcEventListener?.onTranslationCompleted(true, latency, null, null)
                 }
 
@@ -539,28 +570,30 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
                     webRtcEventListener?.onTranslationCompleted(false, 0, null, error)
                 }
 
-                override fun onTranslationStateChanged(isEnabled: Boolean, targetLanguage: String?) {
-                    log.d(TAG) { "Translation state changed: enabled=$isEnabled, language=$targetLanguage" }
+                override fun onTranslationStateChanged(
+                    isEnabled: Boolean,
+                    targetLanguage: String?
+                ) {
                     webRtcEventListener?.onTranslationStateChanged(isEnabled, targetLanguage)
                 }
 
                 override fun onProcessingStateChanged(isProcessing: Boolean) {
-                    log.d(TAG) { "Translation processing state changed: $isProcessing" }
                     webRtcEventListener?.onTranslationProcessingChanged(isProcessing)
                 }
             })
 
-            // Inicializar y habilitar
             if (openAIManager?.initialize() == true) {
                 isTranslationEnabled = openAIManager?.enable(targetLanguage) == true
                 currentTargetLanguage = if (isTranslationEnabled) targetLanguage else null
 
-                // CRÍTICO: Iniciar grabación para traducción usando tu sistema existente
+                // MODIFICADO: Solo iniciar procesamiento de audio remoto
                 if (isTranslationEnabled) {
-                    startRecordingForTranslation()
+//                    startRemoteAudioProcessing()
+                    startRemoteAudioTranslationProcessing()
+
                 }
 
-                log.d(TAG) { "AI translation enabled: $isTranslationEnabled" }
+                log.d(TAG) { "AI translation enabled for remote audio only: $isTranslationEnabled" }
                 isTranslationEnabled
             } else {
                 log.e(TAG) { "Failed to initialize OpenAI manager" }
@@ -574,7 +607,7 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
     }
 
     /**
-     * Disable AI audio translation
+     * MODIFICADO: Disable AI audio translation
      */
     override fun disableAudioTranslation(): Boolean {
         log.d(TAG) { "Disabling AI audio translation" }
@@ -583,15 +616,14 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
             isTranslationEnabled = false
             currentTargetLanguage = null
 
-            // Detener grabación para traducción
-            stopRecordingForTranslation()
+//            stopRemoteAudioProcessing()
+            stopRemoteAudioTranslationProcessing()
 
             openAIManager?.disable()
             openAIManager = null
 
-            // Detener reproducción de audio traducido si está activa
-            translatedAudioPlayer?.stopPlaying()
-            translatedAudioPlayer = null
+            // Detener reproducción de audio traducido
+            stopTranslatedAudioPlayback()
 
             log.d(TAG) { "AI translation disabled successfully" }
             true
@@ -602,6 +634,160 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
         }
     }
 
+    /**
+     * NUEVO: Iniciar procesamiento solo de audio remoto
+     */
+    private fun startRemoteAudioTranslationProcessing() {
+        if (remoteAudioProcessingJob?.isActive == true) return
+
+        remoteAudioProcessingJob = coroutineScope.launch(Dispatchers.IO) {
+            while (isActive && isTranslationEnabled) {
+                try {
+                    delay(translationIntervalMs)
+                    synchronized(remoteAudioBuffer) {
+                        if (remoteAudioBuffer.isNotEmpty()) {
+                            // Combinar todo el audio acumulado
+                            val totalSize = remoteAudioBuffer.sumOf { it.size }
+                            val combinedAudio = ByteArray(totalSize)
+                            var offset = 0
+
+                            remoteAudioBuffer.forEach { chunk ->
+                                System.arraycopy(chunk, 0, combinedAudio, offset, chunk.size)
+                                offset += chunk.size
+                            }
+
+                            remoteAudioBuffer.clear()
+
+                            if (combinedAudio.isNotEmpty()) {
+                                log.d(TAG) { "Sending ${combinedAudio.size} bytes of remote audio to translation" }
+                                openAIManager?.processAudioForTranslation(combinedAudio)
+                                lastTranslationSent = System.currentTimeMillis()
+                            }
+                        }
+                    }
+
+                } catch (e: Exception) {
+                    log.e(TAG) { "Error in remote audio translation processing: ${e.message}" }
+                    delay(1000)
+                }
+            }
+        }
+    }
+
+    /**
+     * NUEVO: Detener procesamiento de audio remoto
+     */
+    private fun stopRemoteAudioTranslationProcessing() {
+        remoteAudioProcessingJob?.cancel()
+        remoteAudioProcessingJob = null
+
+        synchronized(remoteAudioBuffer) {
+            remoteAudioBuffer.clear()
+        }
+    }
+
+    /**
+     * NUEVO: Combinar buffers de audio
+     */
+    private fun interceptRemoteAudioForTranslation(audioData: ByteArray) {
+        if (!isTranslationEnabled) return
+
+        try {
+            synchronized(remoteAudioBuffer) {
+                remoteAudioBuffer.add(audioData.copyOf())
+            }
+
+            log.d(TAG) { "Intercepted ${audioData.size} bytes of remote audio for translation" }
+        } catch (e: Exception) {
+            log.e(TAG) { "Error intercepting remote audio: ${e.message}" }
+        }
+    }
+
+    /**
+     * NUEVO: Reemplazar audio remoto con traducción
+     */
+    private fun replaceRemoteAudioWithTranslation(translatedAudio: ByteArray) {
+        try {
+            // CRÍTICO: Detener temporalmente el track de audio remoto
+            remoteAudioTrack?.enabled = false
+
+            // Crear archivo temporal para audio traducido
+            val tempFile = File.createTempFile("translated_", ".wav", context.cacheDir)
+            createWavFileFromPcm(translatedAudio, tempFile)
+
+            // Reproducir audio traducido en lugar del remoto
+            playTranslatedAudioDirectly(tempFile.absolutePath)
+
+            // Re-habilitar audio remoto después de la traducción
+            coroutineScope.launch {
+                delay(calculateAudioDuration(translatedAudio))
+                remoteAudioTrack?.enabled = true
+                tempFile.delete()
+            }
+
+        } catch (e: Exception) {
+            log.e(TAG) { "Error replacing remote audio with translation: ${e.message}" }
+            // Re-habilitar audio remoto en caso de error
+            remoteAudioTrack?.enabled = true
+        }
+    }
+
+    /**
+     * NUEVO: Reproducir audio traducido directamente
+     */
+    private fun playTranslatedAudioDirectly(audioPath: String) {
+        try {
+            stopTranslatedAudioPlayback()
+
+            translatedAudioPlayer = AudioFilePlayer(audioPath, 16000)
+            isPlayingTranslatedAudio =
+                translatedAudioPlayer?.startPlaying(coroutineScope, false) == true
+
+            if (isPlayingTranslatedAudio) {
+                log.d(TAG) { "Playing translated audio directly" }
+            }
+
+        } catch (e: Exception) {
+            log.e(TAG) { "Error playing translated audio: ${e.message}" }
+        }
+    }
+
+    /**
+     * NUEVO: Detener reproducción de audio traducido
+     */
+    private fun stopTranslatedAudioPlayback() {
+        if (isPlayingTranslatedAudio) {
+            translatedAudioPlayer?.stopPlaying()
+            translatedAudioPlayer = null
+            isPlayingTranslatedAudio = false
+        }
+    }
+
+    /**
+     * NUEVO: Calcular duración de audio PCM
+     */
+    private fun calculateAudioDuration(pcmData: ByteArray): Long {
+        val sampleRate = 16000
+        val bytesPerSample = 2 // 16-bit
+        val channels = 1
+        val samples = pcmData.size / (bytesPerSample * channels)
+        return (samples * 1000L) / sampleRate
+    }
+
+    /**
+     * NUEVO: Crear archivo WAV desde datos PCM
+     */
+    private fun createWavFileFromPcm(pcmData: ByteArray, outputFile: File) {
+        try {
+            FileOutputStream(outputFile).use { output ->
+                val header = createWavHeader(pcmData.size, 16000, 1, 16)
+                output.write(header)
+                output.write(pcmData)
+            }
+        } catch (e: Exception) {
+            log.e(TAG) { "Error creating WAV file: ${e.message}" }
+        }
+    }
     // ========== MÉTODOS PARA GRABACIÓN Y TRADUCCIÓN ==========
 
     /**
@@ -615,7 +801,8 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
         }
 
         return try {
-            currentTranslationRecordingPath = audioFileManager.createRecordingPath("translation_audio")
+            currentTranslationRecordingPath =
+                audioFileManager.createRecordingPath("translation_audio")
             translationAudioRecorder = WavRecorder(currentTranslationRecordingPath!!)
 
             if (translationAudioRecorder?.startRecording(coroutineScope) == true) {
@@ -778,7 +965,12 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
     /**
      * Crear header WAV
      */
-    private fun createWavHeader(dataSize: Int, sampleRate: Int, channels: Int, bitsPerSample: Int): ByteArray {
+    private fun createWavHeader(
+        dataSize: Int,
+        sampleRate: Int,
+        channels: Int,
+        bitsPerSample: Int
+    ): ByteArray {
         val header = ByteArray(44)
         val byteRate = sampleRate * channels * bitsPerSample / 8
         val blockAlign = channels * bitsPerSample / 8
@@ -856,6 +1048,7 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
 
         return header
     }
+
     /**
      * NUEVO: Stop recording sent audio
      */
@@ -893,15 +1086,24 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
 
         return try {
             currentReceivedRecordingPath = audioFileManager.createRecordingPath("received_audio")
-            receivedAudioRecorder = WavRecorder(currentReceivedRecordingPath!!)
+            // MODIFICADO: Crear grabador personalizado que también intercepte para traducción
+            receivedAudioRecorder = object : WavRecorder(currentReceivedRecordingPath!!) {
 
+                override fun onAudioDataReceived(audioData: ByteArray) {
+                    // Llamar al método padre para grabación normal
+                    super.onAudioDataReceived(audioData)
+
+                    // NUEVO: También interceptar para traducción
+                    interceptRemoteAudioForTranslation(audioData)
+                }
+            }
             if (receivedAudioRecorder?.startRecording(coroutineScope) == true) {
                 isRecordingReceivedAudio = true
                 log.d(TAG) { "Started recording received audio: $currentReceivedRecordingPath" }
 
-                // NUEVO: Si la traducción está habilitada, también iniciar grabación para traducción
-                if (isTranslationEnabled && !isRecordingForTranslation) {
-                    startRecordingForTranslation()
+                // NUEVO: Si la traducción está habilitada, iniciar procesamiento
+                if (isTranslationEnabled) {
+                    startRemoteAudioTranslationProcessing()
                 }
 
                 true
@@ -933,10 +1135,8 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
             val recordingPath = currentReceivedRecordingPath
             currentReceivedRecordingPath = null
 
-            // NUEVO: También detener grabación para traducción si está activa
-            if (isRecordingForTranslation) {
-                stopRecordingForTranslation()
-            }
+            // NUEVO: Detener procesamiento de traducción
+            stopRemoteAudioTranslationProcessing()
 
             log.d(TAG) { "Stopped recording received audio: $recordingPath" }
             recordingPath
@@ -1138,13 +1338,16 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
                 // Notify success if we were trying to connect
                 webRtcEventListener?.onAudioDeviceChanged(currentOutputDevice)
             }
+
             AudioManager.SCO_AUDIO_STATE_DISCONNECTED -> {
                 log.d(TAG) { "Bluetooth SCO disconnected" }
                 isBluetoothScoRequested = false
             }
+
             AudioManager.SCO_AUDIO_STATE_CONNECTING -> {
                 log.d(TAG) { "Bluetooth SCO connecting..." }
             }
+
             AudioManager.SCO_AUDIO_STATE_ERROR -> {
                 log.e(TAG) { "Bluetooth SCO error" }
                 isBluetoothScoRequested = false
@@ -1157,7 +1360,8 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
      */
     private fun initializeBluetoothComponents() {
         try {
-            bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
+            bluetoothManager =
+                context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
             bluetoothAdapter = bluetoothManager?.adapter
             log.d(TAG) { "Bluetooth components initialized" }
         } catch (e: Exception) {
@@ -1272,6 +1476,7 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
                             log.d(TAG) { "Audio focus gained" }
                             setAudioEnabled(true)
                         }
+
                         AudioManager.AUDIOFOCUS_LOSS -> {
                             log.d(TAG) { "Audio focus lost" }
                         }
@@ -1280,7 +1485,8 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
                 .build()
 
             audioFocusRequest = focusRequest
-            val result = audioManager?.requestAudioFocus(focusRequest) ?: AudioManager.AUDIOFOCUS_REQUEST_FAILED
+            val result = audioManager?.requestAudioFocus(focusRequest)
+                ?: AudioManager.AUDIOFOCUS_REQUEST_FAILED
             log.d(TAG) { "Audio focus request result: $result" }
 
         } else {
@@ -1333,10 +1539,12 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
     /**
      * Enhanced device detection with comprehensive AudioDevice mapping
      */
-    @RequiresPermission(allOf = [
-        Manifest.permission.BLUETOOTH_CONNECT,
-        Manifest.permission.RECORD_AUDIO
-    ])
+    @RequiresPermission(
+        allOf = [
+            Manifest.permission.BLUETOOTH_CONNECT,
+            Manifest.permission.RECORD_AUDIO
+        ]
+    )
     override fun getAllAudioDevices(): Pair<List<AudioDevice>, List<AudioDevice>> {
         log.d(TAG) { "Getting all enhanced audio devices..." }
 
@@ -1353,22 +1561,30 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
             val defaultOutputDescriptor = getDefaultOutputDescriptor()
 
             // Built-in devices (always available)
-            addBuiltInDevices(inputDevices, outputDevices,
+            addBuiltInDevices(
+                inputDevices, outputDevices,
                 currentInputDescriptor, currentOutputDescriptor,
-                defaultInputDescriptor, defaultOutputDescriptor)
+                defaultInputDescriptor, defaultOutputDescriptor
+            )
 
             // Wired devices
-            addWiredDevices(inputDevices, outputDevices,
-                currentInputDescriptor, currentOutputDescriptor)
+            addWiredDevices(
+                inputDevices, outputDevices,
+                currentInputDescriptor, currentOutputDescriptor
+            )
 
             // Bluetooth devices
-            addBluetoothDevices(inputDevices, outputDevices,
-                currentInputDescriptor, currentOutputDescriptor)
+            addBluetoothDevices(
+                inputDevices, outputDevices,
+                currentInputDescriptor, currentOutputDescriptor
+            )
 
             // USB and other devices (API 23+)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                addUsbAndOtherDevices(inputDevices, outputDevices,
-                    currentInputDescriptor, currentOutputDescriptor)
+                addUsbAndOtherDevices(
+                    inputDevices, outputDevices,
+                    currentInputDescriptor, currentOutputDescriptor
+                )
             }
 
             log.d(TAG) { "Found ${inputDevices.size} input and ${outputDevices.size} output devices" }
@@ -1639,18 +1855,21 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
                             currentInputDescriptor, currentOutputDescriptor
                         )
                     }
+
                     AudioDeviceInfo.TYPE_DOCK -> {
                         addDockDevice(
                             deviceInfo, inputDevices, outputDevices,
                             currentInputDescriptor, currentOutputDescriptor
                         )
                     }
+
                     AudioDeviceInfo.TYPE_AUX_LINE -> {
                         addAuxDevice(
                             deviceInfo, inputDevices, outputDevices,
                             currentInputDescriptor, currentOutputDescriptor
                         )
                     }
+
                     AudioDeviceInfo.TYPE_HEARING_AID -> {
                         addHearingAidDevice(
                             deviceInfo, inputDevices, outputDevices,
@@ -1845,7 +2064,9 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
                     isWireless = true,
                     supportsHDVoice = true,
                     latency = 50,
-                    vendorInfo = extractVendorFromDeviceName(deviceInfo.productName?.toString() ?: "")
+                    vendorInfo = extractVendorFromDeviceName(
+                        deviceInfo.productName?.toString() ?: ""
+                    )
                 )
             )
         }
@@ -1988,8 +2209,10 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
     private fun isBluetoothDeviceConnected(device: BluetoothDevice): Boolean {
         return try {
             // Method 1: Using BluetoothManager (API 18+)
-            val bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
-            val connectionState = bluetoothManager?.getConnectionState(device, BluetoothProfile.HEADSET)
+            val bluetoothManager =
+                context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
+            val connectionState =
+                bluetoothManager?.getConnectionState(device, BluetoothProfile.HEADSET)
 
             when (connectionState) {
                 BluetoothProfile.STATE_CONNECTED -> return true
@@ -2013,7 +2236,10 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
      * Alternative method using BluetoothProfile service listener (more reliable)
      */
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
-    private fun checkBluetoothConnectionWithProfile(device: BluetoothDevice, callback: (Boolean) -> Unit) {
+    private fun checkBluetoothConnectionWithProfile(
+        device: BluetoothDevice,
+        callback: (Boolean) -> Unit
+    ) {
         val profileListener = object : BluetoothProfile.ServiceListener {
             @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
             override fun onServiceConnected(profile: Int, proxy: BluetoothProfile?) {
@@ -2023,10 +2249,12 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
                             val headsetProxy = proxy as? BluetoothHeadset
                             headsetProxy?.getConnectionState(device) == BluetoothProfile.STATE_CONNECTED
                         }
+
                         BluetoothProfile.A2DP -> {
                             val a2dpProxy = proxy as? BluetoothA2dp
                             a2dpProxy?.getConnectionState(device) == BluetoothProfile.STATE_CONNECTED
                         }
+
                         else -> false
                     }
                     callback(isConnected)
@@ -2174,6 +2402,7 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
                 majorClass == BluetoothClass.Device.Major.AUDIO_VIDEO -> {
                     if (supportsA2DP) AudioUnitTypes.BLUETOOTHA2DP else AudioUnitTypes.BLUETOOTH
                 }
+
                 else -> AudioUnitTypes.BLUETOOTH
             }
 
@@ -2233,7 +2462,8 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
         return try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 // Android 13+ - Try to use reflection to access hidden getBatteryLevel method
-                val getBatteryLevelMethod = BluetoothDevice::class.java.getMethod("getBatteryLevel")
+                val getBatteryLevelMethod =
+                    BluetoothDevice::class.java.getMethod("getBatteryLevel")
                 val batteryLevel = getBatteryLevelMethod.invoke(device) as? Int
 
                 // Check if battery level is valid (not -1 which typically means unknown)
@@ -2317,18 +2547,23 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
                 device.descriptor.startsWith("bluetooth_") -> {
                     switchToBluetoothOutput(device, am)
                 }
+
                 device.descriptor == "speaker" -> {
                     switchToSpeaker(am)
                 }
+
                 device.descriptor == "wired_headset" -> {
                     switchToWiredHeadset(am)
                 }
+
                 device.descriptor == "earpiece" -> {
                     switchToEarpiece(am)
                 }
+
                 device.descriptor.startsWith("usb_out_") -> {
                     switchToUsbOutput(device, am)
                 }
+
                 else -> {
                     log.w(TAG) { "Unknown audio device type: ${device.descriptor}" }
                     false
@@ -2381,15 +2616,19 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
                 device.descriptor.startsWith("bluetooth_mic_") -> {
                     switchToBluetoothInput(device, am)
                 }
+
                 device.descriptor == "wired_headset_mic" -> {
                     switchToWiredHeadsetMic(am)
                 }
+
                 device.descriptor == "builtin_mic" -> {
                     switchToBuiltinMic(am)
                 }
+
                 device.descriptor.startsWith("usb_in_") -> {
                     switchToUsbInput(device, am)
                 }
+
                 else -> {
                     log.w(TAG) { "Unknown audio input device: ${device.descriptor}" }
                     false
@@ -2661,10 +2900,12 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
     /**
      * Enhanced current device detection
      */
-    @RequiresPermission(allOf = [
-        Manifest.permission.BLUETOOTH_CONNECT,
-        Manifest.permission.RECORD_AUDIO
-    ])
+    @RequiresPermission(
+        allOf = [
+            Manifest.permission.BLUETOOTH_CONNECT,
+            Manifest.permission.RECORD_AUDIO
+        ]
+    )
     override fun getCurrentInputDevice(): AudioDevice? {
         if (currentInputDevice != null) {
             return currentInputDevice
@@ -2678,9 +2919,11 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
                 descriptor?.startsWith("bluetooth_mic_") == true -> {
                     findBluetoothInputDevice()
                 }
+
                 descriptor == "wired_headset_mic" -> {
                     createWiredHeadsetMicDevice()
                 }
+
                 else -> {
                     createBuiltinMicDevice()
                 }
@@ -2693,10 +2936,12 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
         }
     }
 
-    @RequiresPermission(allOf = [
-        Manifest.permission.BLUETOOTH_CONNECT,
-        Manifest.permission.RECORD_AUDIO
-    ])
+    @RequiresPermission(
+        allOf = [
+            Manifest.permission.BLUETOOTH_CONNECT,
+            Manifest.permission.RECORD_AUDIO
+        ]
+    )
     override fun getCurrentOutputDevice(): AudioDevice? {
         if (currentOutputDevice != null) {
             return currentOutputDevice
@@ -2710,15 +2955,19 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
                 descriptor?.startsWith("bluetooth_") == true -> {
                     findBluetoothOutputDevice()
                 }
+
                 descriptor == "speaker" -> {
                     createSpeakerDevice()
                 }
+
                 descriptor == "wired_headset" -> {
                     createWiredHeadsetDevice()
                 }
+
                 descriptor == "earpiece" -> {
                     createEarpieceDevice()
                 }
+
                 else -> {
                     if (am.hasEarpiece()) createEarpieceDevice() else createSpeakerDevice()
                 }
@@ -2983,7 +3232,8 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
         val peerConn = peerConnection ?: run {
             log.d(TAG) { "PeerConnection not initialized, reinitializing" }
             initializePeerConnection()
-            peerConnection ?: throw IllegalStateException("PeerConnection initialization failed")
+            peerConnection
+                ?: throw IllegalStateException("PeerConnection initialization failed")
         }
 
         // Make sure local audio track is added and enabled before creating an offer
@@ -3031,7 +3281,8 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
         val peerConn = peerConnection ?: run {
             log.d(TAG) { "PeerConnection not initialized, reinitializing" }
             initializePeerConnection()
-            peerConnection ?: throw IllegalStateException("PeerConnection initialization failed")
+            peerConnection
+                ?: throw IllegalStateException("PeerConnection initialization failed")
         }
 
         // IMPORTANT: Make sure local audio track is added BEFORE setting remote description
@@ -3087,7 +3338,8 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
         val peerConn = peerConnection ?: run {
             log.d(TAG) { "PeerConnection not initialized, reinitializing" }
             initializePeerConnection()
-            peerConnection ?: throw IllegalStateException("PeerConnection initialization failed")
+            peerConnection
+                ?: throw IllegalStateException("PeerConnection initialization failed")
         }
 
         // If this is an offer, ensure we have local audio ready before proceeding
@@ -3121,7 +3373,11 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
      * @param sdpMid The media ID
      * @param sdpMLineIndex The media line index
      */
-    override suspend fun addIceCandidate(candidate: String, sdpMid: String?, sdpMLineIndex: Int?) {
+    override suspend fun addIceCandidate(
+        candidate: String,
+        sdpMid: String?,
+        sdpMLineIndex: Int?
+    ) {
         log.d(TAG) { "Adding ICE candidate: $candidate" }
 
         // Make sure WebRTC is initialized
@@ -3246,7 +3502,10 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
     /**
      * Modifies the SDP to update the media direction attribute
      */
-    private fun updateSdpDirection(sdp: String, direction: WebRtcManager.MediaDirection): String {
+    private fun updateSdpDirection(
+        sdp: String,
+        direction: WebRtcManager.MediaDirection
+    ): String {
         val directionStr = when (direction) {
             WebRtcManager.MediaDirection.SENDRECV -> "sendrecv"
             WebRtcManager.MediaDirection.SENDONLY -> "sendonly"
@@ -3272,7 +3531,8 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
                 if (line.startsWith("a=sendrecv") ||
                     line.startsWith("a=sendonly") ||
                     line.startsWith("a=recvonly") ||
-                    line.startsWith("a=inactive")) {
+                    line.startsWith("a=inactive")
+                ) {
                     lines[i] = "a=$directionStr"
                 }
             }
@@ -3310,7 +3570,8 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
     private fun AudioManager.hasEarpiece(): Boolean {
         // This is a heuristic approach - we can't directly detect earpiece
         // Most phones support MODE_IN_COMMUNICATION, tablets typically don't
-        return context.packageManager?.hasSystemFeature(PackageManager.FEATURE_TELEPHONY) ?: false
+        return context.packageManager?.hasSystemFeature(PackageManager.FEATURE_TELEPHONY)
+            ?: false
     }
 
     /**
@@ -3319,7 +3580,8 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     @RequiresApi(Build.VERSION_CODES.S)
     private fun BluetoothDevice.isConnected(): Boolean {
-        val bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
+        val bluetoothManager =
+            context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
         val connectedDevices = bluetoothManager.getConnectedDevices(BluetoothProfile.GATT)
         return connectedDevices.contains(this)
     }
@@ -3541,7 +3803,10 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
      * Check if permission is granted
      */
     private fun hasPermission(permission: String): Boolean {
-        return ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
+        return ContextCompat.checkSelfPermission(
+            context,
+            permission
+        ) == PackageManager.PERMISSION_GRANTED
     }
 
     /**
@@ -3644,10 +3909,49 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
     }
 
     /**
+     * NUEVO: Iniciar captura de audio remoto para traducción
+     */
+    private fun startCapturingRemoteAudio(audioTrack: AudioStreamTrack) {
+        coroutineScope.launch(Dispatchers.IO) {
+            try {
+                // Aquí necesitarías interceptar el audio del track remoto
+                // Esto es una aproximación - la implementación exacta depende de la librería WebRTC
+                log.d(TAG) { "Started capturing remote audio for translation" }
+
+                // NOTA: La captura real del audio remoto requiere acceso a los datos del AudioTrack
+                // Esto podría requerir modificaciones en la capa nativa de WebRTC
+                // Por ahora, usamos un enfoque alternativo capturando desde el output
+
+            } catch (e: Exception) {
+                log.e(TAG) { "Error starting remote audio capture: ${e.message}" }
+            }
+        }
+    }
+
+    /**
      * Modificar setupPeerConnectionObservers para iniciar grabación automáticamente
      */
     @SuppressLint("MissingPermission")
     private fun PeerConnection.setupPeerConnectionObservers() {
+
+        onTrack.onEach { event ->
+            log.d(TAG) { "Remote track received: $event" }
+            val track = event.receiver.track
+
+            if (track is AudioStreamTrack) {
+                log.d(TAG) { "Remote audio track established" }
+                remoteAudioTrack = track
+                remoteAudioTrack?.enabled = true
+
+                // NUEVO: Si la traducción está habilitada, iniciar captura de audio remoto
+                if (isTranslationEnabled) {
+                    startCapturingRemoteAudio(track)
+                }
+
+                webRtcEventListener?.onRemoteAudioTrack()
+            }
+        }.launchIn(coroutineScope)
+
         onIceCandidate.onEach { candidate ->
             log.d(TAG) { "New ICE Candidate: ${candidate.candidate}" }
             webRtcEventListener?.onIceCandidate(
@@ -3672,6 +3976,7 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
                         startRecordingReceivedAudio()
                     }
                 }
+
                 PeerConnectionState.Disconnected,
                 PeerConnectionState.Failed,
                 PeerConnectionState.Closed -> {
@@ -3690,6 +3995,7 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
                         stopRecordingForTranslation()
                     }
                 }
+
                 else -> {
                     log.d(TAG) { "Other connection state: $state" }
                 }
@@ -3710,6 +4016,7 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
             }
         }.launchIn(coroutineScope)
     }
+
     override fun isAudioTranslationEnabled(): Boolean = isTranslationEnabled
 
     override fun getCurrentTargetLanguage(): String? = currentTargetLanguage
@@ -3763,6 +4070,7 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
             true // Guardar para cuando se habilite la traducción
         }
     }
+
     /**
      * Ensures the local audio track is created and added to the PeerConnection.
      * Returns true if successful, false otherwise.

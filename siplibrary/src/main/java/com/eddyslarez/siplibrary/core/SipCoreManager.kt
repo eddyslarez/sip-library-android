@@ -325,17 +325,71 @@ class SipCoreManager private constructor(
         })
     }
 
+    /**
+     * MODIFICADO: handleWebRtcConnected - configurar audio correctamente
+     */
     private fun handleWebRtcConnected() {
         callStartTimeMillis = Clock.System.now().toEpochMilliseconds()
 
-        // Usar estados nuevos
         currentAccountInfo?.currentCallData?.let { callData ->
             CallStateManager.streamsRunning(callData.callId)
         }
 
+        // NUEVO: Configurar audio para evitar bucle de traducción
+        setupAudioForTranslation()
+
         notifyCallStateChanged(CallState.STREAMS_RUNNING)
     }
 
+    /**
+     * NUEVO: Configurar audio específicamente para traducción
+     */
+    private fun setupAudioForTranslation() {
+        try {
+            // CRÍTICO: Asegurar que el micrófono local NO interfiera con la traducción
+            if (webRtcManager.isAudioTranslationEnabled()) {
+                log.d(tag = TAG) { "Configuring audio for translation mode" }
+
+                // Configurar audio para capturar solo remoto
+                webRtcManager.setListener(object : WebRtcEventListener {
+                    override fun onIceCandidate(candidate: String, sdpMid: String, sdpMLineIndex: Int) {
+                        // Implementar envío de ICE candidate
+                    }
+
+                    override fun onConnectionStateChange(state: WebRtcConnectionState) {
+                        when (state) {
+                            WebRtcConnectionState.CONNECTED -> handleWebRtcConnected()
+                            WebRtcConnectionState.CLOSED -> handleWebRtcClosed()
+                            else -> {}
+                        }
+                    }
+
+                    override fun onRemoteAudioTrack() {
+                        log.d(tag = TAG) { "Remote audio track received - ready for translation" }
+                    }
+
+                    override fun onAudioDeviceChanged(device: AudioDevice?) {
+                        log.d(tag = TAG) { "Audio device changed: ${device?.name}" }
+                    }
+
+                    // NUEVO: Callbacks específicos de traducción
+                    override fun onTranslationStateChanged(isEnabled: Boolean, targetLanguage: String?) {
+                        log.d(tag = TAG) { "Translation state changed: $isEnabled to $targetLanguage" }
+                    }
+
+                    override fun onTranslationCompleted(success: Boolean, latency: Long, originalLanguage: String?, error: String?) {
+                        if (success) {
+                            log.d(tag = TAG) { "Translation completed in ${latency}ms" }
+                        } else {
+                            log.e(tag = TAG) { "Translation failed: $error" }
+                        }
+                    }
+                })
+            }
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error setting up audio for translation: ${e.message}" }
+        }
+    }
     private fun handleWebRtcClosed() {
         // Finalizar con nuevos estados
         currentAccountInfo?.currentCallData?.let { callData ->
