@@ -2,6 +2,7 @@ package com.eddyslarez.siplibrary.data.models
 
 import com.eddyslarez.siplibrary.data.services.websocket.MultiplatformWebSocket
 import com.eddyslarez.siplibrary.utils.generateId
+import com.eddyslarez.siplibrary.utils.log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -10,7 +11,7 @@ import kotlin.random.Random
 
 /**
  * Información de cuenta SIP y contenedor de estado
- * 
+ *
  * @author Eddys Larez
  */
 class AccountInfo(
@@ -91,6 +92,8 @@ class AccountInfo(
         hasIncomingCall = false
         callStartTime = 0L
         currentCallData = null
+        log.d(tag = "AccountInfo") { "Call state reset for $username@$domain" }
+
     }
 
     /**
@@ -100,6 +103,8 @@ class AccountInfo(
         authRetryCount = 0
         challengeNonce = null
         authorizationHeader = null
+        log.d(tag = "AccountInfo") { "Auth state reset for $username@$domain" }
+
     }
 
     /**
@@ -107,5 +112,23 @@ class AccountInfo(
      */
     fun getAccountIdentity(): String {
         return "$username@$domain"
+    }
+
+    /**
+     * Información de diagnóstico
+     */
+    fun getDiagnosticInfo(): String {
+        return buildString {
+            appendLine("=== ACCOUNT INFO DIAGNOSTIC ===")
+            appendLine("Username: $username")
+            appendLine("Domain: $domain")
+            appendLine("Is Registered: $isRegistered")
+            appendLine("Is Call Connected: $isCallConnected")
+            appendLine("Has Incoming Call: $hasIncomingCall")
+            appendLine("Current Call Data: ${currentCallData?.callId ?: "None"}")
+            appendLine("WebSocket Connected: ${webSocketClient?.isConnected() ?: false}")
+            appendLine("Auth Header: ${authorizationHeader != null}")
+            appendLine("Token: ${token.take(10)}...")
+        }
     }
 }

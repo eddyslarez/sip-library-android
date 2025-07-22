@@ -60,7 +60,13 @@ class EddysSipLibrary private constructor() {
      * Listener principal para todos los eventos SIP
      */
     interface SipEventListener {
-        fun onRegistrationStateChanged(state: RegistrationState, username: String, domain: String) {}
+        fun onRegistrationStateChanged(
+            state: RegistrationState,
+            username: String,
+            domain: String
+        ) {
+        }
+
         fun onCallStateChanged(stateInfo: CallStateInfo) {}
         fun onIncomingCall(callInfo: IncomingCallInfo) {}
         fun onCallConnected(callInfo: CallInfo) {}
@@ -208,7 +214,11 @@ class EddysSipLibrary private constructor() {
                     log.d(tag = TAG) { "Internal callback: onRegistrationStateChanged - $state" }
                 }
 
-                override fun onAccountRegistrationStateChanged(username: String, domain: String, state: RegistrationState) {
+                override fun onAccountRegistrationStateChanged(
+                    username: String,
+                    domain: String,
+                    state: RegistrationState
+                ) {
                     log.d(tag = TAG) { "Internal callback: onAccountRegistrationStateChanged - $username@$domain -> $state" }
                     notifyRegistrationStateChanged(state, username, domain)
                 }
@@ -239,25 +249,26 @@ class EddysSipLibrary private constructor() {
                     val enhancedStateInfo = stateInfo.copy(
                         // Agregar información adicional si es necesario
                     )
-                    
+
                     notifyCallStateChanged(enhancedStateInfo)
 
                     // Mapear a eventos específicos para compatibilidad
                     callInfo?.let { info ->
-                    when (stateInfo.state) {
-                        CallState.CONNECTED -> notifyCallConnected(info)
-                        CallState.OUTGOING_RINGING -> notifyCallRinging(info)
-                        CallState.OUTGOING_INIT -> notifyCallInitiated(info)
-                        CallState.INCOMING_RECEIVED -> handleIncomingCall()
-                        CallState.ENDED -> notifyCallEnded(info, CallEndReason.NORMAL_HANGUP)
-                        CallState.PAUSED -> notifyCallHeld(info)
-                        CallState.STREAMS_RUNNING -> notifyCallResumed(info)
-                        CallState.ERROR -> {
-                            val reason = mapErrorReasonToCallEndReason(stateInfo.errorReason)
-                            notifyCallEnded(info, reason)
+                        when (stateInfo.state) {
+                            CallState.CONNECTED -> notifyCallConnected(info)
+                            CallState.OUTGOING_RINGING -> notifyCallRinging(info)
+                            CallState.OUTGOING_INIT -> notifyCallInitiated(info)
+                            CallState.INCOMING_RECEIVED -> handleIncomingCall()
+                            CallState.ENDED -> notifyCallEnded(info, CallEndReason.NORMAL_HANGUP)
+                            CallState.PAUSED -> notifyCallHeld(info)
+                            CallState.STREAMS_RUNNING -> notifyCallResumed(info)
+                            CallState.ERROR -> {
+                                val reason = mapErrorReasonToCallEndReason(stateInfo.errorReason)
+                                notifyCallEnded(info, reason)
+                            }
+
+                            else -> {}
                         }
-                        else -> {}
-                    }
                     }
                 }
             }
@@ -308,7 +319,11 @@ class EddysSipLibrary private constructor() {
 
     // === MÉTODOS DE NOTIFICACIÓN INTERNA ===
 
-    private fun notifyRegistrationStateChanged(state: RegistrationState, username: String, domain: String) {
+    private fun notifyRegistrationStateChanged(
+        state: RegistrationState,
+        username: String,
+        domain: String
+    ) {
         log.d(tag = TAG) { "Notifying registration state change: $state for $username@$domain to ${listeners.size} listeners" }
 
         listeners.forEach { listener ->
@@ -323,8 +338,17 @@ class EddysSipLibrary private constructor() {
             try {
                 when (state) {
                     RegistrationState.OK -> listener.onRegistrationSuccessful(username, domain)
-                    RegistrationState.FAILED -> listener.onRegistrationFailed(username, domain, "Registration failed")
-                    RegistrationState.NONE, RegistrationState.CLEARED -> listener.onUnregistered(username, domain)
+                    RegistrationState.FAILED -> listener.onRegistrationFailed(
+                        username,
+                        domain,
+                        "Registration failed"
+                    )
+
+                    RegistrationState.NONE, RegistrationState.CLEARED -> listener.onUnregistered(
+                        username,
+                        domain
+                    )
+
                     else -> {}
                 }
             } catch (e: Exception) {
@@ -484,7 +508,10 @@ class EddysSipLibrary private constructor() {
     /**
      * Crear IncomingCallInfo desde los datos actuales de la llamada
      */
-    private fun createIncomingCallInfoFromCurrentCall(callerNumber: String, callerName: String?): IncomingCallInfo {
+    private fun createIncomingCallInfoFromCurrentCall(
+        callerNumber: String,
+        callerName: String?
+    ): IncomingCallInfo {
         val manager = sipCoreManager ?: return IncomingCallInfo(
             callId = generateCallId(),
             callerNumber = callerNumber,
@@ -513,19 +540,19 @@ class EddysSipLibrary private constructor() {
     private fun getCallInfoForState(stateInfo: CallStateInfo): CallInfo? {
         val manager = sipCoreManager ?: return null
         val calls = MultiCallManager.getAllCalls()
-        
+
         // Buscar la llamada específica por callId
         val callData = calls.find { it.callId == stateInfo.callId }
             ?: manager.currentAccountInfo?.currentCallData
             ?: return null
 
         val account = manager.currentAccountInfo ?: return null
-        val currentCall1 = calls.size == 1 && 
-            stateInfo.state != CallState.ENDED && 
-            stateInfo.state != CallState.ERROR && 
-            stateInfo.state != CallState.ENDING && 
-            stateInfo.state != CallState.IDLE
-        
+        val currentCall1 = calls.size == 1 &&
+                stateInfo.state != CallState.ENDED &&
+                stateInfo.state != CallState.ERROR &&
+                stateInfo.state != CallState.ENDING &&
+                stateInfo.state != CallState.IDLE
+
         return try {
             CallInfo(
                 callId = callData.callId,
@@ -555,14 +582,14 @@ class EddysSipLibrary private constructor() {
         val account = manager.currentAccountInfo ?: return null
         val calls = MultiCallManager.getAllCalls()
         val callData = calls.firstOrNull() ?: account.currentCallData ?: return null
-        
-        val currentCall1 = calls.size == 1 && 
-            CallStateManager.getCurrentState().let { state ->
-                state.state != CallState.ENDED && 
-                state.state != CallState.ERROR && 
-                state.state != CallState.ENDING && 
-                state.state != CallState.IDLE
-            }
+
+        val currentCall1 = calls.size == 1 &&
+                CallStateManager.getCurrentState().let { state ->
+                    state.state != CallState.ENDED &&
+                            state.state != CallState.ERROR &&
+                            state.state != CallState.ENDING &&
+                            state.state != CallState.IDLE
+                }
 
         return try {
             // Obtener estado actual
@@ -747,11 +774,14 @@ class EddysSipLibrary private constructor() {
     ) {
         checkInitialized()
 
-        val finalUsername = username ?: sipCoreManager?.getCurrentUsername()
-        val finalDomain = domain ?: sipCoreManager?.getDefaultDomain() ?: ""
+        val finalUsername = username ?: sipCoreManager?.getCurrentUsername() ?: run {
+            log.e(tag = TAG) { "No username provided and no current account available" }
+            throw SipLibraryException("No username available for making call")
+        }
 
-        if (finalUsername == null) {
-            throw SipLibraryException("No registered account available for calling")
+        val finalDomain = domain ?: sipCoreManager?.getDefaultDomain() ?: run {
+            log.e(tag = TAG) { "No domain provided and no current account available" }
+            throw SipLibraryException("No domain available for making call")
         }
 
         log.d(tag = TAG) { "Making call to $phoneNumber from $finalUsername@$finalDomain" }
@@ -764,7 +794,7 @@ class EddysSipLibrary private constructor() {
      */
     fun acceptCall(callId: String? = null) {
         checkInitialized()
-        
+
         val calls = MultiCallManager.getAllCalls()
         val targetCallId = if (callId == null && calls.size == 1) {
             // Llamada única, usar sin callId
@@ -774,7 +804,7 @@ class EddysSipLibrary private constructor() {
         } else {
             callId ?: calls.firstOrNull()?.callId
         }
-        
+
         if (targetCallId != null) {
             log.d(tag = TAG) { "Accepting call: $targetCallId" }
             sipCoreManager?.acceptCall(targetCallId)
@@ -788,7 +818,7 @@ class EddysSipLibrary private constructor() {
      */
     fun declineCall(callId: String? = null) {
         checkInitialized()
-        
+
         val calls = MultiCallManager.getAllCalls()
         val targetCallId = if (callId == null && calls.size == 1) {
             // Llamada única, usar sin callId
@@ -798,7 +828,7 @@ class EddysSipLibrary private constructor() {
         } else {
             callId ?: calls.firstOrNull()?.callId
         }
-        
+
         if (targetCallId != null) {
             log.d(tag = TAG) { "Declining call: $targetCallId" }
             sipCoreManager?.declineCall(targetCallId)
@@ -812,7 +842,7 @@ class EddysSipLibrary private constructor() {
      */
     fun endCall(callId: String? = null) {
         checkInitialized()
-        
+
         val calls = MultiCallManager.getAllCalls()
         val targetCallId = if (callId == null && calls.size == 1) {
             // Llamada única, usar sin callId
@@ -822,7 +852,7 @@ class EddysSipLibrary private constructor() {
         } else {
             callId ?: calls.firstOrNull()?.callId
         }
-        
+
         if (targetCallId != null) {
             log.d(tag = TAG) { "Ending call: $targetCallId" }
             sipCoreManager?.endCall(targetCallId)
@@ -836,7 +866,7 @@ class EddysSipLibrary private constructor() {
      */
     fun holdCall(callId: String? = null) {
         checkInitialized()
-        
+
         val calls = MultiCallManager.getAllCalls()
         val targetCallId = if (callId == null && calls.size == 1) {
             // Llamada única, usar sin callId
@@ -846,7 +876,7 @@ class EddysSipLibrary private constructor() {
         } else {
             callId ?: calls.firstOrNull()?.callId
         }
-        
+
         if (targetCallId != null) {
             log.d(tag = TAG) { "Holding call: $targetCallId" }
             sipCoreManager?.holdCall(targetCallId)
@@ -860,7 +890,7 @@ class EddysSipLibrary private constructor() {
      */
     fun resumeCall(callId: String? = null) {
         checkInitialized()
-        
+
         val calls = MultiCallManager.getAllCalls()
         val targetCallId = if (callId == null && calls.size == 1) {
             // Llamada única, usar sin callId
@@ -870,7 +900,7 @@ class EddysSipLibrary private constructor() {
         } else {
             callId ?: calls.firstOrNull()?.callId
         }
-        
+
         if (targetCallId != null) {
             log.d(tag = TAG) { "Resuming call: $targetCallId" }
             sipCoreManager?.resumeCall(targetCallId)
@@ -878,7 +908,7 @@ class EddysSipLibrary private constructor() {
             log.w(tag = TAG) { "No call to resume" }
         }
     }
-    
+
     /**
      * Alias para resumeCall para compatibilidad
      */
@@ -893,14 +923,14 @@ class EddysSipLibrary private constructor() {
             try {
                 val account = sipCoreManager?.currentAccountInfo ?: return@mapNotNull null
                 val calls = MultiCallManager.getAllCalls()
-                val currentCall1 = calls.size == 1 && 
-                    CallStateManager.getCurrentState().let { state ->
-                        state.state != CallState.ENDED && 
-                        state.state != CallState.ERROR && 
-                        state.state != CallState.ENDING && 
-                        state.state != CallState.IDLE
-                    }
-                
+                val currentCall1 = calls.size == 1 &&
+                        CallStateManager.getCurrentState().let { state ->
+                            state.state != CallState.ENDED &&
+                                    state.state != CallState.ERROR &&
+                                    state.state != CallState.ENDING &&
+                                    state.state != CallState.IDLE
+                        }
+
                 CallInfo(
                     callId = callData.callId,
                     phoneNumber = if (callData.direction == CallDirections.INCOMING) callData.from else callData.to,
@@ -1061,7 +1091,13 @@ class EddysSipLibrary private constructor() {
     internal interface SipCallbacks {
         fun onCallTerminated() {}
         fun onRegistrationStateChanged(state: RegistrationState) {}
-        fun onAccountRegistrationStateChanged(username: String, domain: String, state: RegistrationState) {}
+        fun onAccountRegistrationStateChanged(
+            username: String,
+            domain: String,
+            state: RegistrationState
+        ) {
+        }
+
         fun onIncomingCall(callerNumber: String, callerName: String?) {}
         fun onCallConnected() {}
         fun onCallFailed(error: String) {}

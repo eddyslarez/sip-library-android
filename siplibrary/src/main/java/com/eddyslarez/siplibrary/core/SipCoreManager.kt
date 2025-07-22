@@ -27,6 +27,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.datetime.Clock
 import kotlin.math.pow
+
 /**
  * Gestor principal del core SIP - Optimizado sin estados legacy
  * Versión simplificada usando únicamente los nuevos estados
@@ -51,7 +52,8 @@ class SipCoreManager private constructor(
 
     // Estados de registro por cuenta
     private val _registrationStates = MutableStateFlow<Map<String, RegistrationState>>(emptyMap())
-    val registrationStatesFlow: StateFlow<Map<String, RegistrationState>> = _registrationStates.asStateFlow()
+    val registrationStatesFlow: StateFlow<Map<String, RegistrationState>> =
+        _registrationStates.asStateFlow()
 
     private val activeAccounts = HashMap<String, AccountInfo>()
     var callStartTimeMillis: Long = 0
@@ -101,6 +103,25 @@ class SipCoreManager private constructor(
 
     fun getDefaultDomain(): String? = currentAccountInfo?.domain
 
+
+    /**
+     * Obtiene la primera cuenta registrada disponible
+     */
+    private fun getFirstRegisteredAccount(): AccountInfo? {
+        return activeAccounts.values.firstOrNull { it.isRegistered }
+    }
+
+    /**
+     * Establece la cuenta actual basada en la primera registrada
+     */
+    private fun ensureCurrentAccount(): AccountInfo? {
+        if (currentAccountInfo == null || !currentAccountInfo!!.isRegistered) {
+            currentAccountInfo = getFirstRegisteredAccount()
+        }
+        return currentAccountInfo
+    }
+
+
     fun getCurrentUsername(): String? = currentAccountInfo?.username
 
     fun initialize() {
@@ -138,7 +159,11 @@ class SipCoreManager private constructor(
                 log.d(tag = TAG) { "Notifying registration state change from $previousState to $newState for $accountKey" }
 
                 // Notificar a través de callbacks con información de cuenta
-                sipCallbacks?.onAccountRegistrationStateChanged(account.username, account.domain, newState)
+                sipCallbacks?.onAccountRegistrationStateChanged(
+                    account.username,
+                    account.domain,
+                    newState
+                )
                 sipCallbacks?.onRegistrationStateChanged(newState)
 
                 // Llamar al método de notificación
@@ -180,7 +205,11 @@ class SipCoreManager private constructor(
     /**
      * Método para notificar cambios de estado de registro
      */
-    private fun notifyRegistrationStateChanged(state: RegistrationState, username: String, domain: String) {
+    private fun notifyRegistrationStateChanged(
+        state: RegistrationState,
+        username: String,
+        domain: String
+    ) {
         try {
             log.d(tag = TAG) { "Notifying registration state change: $state for $username@$domain" }
 
@@ -211,14 +240,17 @@ class SipCoreManager private constructor(
                         sipCallbacks?.onIncomingCall(callData.from, callData.remoteDisplayName)
                     }
                 }
+
                 CallState.CONNECTED, CallState.STREAMS_RUNNING -> {
                     log.d(tag = TAG) { "Notifying call connected" }
                     sipCallbacks?.onCallConnected()
                 }
+
                 CallState.ENDED -> {
                     log.d(tag = TAG) { "Notifying call terminated" }
                     sipCallbacks?.onCallTerminated()
                 }
+
                 else -> {
                     log.d(tag = TAG) { "Other call state: $state" }
                 }
@@ -547,6 +579,11 @@ class SipCoreManager private constructor(
         accountInfo.isRegistered = true
         updateRegistrationState(accountKey, RegistrationState.OK)
 
+        // Establecer como cuenta actual si no hay una
+        if (currentAccountInfo == null) {
+            currentAccountInfo = accountInfo
+            log.d(tag = TAG) { "Set current account to: $accountKey" }
+        }
         // Reset retry count on success
         connectionRetryCount = 0
     }
@@ -778,8 +815,15 @@ class SipCoreManager private constructor(
     }
 
     fun makeCall(phoneNumber: String, sipName: String, domain: String) {
+
         val accountKey = "$sipName@$domain"
-        val accountInfo = activeAccounts[accountKey] ?: return
+        val accountInfo = activeAccounts[accountKey] ?: run {
+            log.e(tag = TAG) { "Account not found: $accountKey" }
+            sipCallbacks?.onCallFailed("Account not found: $accountKey")
+            return
+        }
+
+        // Establecer como cuenta actual
         currentAccountInfo = accountInfo
 
         if (!accountInfo.isRegistered) {
@@ -787,6 +831,7 @@ class SipCoreManager private constructor(
             sipCallbacks?.onCallFailed("Not registered with SIP server")
             return
         }
+        log.d(tag = TAG) { "Making call from $accountKey to $phoneNumber" }
 
         CoroutineScope(Dispatchers.IO).launch {
             try {
@@ -832,13 +877,18 @@ class SipCoreManager private constructor(
     }
 
     fun endCall(callId: String? = null) {
-        val accountInfo = currentAccountInfo ?: return
-
+        val accountInfo = ensureCurrentAccount() ?: run {
+            log.e(tag = TAG) { "No current account available for end call" }
+            return
+        }
         val targetCallData = if (callId != null) {
             MultiCallManager.getCall(callId)
         } else {
             accountInfo.currentCallData
-        } ?: return
+        } ?: run {
+            log.e(tag = TAG) { "No call data available for end" }
+            return
+        }
 
         val callState = if (callId != null) {
             MultiCallManager.getCallState(callId)
@@ -896,25 +946,33 @@ class SipCoreManager private constructor(
     }
 
     fun acceptCall(callId: String? = null) {
-        val accountInfo = currentAccountInfo ?: return
-        
+        val accountInfo = ensureCurrentAccount() ?: run {
+            log.e(tag = TAG) { "No current account available for accepting call" }
+            return
+        }
+
         val targetCallData = if (callId != null) {
             MultiCallManager.getCall(callId)
         } else {
             accountInfo.currentCallData
-        } ?: return
+        } ?: run {
+            log.e(tag = TAG) { "No call data available for accepting" }
+            return
+        }
 
         val callState = if (callId != null) {
             MultiCallManager.getCallState(callId)
         } else {
             CallStateManager.getCurrentState()
         }
-        
+
         if (targetCallData.direction != CallDirections.INCOMING ||
             callState?.state != CallState.INCOMING_RECEIVED
         ) {
+            log.w(tag = TAG) { "Cannot accept call - invalid state or direction" }
             return
         }
+        log.d(tag = TAG) { "Accepting call: ${targetCallData.callId}" }
 
         CoroutineScope(Dispatchers.IO).launch {
             try {
@@ -952,13 +1010,19 @@ class SipCoreManager private constructor(
     }
 
     fun declineCall(callId: String? = null) {
-        val accountInfo = currentAccountInfo ?: return
+        val accountInfo = ensureCurrentAccount() ?: run {
+            log.e(tag = TAG) { "No current account available for declining call" }
+            return
+        }
 
         val targetCallData = if (callId != null) {
             MultiCallManager.getCall(callId)
         } else {
             accountInfo.currentCallData
-        } ?: return
+        } ?: run {
+            log.e(tag = TAG) { "No call data available for declining" }
+            return
+        }
 
         val callState = if (callId != null) {
             MultiCallManager.getCallState(callId)
@@ -969,8 +1033,11 @@ class SipCoreManager private constructor(
         if (targetCallData.direction != CallDirections.INCOMING ||
             callState?.state != CallState.INCOMING_RECEIVED
         ) {
+            log.w(tag = TAG) { "Cannot decline call - invalid state or direction" }
+
             return
         }
+        log.d(tag = TAG) { "Declining call: ${targetCallData.callId}" }
 
         if (targetCallData.toTag?.isEmpty() == true) {
             targetCallData.toTag = generateId()
@@ -1062,7 +1129,9 @@ class SipCoreManager private constructor(
         val currentAccount = currentAccountInfo
         val callData = currentAccount?.currentCallData
 
-        if (currentAccount == null || callData == null || !CallStateManager.getCurrentState().isConnected()) {
+        if (currentAccount == null || callData == null || !CallStateManager.getCurrentState()
+                .isConnected()
+        ) {
             return false
         }
 
@@ -1089,7 +1158,7 @@ class SipCoreManager private constructor(
 
     fun holdCall(callId: String? = null) {
         val accountInfo = currentAccountInfo ?: return
-        
+
         val targetCallData = if (callId != null) {
             MultiCallManager.getCall(callId)
         } else {
@@ -1112,7 +1181,7 @@ class SipCoreManager private constructor(
 
     fun resumeCall(callId: String? = null) {
         val accountInfo = currentAccountInfo ?: return
-        
+
         val targetCallData = if (callId != null) {
             MultiCallManager.getCall(callId)
         } else {
@@ -1141,14 +1210,15 @@ class SipCoreManager private constructor(
         callHistoryManager.getCallLogsForNumber(phoneNumber)
 
     fun getRegistrationState(): RegistrationState {
-        val registeredAccounts = _registrationStates.value.values.filter { it == RegistrationState.OK }
+        val registeredAccounts =
+            _registrationStates.value.values.filter { it == RegistrationState.OK }
         return if (registeredAccounts.isNotEmpty()) RegistrationState.OK else RegistrationState.NONE
     }
 
     fun currentCall(): Boolean = CallStateManager.getCurrentState().isActive()
     fun currentCallConnected(): Boolean = CallStateManager.getCurrentState().isConnected()
     fun getCurrentCallState(): CallStateInfo = CallStateManager.getCurrentState()
-    
+
     /**
      * Obtiene todas las llamadas activas
      */
@@ -1179,7 +1249,7 @@ class SipCoreManager private constructor(
             // Información de estados
             appendLine("\n--- Call State Info ---")
             appendLine(CallStateManager.getDiagnosticInfo())
-            
+
             // Información de múltiples llamadas
             appendLine("\n--- Multi Call Info ---")
             appendLine(MultiCallManager.getDiagnosticInfo())
@@ -1202,6 +1272,7 @@ class SipCoreManager private constructor(
             } else {
                 CallTypes.ABORTED
             }
+
             else -> if (callData.direction == CallDirections.INCOMING) {
                 CallTypes.MISSED
             } else {
@@ -1213,10 +1284,10 @@ class SipCoreManager private constructor(
     fun dispose() {
         // Detener todos los ringtones
         audioManager.stopAllRingtones()
-        
+
         // Limpiar llamadas
         MultiCallManager.clearAllCalls()
-        
+
         webRtcManager.dispose()
         activeAccounts.clear()
         _registrationStates.value = emptyMap()
