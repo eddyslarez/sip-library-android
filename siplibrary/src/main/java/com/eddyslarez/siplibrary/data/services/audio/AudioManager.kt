@@ -281,9 +281,48 @@ class AudioManager(private val application: Application) {
      * Detiene todos los ringtones
      */
     fun stopAllRingtones() {
-        log.d(tag = TAG) { "Stopping all ringtones..." }
-        stopRingtone()
-        stopOutgoingRingtone()
+        log.d(tag = TAG) { "Stopping ALL ringtones - FORCE STOP" }
+
+        // Marcar inmediatamente como no reproduciendo
+        isIncomingRingtonePlaying = false
+        isOutgoingRingtonePlaying = false
+
+        try {
+            // Cancelar jobs inmediatamente
+            incomingRingtoneJob?.cancel()
+            outgoingRingtoneJob?.cancel()
+            incomingRingtoneJob = null
+            outgoingRingtoneJob = null
+
+            // Detener MediaPlayers con timeout
+            incomingRingtone?.let { player ->
+                try {
+                    if (player.isPlaying) {
+                        player.stop()
+                    }
+                    player.release()
+                } catch (e: Exception) {
+                    log.e(tag = TAG) { "Error stopping incoming ringtone: ${e.message}" }
+                }
+            }
+            incomingRingtone = null
+
+            outgoingRingtone?.let { player ->
+                try {
+                    if (player.isPlaying) {
+                        player.stop()
+                    }
+                    player.release()
+                } catch (e: Exception) {
+                    log.e(tag = TAG) { "Error stopping outgoing ringtone: ${e.message}" }
+                }
+            }
+            outgoingRingtone = null
+
+            log.d(tag = TAG) { "All ringtones stopped successfully" }
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error in stopAllRingtones: ${e.message}" }
+        }
     }
 
     /**

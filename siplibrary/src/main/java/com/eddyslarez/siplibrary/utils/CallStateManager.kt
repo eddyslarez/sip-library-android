@@ -401,6 +401,13 @@ object CallStateManager {
 
     fun startHold(callId: String) {
         if (!isInitialized) return
+
+        val currentState = getCurrentState()
+        if (currentState.state != CallState.STREAMS_RUNNING && currentState.state != CallState.CONNECTED) {
+            log.w(tag = "CallStateManager") { "Cannot hold call in state: ${currentState.state}" }
+            return
+        }
+
         updateCallState(
             newState = CallState.PAUSING,
             callId = callId
@@ -409,6 +416,12 @@ object CallStateManager {
 
     fun callOnHold(callId: String) {
         if (!isInitialized) return
+
+        val currentState = getCurrentState()
+        if (currentState.state != CallState.PAUSING) {
+            log.w(tag = "CallStateManager") { "Invalid transition to PAUSED from: ${currentState.state}" }
+        }
+
         updateCallState(
             newState = CallState.PAUSED,
             callId = callId
@@ -417,8 +430,29 @@ object CallStateManager {
 
     fun startResume(callId: String) {
         if (!isInitialized) return
+
+        val currentState = getCurrentState()
+        if (currentState.state != CallState.PAUSED) {
+            log.w(tag = "CallStateManager") { "Cannot resume call in state: ${currentState.state}" }
+            return
+        }
+
         updateCallState(
             newState = CallState.RESUMING,
+            callId = callId
+        )
+    }
+
+    fun callResumed(callId: String) {
+        if (!isInitialized) return
+
+        val currentState = getCurrentState()
+        if (currentState.state != CallState.RESUMING) {
+            log.w(tag = "CallStateManager") { "Invalid transition to STREAMS_RUNNING from: ${currentState.state}" }
+        }
+
+        updateCallState(
+            newState = CallState.STREAMS_RUNNING,
             callId = callId
         )
     }

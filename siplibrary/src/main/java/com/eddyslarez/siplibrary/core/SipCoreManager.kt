@@ -881,6 +881,7 @@ class SipCoreManager private constructor(
             log.e(tag = TAG) { "No current account available for end call" }
             return
         }
+
         val targetCallData = if (callId != null) {
             MultiCallManager.getCall(callId)
         } else {
@@ -897,45 +898,59 @@ class SipCoreManager private constructor(
         }
 
         if (callState?.isActive() != true) {
+            log.w(tag = TAG) { "No active call to end" }
             return
         }
 
         val endTime = Clock.System.now().toEpochMilliseconds()
         val currentState = callState.state
 
+        // CRÍTICO: Detener ringtones INMEDIATAMENTE
+        audioManager.stopAllRingtones()
+
+        // CRÍTICO: Iniciar proceso de finalización ANTES de enviar mensajes
+        CallStateManager.startEnding(targetCallData.callId)
+
         when (currentState) {
             CallState.CONNECTED, CallState.STREAMS_RUNNING, CallState.PAUSED -> {
+                // Para llamadas establecidas, enviar BYE
                 messageHandler.sendBye(accountInfo, targetCallData)
                 callHistoryManager.addCallLog(targetCallData, CallTypes.SUCCESS, endTime)
             }
 
             CallState.OUTGOING_INIT, CallState.OUTGOING_PROGRESS, CallState.OUTGOING_RINGING -> {
+                // Para llamadas salientes no contestadas, enviar CANCEL
                 messageHandler.sendCancel(accountInfo, targetCallData)
                 callHistoryManager.addCallLog(targetCallData, CallTypes.ABORTED, endTime)
             }
 
-            else -> {}
+            CallState.INCOMING_RECEIVED -> {
+                // Para llamadas entrantes, rechazar
+                messageHandler.sendDeclineResponse(accountInfo, targetCallData)
+                callHistoryManager.addCallLog(targetCallData, CallTypes.DECLINED, endTime)
+            }
+
+            else -> {
+                log.w(tag = TAG) { "Ending call in unexpected state: $currentState" }
+            }
         }
 
-        // CORREGIDO: Detener todos los ringtones al terminar
-        audioManager.stopAllRingtones()
-
-        // Finalizar con nuevos estados
-        CallStateManager.startEnding(targetCallData.callId)
-
-//        // Esperar un poco y luego finalizar completamente
-//        CoroutineScope(Dispatchers.IO).launch {
-//            delay(500)
-//            CallStateManager.callEnded(targetCallData.callId)
-//            notifyCallStateChanged(CallState.ENDED)
-//        }
-
-        // Solo dispose WebRTC si no hay más llamadas activas
+        // Limpiar WebRTC si no hay más llamadas activas
         if (MultiCallManager.getAllCalls().size <= 1) {
-            webRtcManager.dispose()
+            CoroutineScope(Dispatchers.IO).launch {
+                delay(500) // Dar tiempo para que se envíe el mensaje
+                webRtcManager.dispose()
+            }
         }
 
         clearDtmfQueue()
+
+        // Finalizar llamada después de un breve delay
+        CoroutineScope(Dispatchers.IO).launch {
+            delay(1000) // Esperar a que se procesen los mensajes SIP
+            CallStateManager.callEnded(targetCallData.callId)
+            notifyCallStateChanged(CallState.ENDED)
+        }
 
         // Solo resetear si es la llamada actual
         if (accountInfo.currentCallData?.callId == targetCallData.callId) {
@@ -972,7 +987,11 @@ class SipCoreManager private constructor(
             log.w(tag = TAG) { "Cannot accept call - invalid state or direction" }
             return
         }
+
         log.d(tag = TAG) { "Accepting call: ${targetCallData.callId}" }
+
+        // CRÍTICO: Detener ringtone INMEDIATAMENTE al aceptar
+        audioManager.stopAllRingtones()
 
         CoroutineScope(Dispatchers.IO).launch {
             try {
@@ -982,28 +1001,31 @@ class SipCoreManager private constructor(
                 }
 
                 webRtcManager.prepareAudioForIncomingCall()
-                delay(1000)
+                delay(500) // Dar más tiempo para preparación
 
                 val sdp = webRtcManager.createAnswer(accountInfo, targetCallData.remoteSdp ?: "")
                 targetCallData.localSdp = sdp
 
+                // ENVIAR 200 OK INMEDIATAMENTE
                 messageHandler.sendInviteOkResponse(accountInfo, targetCallData)
+
+                // Transición a CONNECTED inmediatamente después de enviar 200 OK
+                CallStateManager.callConnected(targetCallData.callId, 200)
+                notifyCallStateChanged(CallState.CONNECTED)
+
                 delay(500)
 
+                // Preparar audio
                 webRtcManager.setAudioEnabled(true)
                 webRtcManager.setMuted(false)
 
-                // Estado de conexión
-                notifyCallStateChanged(CallState.CONNECTED)
+
             } catch (e: Exception) {
                 log.e(tag = TAG) { "Error accepting call: ${e.message}" }
-
-                // Error al aceptar llamada
                 CallStateManager.callError(
                     targetCallData.callId,
                     errorReason = CallErrorReason.NETWORK_ERROR
                 )
-
                 rejectCall(callId)
             }
         }
@@ -1158,46 +1180,72 @@ class SipCoreManager private constructor(
 
     fun holdCall(callId: String? = null) {
         val accountInfo = currentAccountInfo ?: return
-
         val targetCallData = if (callId != null) {
             MultiCallManager.getCall(callId)
         } else {
             accountInfo.currentCallData
         } ?: return
 
+        val currentState = CallStateManager.getCurrentState()
+        if (currentState.state != CallState.STREAMS_RUNNING && currentState.state != CallState.CONNECTED) {
+            log.w(tag = TAG) { "Cannot hold call in current state: ${currentState.state}" }
+            return
+        }
+
         CoroutineScope(Dispatchers.IO).launch {
-            // Iniciar proceso de hold
-            CallStateManager.startHold(targetCallData.callId)
-
-            callHoldManager.holdCall()?.let { holdSdp ->
-                targetCallData.localSdp = holdSdp
-                targetCallData.isOnHold = true
-                messageHandler.sendReInvite(accountInfo, targetCallData, holdSdp)
-
+            try {
+                // Iniciar proceso de hold
+                CallStateManager.startHold(targetCallData.callId)
                 notifyCallStateChanged(CallState.PAUSING)
+
+                callHoldManager.holdCall()?.let { holdSdp ->
+                    targetCallData.localSdp = holdSdp
+                    targetCallData.isOnHold = true
+                    messageHandler.sendReInvite(accountInfo, targetCallData, holdSdp)
+
+                    // Esperar respuesta y luego transicionar a PAUSED
+                    delay(1000)
+                    CallStateManager.callOnHold(targetCallData.callId)
+                    notifyCallStateChanged(CallState.PAUSED)
+                }
+            } catch (e: Exception) {
+                log.e(tag = TAG) { "Error holding call: ${e.message}" }
             }
         }
     }
 
     fun resumeCall(callId: String? = null) {
         val accountInfo = currentAccountInfo ?: return
-
         val targetCallData = if (callId != null) {
             MultiCallManager.getCall(callId)
         } else {
             accountInfo.currentCallData
         } ?: return
 
+        val currentState = CallStateManager.getCurrentState()
+        if (currentState.state != CallState.PAUSED) {
+            log.w(tag = TAG) { "Cannot resume call in current state: ${currentState.state}" }
+            return
+        }
+
         CoroutineScope(Dispatchers.IO).launch {
-            // Iniciar proceso de resume
-            CallStateManager.startResume(targetCallData.callId)
-
-            callHoldManager.resumeCall()?.let { resumeSdp ->
-                targetCallData.localSdp = resumeSdp
-                targetCallData.isOnHold = false
-                messageHandler.sendReInvite(accountInfo, targetCallData, resumeSdp)
-
+            try {
+                // Iniciar proceso de resume
+                CallStateManager.startResume(targetCallData.callId)
                 notifyCallStateChanged(CallState.RESUMING)
+
+                callHoldManager.resumeCall()?.let { resumeSdp ->
+                    targetCallData.localSdp = resumeSdp
+                    targetCallData.isOnHold = false
+                    messageHandler.sendReInvite(accountInfo, targetCallData, resumeSdp)
+
+                    // Esperar respuesta y luego transicionar a STREAMS_RUNNING
+                    delay(1000)
+                    CallStateManager.callResumed(targetCallData.callId)
+                    notifyCallStateChanged(CallState.STREAMS_RUNNING)
+                }
+            } catch (e: Exception) {
+                log.e(tag = TAG) { "Error resuming call: ${e.message}" }
             }
         }
     }

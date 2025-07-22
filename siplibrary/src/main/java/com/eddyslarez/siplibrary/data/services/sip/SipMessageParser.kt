@@ -52,6 +52,11 @@ object SipMessageParser {
         }
     }
 
+    fun isSdpOnHold(sdp: String): Boolean {
+        return sdp.contains("a=sendonly", ignoreCase = true) ||
+                sdp.contains("a=inactive", ignoreCase = true)
+    }
+
     /**
      * Extracts the method from the CSeq header
      */
