@@ -118,7 +118,7 @@ object CallStateTransitionValidator {
     
     private val validOutgoingTransitions = mapOf(
         CallState.IDLE to setOf(CallState.OUTGOING_INIT),
-        CallState.OUTGOING_INIT to setOf(CallState.OUTGOING_PROGRESS, CallState.OUTGOING_RINGING, CallState.ERROR, CallState.ENDING),
+        CallState.OUTGOING_INIT to setOf(CallState.OUTGOING_PROGRESS, CallState.CONNECTED, CallState.OUTGOING_RINGING, CallState.ERROR, CallState.ENDING),
         CallState.OUTGOING_PROGRESS to setOf(CallState.OUTGOING_RINGING, CallState.CONNECTED, CallState.ERROR, CallState.ENDING),
         CallState.OUTGOING_RINGING to setOf(CallState.CONNECTED, CallState.ERROR, CallState.ENDING),
         CallState.CONNECTED to setOf(CallState.STREAMS_RUNNING, CallState.PAUSING, CallState.ENDING, CallState.ERROR),
