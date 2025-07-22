@@ -832,6 +832,7 @@ class SipCoreManager private constructor(
             return
         }
         log.d(tag = TAG) { "Making call from $accountKey to $phoneNumber" }
+        audioManager.stopAllRingtones()
 
         CoroutineScope(Dispatchers.IO).launch {
             try {
@@ -905,8 +906,11 @@ class SipCoreManager private constructor(
         val endTime = Clock.System.now().toEpochMilliseconds()
         val currentState = callState.state
 
-        // CRÍTICO: Detener ringtones INMEDIATAMENTE
+        log.d(tag = TAG) { "Ending single call" }
+
+        // CRÍTICO: Detener ringtones INMEDIATAMENTE y con force stop
         audioManager.stopAllRingtones()
+        log.d(tag = TAG) { "Stopping ALL ringtones - FORCE STOP" }
 
         // CRÍTICO: Iniciar proceso de finalización
         CallStateManager.startEnding(targetCallData.callId)
@@ -933,33 +937,47 @@ class SipCoreManager private constructor(
 
             else -> {
                 log.w(tag = TAG) { "Ending call in unexpected state: $currentState" }
-                // Enviar BYE como fallback
                 messageHandler.sendBye(accountInfo, targetCallData)
-            }
-        }
-
-        // Limpiar WebRTC después de un delay
-        if (MultiCallManager.getAllCalls().size <= 1) {
-            CoroutineScope(Dispatchers.IO).launch {
-                delay(500)
-                webRtcManager.dispose()
             }
         }
 
         clearDtmfQueue()
 
-        // Finalizar llamada después de enviar mensaje
+        // MEJORADO: Una sola corrutina para manejar la limpieza
         CoroutineScope(Dispatchers.IO).launch {
-            delay(1000)
-            CallStateManager.callEnded(targetCallData.callId)
-            notifyCallStateChanged(CallState.ENDED)
-        }
+            try {
+                // Esperar un poco para que se envíe el mensaje SIP
+                delay(500)
 
-        if (accountInfo.currentCallData?.callId == targetCallData.callId) {
-            accountInfo.resetCallState()
-        }
+                // Limpiar WebRTC solo si no hay más llamadas
+                if (MultiCallManager.getAllCalls().size <= 1) {
+                    webRtcManager.dispose()
+                    log.d(tag = TAG) { "WebRTC disposed - no more active calls" }
+                }
 
-        handleCallTermination()
+                // Finalizar llamada
+                delay(500) // Total 1 segundo como antes
+                CallStateManager.callEnded(targetCallData.callId)
+                notifyCallStateChanged(CallState.ENDED)
+
+                // Limpiar datos de cuenta
+                if (accountInfo.currentCallData?.callId == targetCallData.callId) {
+                    accountInfo.resetCallState()
+                }
+
+                handleCallTermination()
+
+                log.d(tag = TAG) { "Call cleanup completed successfully" }
+
+            } catch (e: Exception) {
+                log.e(tag = TAG) { "Error during call cleanup: ${e.message}" }
+                // Forzar limpieza en caso de error
+                audioManager.stopAllRingtones()
+                if (accountInfo.currentCallData?.callId == targetCallData.callId) {
+                    accountInfo.resetCallState()
+                }
+            }
+        }
     }
 
 
