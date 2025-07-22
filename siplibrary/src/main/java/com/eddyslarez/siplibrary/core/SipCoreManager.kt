@@ -111,9 +111,9 @@ class SipCoreManager private constructor(
         setupPlatformLifecycleObservers()
         startConnectionHealthCheck()
 
-        // Inicializar gestor de estados
-        CallStateManager.resetToIdle()
+        CallStateManager.initialize()
     }
+
 
     internal fun setCallbacks(callbacks: EddysSipLibrary.SipCallbacks) {
         this.sipCallbacks = callbacks
@@ -683,7 +683,9 @@ class SipCoreManager private constructor(
             // 1. Detener health check inmediatamente
             healthCheckJob?.cancel()
             healthCheckJob = null
-            log.d(tag = TAG) { "Health check stopped" }
+
+            // 2. DETENER TODOS LOS RINGTONES INMEDIATAMENTE
+            audioManager.stopAllRingtones()
 
             // 3. Terminar llamada activa si existe
             if (CallStateManager.getCurrentState().isActive()) {
@@ -708,7 +710,6 @@ class SipCoreManager private constructor(
                 accountsToUnregister.values.forEach { accountInfo ->
                     try {
                         val accountKey = "${accountInfo.username}@${accountInfo.domain}"
-                        log.d(tag = TAG) { "Unregistering account: $accountKey" }
 
                         // Detener timers del WebSocket
                         accountInfo.webSocketClient?.let { webSocket ->
@@ -732,8 +733,6 @@ class SipCoreManager private constructor(
                         // Actualizar estado
                         updateRegistrationState(accountKey, RegistrationState.CLEARED)
 
-                        log.d(tag = TAG) { "Successfully unregistered: $accountKey" }
-
                     } catch (e: Exception) {
                         log.e(tag = TAG) { "Error unregistering account ${accountInfo.username}@${accountInfo.domain}: ${e.message}" }
                     }
@@ -751,7 +750,6 @@ class SipCoreManager private constructor(
             try {
                 webRtcManager.setListener(null)
                 webRtcManager.dispose()
-                log.d(tag = TAG) { "WebRTC disposed" }
             } catch (e: Exception) {
                 log.e(tag = TAG) { "Error disposing WebRTC: ${e.message}" }
             }
@@ -768,8 +766,8 @@ class SipCoreManager private constructor(
             // 8. Limpiar colas
             clearDtmfQueue()
 
-            // 9. Actualizar estados globales
-            CallStateManager.resetToIdle()
+            // 9. RESETEAR ESTADOS DE LLAMADA CORRECTAMENTE
+            CallStateManager.forceResetToIdle()
             CallStateManager.clearHistory()
 
             log.d(tag = TAG) { "Complete unregister and shutdown successful" }
@@ -806,11 +804,13 @@ class SipCoreManager private constructor(
                 )
 
                 accountInfo.currentCallData = callData
-                CallStateManager.callerNumber(phoneNumber)
 
-                // Iniciar llamada saliente con nuevos estados
+                // CORREGIDO: Solo un lugar para actualizar estados
                 CallStateManager.startOutgoingCall(callId, phoneNumber)
                 notifyCallStateChanged(CallState.OUTGOING_INIT)
+
+                // Iniciar outgoing ringtone
+                audioManager.playOutgoingRingtone()
 
                 messageHandler.sendInvite(accountInfo, callData)
             } catch (e: Exception) {
@@ -824,13 +824,16 @@ class SipCoreManager private constructor(
                         errorReason = CallErrorReason.NETWORK_ERROR
                     )
                 }
+
+                // Detener outgoing ringtone en error
+                audioManager.stopOutgoingRingtone()
             }
         }
     }
 
     fun endCall(callId: String? = null) {
         val accountInfo = currentAccountInfo ?: return
-        
+
         val targetCallData = if (callId != null) {
             MultiCallManager.getCall(callId)
         } else {
@@ -842,7 +845,7 @@ class SipCoreManager private constructor(
         } else {
             CallStateManager.getCurrentState()
         }
-        
+
         if (callState?.isActive() != true) {
             return
         }
@@ -859,30 +862,36 @@ class SipCoreManager private constructor(
             CallState.OUTGOING_INIT, CallState.OUTGOING_PROGRESS, CallState.OUTGOING_RINGING -> {
                 messageHandler.sendCancel(accountInfo, targetCallData)
                 callHistoryManager.addCallLog(targetCallData, CallTypes.ABORTED, endTime)
-                
-                // Detener outgoing ringtone
-                audioManager.stopOutgoingRingtone()
             }
 
             else -> {}
         }
 
+        // CORREGIDO: Detener todos los ringtones al terminar
+        audioManager.stopAllRingtones()
+
         // Finalizar con nuevos estados
         CallStateManager.startEnding(targetCallData.callId)
-        notifyCallStateChanged(CallState.ENDED)
+
+        // Esperar un poco y luego finalizar completamente
+        CoroutineScope(Dispatchers.IO).launch {
+            delay(500)
+            CallStateManager.callEnded(targetCallData.callId)
+            notifyCallStateChanged(CallState.ENDED)
+        }
 
         // Solo dispose WebRTC si no hay más llamadas activas
         if (MultiCallManager.getAllCalls().size <= 1) {
             webRtcManager.dispose()
         }
-        
+
         clearDtmfQueue()
-        
+
         // Solo resetear si es la llamada actual
         if (accountInfo.currentCallData?.callId == targetCallData.callId) {
             accountInfo.resetCallState()
         }
-        
+
         handleCallTermination()
     }
 
@@ -944,7 +953,7 @@ class SipCoreManager private constructor(
 
     fun declineCall(callId: String? = null) {
         val accountInfo = currentAccountInfo ?: return
-        
+
         val targetCallData = if (callId != null) {
             MultiCallManager.getCall(callId)
         } else {
@@ -956,7 +965,7 @@ class SipCoreManager private constructor(
         } else {
             CallStateManager.getCurrentState()
         }
-        
+
         if (targetCallData.direction != CallDirections.INCOMING ||
             callState?.state != CallState.INCOMING_RECEIVED
         ) {
@@ -967,13 +976,17 @@ class SipCoreManager private constructor(
             targetCallData.toTag = generateId()
         }
 
+        // CORREGIDO: Detener ringtone antes de rechazar
+        audioManager.stopRingtone()
+
         messageHandler.sendDeclineResponse(accountInfo, targetCallData)
 
         val endTime = Clock.System.now().toEpochMilliseconds()
         callHistoryManager.addCallLog(targetCallData, CallTypes.DECLINED, endTime)
 
-        // Estado de rechazo
-        notifyCallStateChanged(CallState.ERROR)
+        // Estado de rechazo y limpieza
+        CallStateManager.callEnded(targetCallData.callId, sipReason = "Declined")
+        notifyCallStateChanged(CallState.ENDED)
     }
 
     fun rejectCall(callId: String? = null) = declineCall(callId)
