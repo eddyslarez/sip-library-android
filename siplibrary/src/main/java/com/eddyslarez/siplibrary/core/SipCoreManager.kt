@@ -855,7 +855,7 @@ class SipCoreManager private constructor(
                 notifyCallStateChanged(CallState.OUTGOING_INIT)
 
                 // Iniciar outgoing ringtone
-                audioManager.playOutgoingRingtone()
+//                audioManager.playOutgoingRingtone()
 
                 messageHandler.sendInvite(accountInfo, callData)
             } catch (e: Exception) {
@@ -923,12 +923,12 @@ class SipCoreManager private constructor(
         // Finalizar con nuevos estados
         CallStateManager.startEnding(targetCallData.callId)
 
-        // Esperar un poco y luego finalizar completamente
-        CoroutineScope(Dispatchers.IO).launch {
-            delay(500)
-            CallStateManager.callEnded(targetCallData.callId)
-            notifyCallStateChanged(CallState.ENDED)
-        }
+//        // Esperar un poco y luego finalizar completamente
+//        CoroutineScope(Dispatchers.IO).launch {
+//            delay(500)
+//            CallStateManager.callEnded(targetCallData.callId)
+//            notifyCallStateChanged(CallState.ENDED)
+//        }
 
         // Solo dispose WebRTC si no hay más llamadas activas
         if (MultiCallManager.getAllCalls().size <= 1) {
@@ -1053,7 +1053,7 @@ class SipCoreManager private constructor(
 
         // Estado de rechazo y limpieza
         CallStateManager.callEnded(targetCallData.callId, sipReason = "Declined")
-        notifyCallStateChanged(CallState.ENDED)
+//        notifyCallStateChanged(CallState.ENDED)
     }
 
     fun rejectCall(callId: String? = null) = declineCall(callId)

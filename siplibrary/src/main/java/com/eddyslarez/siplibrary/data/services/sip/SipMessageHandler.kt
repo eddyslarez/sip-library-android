@@ -151,6 +151,7 @@ class SipMessageHandler(private val sipCoreManager: SipCoreManager) {
             180 -> {
                 log.d(tag = TAG) { "Received 180 Ringing" }
                 CallStateManager.outgoingCallRinging(callData.callId, 180)
+                sipCoreManager.audioManager.playOutgoingRingtone()
                 sipCoreManager.notifyCallStateChanged(CallState.OUTGOING_RINGING)
             }
 
@@ -232,31 +233,39 @@ class SipMessageHandler(private val sipCoreManager: SipCoreManager) {
         callData: CallData
     ) {
         try {
-            // DETENER outgoing ringtone inmediatamente
+            // Detener tono de llamada saliente
             sipCoreManager.audioManager.stopOutgoingRingtone()
-            log.d(tag = TAG) { "Processing 200 OK for call: ${callData.callId}" }
 
-            // Extraer información de la respuesta
-            val toHeader = SipMessageParser.extractHeader(lines, "To")
-            val toTag = SipMessageParser.extractTag(toHeader)
-            val contactHeader = SipMessageParser.extractHeader(lines, "Contact")
+            log.d(tag = TAG) { "Procesando 200 OK para call: ${callData.callId}" }
+
+            // Extraer headers y SDP
+            val toTag = SipMessageParser.extractTag(SipMessageParser.extractHeader(lines, "To"))
+            val contactUri = SipMessageParser.extractUriFromContact(SipMessageParser.extractHeader(lines, "Contact"))
             val remoteSdp = SipMessageParser.extractSdpContent(lines.joinToString("\r\n"))
 
-            // Actualizar datos de la llamada
+            // Guardar en callData
             callData.inviteToTag = toTag
-            callData.remoteContactUri = SipMessageParser.extractUriFromContact(contactHeader)
+            callData.remoteContactUri = contactUri
             callData.remoteSdp = remoteSdp
 
-            // Actualizar estado a conectado
+            // Conexión establecida
             CallStateManager.callConnected(callData.callId, 200)
-            sipCoreManager.notifyCallStateChanged(CallState.CONNECTED)
 
-            // Configurar WebRTC con SDP remoto
+            // Analizar SDP para determinar si es hold o resume
+            val isRemoteOnHold = callData.isOnHold
+
+            // Notificar estado apropiado
+            if (isRemoteOnHold == true) {
+                sipCoreManager.notifyCallStateChanged(CallState.PAUSED)
+            } else {
+                sipCoreManager.notifyCallStateChanged(CallState.CONNECTED)
+            }
+
+            // Continuar configuración solo si no está en hold
             CoroutineScope(Dispatchers.IO).launch {
                 try {
                     if (remoteSdp.isNotEmpty()) {
-                        log.d(tag = TAG) { "Setting remote SDP for call: ${callData.callId}" }
-
+                        log.d(tag = TAG) { "Estableciendo SDP remoto para call: ${callData.callId}" }
                         sipCoreManager.webRtcManager.setRemoteDescription(
                             remoteSdp,
                             com.eddyslarez.siplibrary.data.services.audio.SdpType.ANSWER
@@ -264,27 +273,25 @@ class SipMessageHandler(private val sipCoreManager: SipCoreManager) {
                     }
 
                     // Enviar ACK
-                    val ackMessage = SipMessageBuilder.buildAckMessage(accountInfo, callData)
-                    accountInfo.webSocketClient?.send(ackMessage)
-                    log.d(tag = TAG) { "ACK sent for call: ${callData.callId}" }
+                    val ack = SipMessageBuilder.buildAckMessage(accountInfo, callData)
+                    accountInfo.webSocketClient?.send(ack)
+                    log.d(tag = TAG) { "ACK enviado para call: ${callData.callId}" }
 
-                    // Habilitar audio
-                    sipCoreManager.webRtcManager.setAudioEnabled(true)
-
+                    // Activar audio solo si no está en hold
+                    isRemoteOnHold?.let {
+                        if (!it) {
+                            sipCoreManager.webRtcManager.setAudioEnabled(true)
+                        }
+                    }
                 } catch (e: Exception) {
-                    log.e(tag = TAG) { "Error setting up WebRTC after 200 OK: ${e.message}" }
-                    handleCallError(
-                        callData,
-                        null,
-                        "WebRTC setup failed",
-                        CallErrorReason.NETWORK_ERROR
-                    )
+                    log.e(tag = TAG) { "Error en WebRTC tras 200 OK: ${e.message}" }
+                    handleCallError(callData, null, "Fallo al configurar WebRTC", CallErrorReason.NETWORK_ERROR)
                 }
             }
 
         } catch (e: Exception) {
-            log.e(tag = TAG) { "Error handling 200 OK: ${e.message}" }
-            handleCallError(callData, 200, "Error processing response", CallErrorReason.UNKNOWN)
+            log.e(tag = TAG) { "Error procesando 200 OK: ${e.message}" }
+            handleCallError(callData, 200, "Error procesando respuesta", CallErrorReason.UNKNOWN)
         }
     }
 
