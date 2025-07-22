@@ -908,57 +908,60 @@ class SipCoreManager private constructor(
         // CRÍTICO: Detener ringtones INMEDIATAMENTE
         audioManager.stopAllRingtones()
 
-        // CRÍTICO: Iniciar proceso de finalización ANTES de enviar mensajes
+        // CRÍTICO: Iniciar proceso de finalización
         CallStateManager.startEnding(targetCallData.callId)
 
+        // CRÍTICO: Enviar mensaje apropiado según estado y dirección
         when (currentState) {
             CallState.CONNECTED, CallState.STREAMS_RUNNING, CallState.PAUSED -> {
-                // Para llamadas establecidas, enviar BYE
+                log.d(tag = TAG) { "Sending BYE for established call (${targetCallData.direction})" }
                 messageHandler.sendBye(accountInfo, targetCallData)
                 callHistoryManager.addCallLog(targetCallData, CallTypes.SUCCESS, endTime)
             }
 
             CallState.OUTGOING_INIT, CallState.OUTGOING_PROGRESS, CallState.OUTGOING_RINGING -> {
-                // Para llamadas salientes no contestadas, enviar CANCEL
+                log.d(tag = TAG) { "Sending CANCEL for outgoing call" }
                 messageHandler.sendCancel(accountInfo, targetCallData)
                 callHistoryManager.addCallLog(targetCallData, CallTypes.ABORTED, endTime)
             }
 
             CallState.INCOMING_RECEIVED -> {
-                // Para llamadas entrantes, rechazar
+                log.d(tag = TAG) { "Sending DECLINE for incoming call" }
                 messageHandler.sendDeclineResponse(accountInfo, targetCallData)
                 callHistoryManager.addCallLog(targetCallData, CallTypes.DECLINED, endTime)
             }
 
             else -> {
                 log.w(tag = TAG) { "Ending call in unexpected state: $currentState" }
+                // Enviar BYE como fallback
+                messageHandler.sendBye(accountInfo, targetCallData)
             }
         }
 
-        // Limpiar WebRTC si no hay más llamadas activas
+        // Limpiar WebRTC después de un delay
         if (MultiCallManager.getAllCalls().size <= 1) {
             CoroutineScope(Dispatchers.IO).launch {
-                delay(500) // Dar tiempo para que se envíe el mensaje
+                delay(500)
                 webRtcManager.dispose()
             }
         }
 
         clearDtmfQueue()
 
-        // Finalizar llamada después de un breve delay
+        // Finalizar llamada después de enviar mensaje
         CoroutineScope(Dispatchers.IO).launch {
-            delay(1000) // Esperar a que se procesen los mensajes SIP
+            delay(1000)
             CallStateManager.callEnded(targetCallData.callId)
             notifyCallStateChanged(CallState.ENDED)
         }
 
-        // Solo resetear si es la llamada actual
         if (accountInfo.currentCallData?.callId == targetCallData.callId) {
             accountInfo.resetCallState()
         }
 
         handleCallTermination()
     }
+
 
     fun acceptCall(callId: String? = null) {
         val accountInfo = ensureCurrentAccount() ?: run {

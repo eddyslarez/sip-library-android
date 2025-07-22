@@ -141,29 +141,44 @@ class SipMessageHandler(private val sipCoreManager: SipCoreManager) {
         accountInfo: AccountInfo
     ) {
         val callData = accountInfo.currentCallData ?: return
-
+        val cseqHeader = SipMessageParser.extractHeader(lines, "CSeq")
+        val isReInvite = cseqHeader.contains("INVITE") &&
+                CallStateManager.getCurrentState().let { state ->
+                    state.state == CallState.PAUSING ||
+                            state.state == CallState.RESUMING ||
+                            state.state == CallState.STREAMS_RUNNING ||
+                            state.state == CallState.PAUSED
+                }
         when (statusCode) {
             100 -> {
-                log.d(tag = TAG) { "Received 100 Trying for INVITE" }
-                // No cambiar estado, es solo confirmación de recepción
+                log.d(tag = TAG) { "Received 100 Trying for ${if (isReInvite) "re-INVITE" else "INVITE"}" }
             }
 
             180 -> {
-                log.d(tag = TAG) { "Received 180 Ringing" }
-                CallStateManager.outgoingCallRinging(callData.callId, 180)
-                sipCoreManager.audioManager.playOutgoingRingtone()
-                sipCoreManager.notifyCallStateChanged(CallState.OUTGOING_RINGING)
+                if (!isReInvite) {
+                    log.d(tag = TAG) { "Received 180 Ringing" }
+                    CallStateManager.outgoingCallRinging(callData.callId, 180)
+                    sipCoreManager.audioManager.playOutgoingRingtone()
+                    sipCoreManager.notifyCallStateChanged(CallState.OUTGOING_RINGING)
+                }
             }
 
             183 -> {
-                log.d(tag = TAG) { "Received 183 Session Progress" }
-                CallStateManager.outgoingCallProgress(callData.callId, 183)
-                sipCoreManager.notifyCallStateChanged(CallState.OUTGOING_PROGRESS)
+                if (!isReInvite) {
+                    log.d(tag = TAG) { "Received 183 Session Progress" }
+                    CallStateManager.outgoingCallProgress(callData.callId, 183)
+                    sipCoreManager.notifyCallStateChanged(CallState.OUTGOING_PROGRESS)
+                }
             }
 
             200 -> {
-                log.d(tag = TAG) { "Received 200 OK for INVITE - Call connected" }
-                handle200OKForInvite(lines, accountInfo, callData)
+                if (isReInvite) {
+                    log.d(tag = TAG) { "Received 200 OK for re-INVITE (hold/resume)" }
+                    handle200OKForReInvite(lines, accountInfo, callData)
+                } else {
+                    log.d(tag = TAG) { "Received 200 OK for INVITE - Call connected" }
+                    handle200OKForInvite(lines, accountInfo, callData)
+                }
             }
 
             401, 407 -> {
@@ -223,7 +238,51 @@ class SipMessageHandler(private val sipCoreManager: SipCoreManager) {
             }
         }
     }
+    /**
+     * NUEVO: Maneja 200 OK para re-INVITE (hold/resume)
+     */
+    private fun handle200OKForReInvite(
+        lines: List<String>,
+        accountInfo: AccountInfo,
+        callData: CallData
+    ) {
+        try {
+            log.d(tag = TAG) { "Processing 200 OK for re-INVITE" }
 
+            val remoteSdp = SipMessageParser.extractSdpContent(lines.joinToString("\r\n"))
+            val currentState = CallStateManager.getCurrentState()
+
+            // Enviar ACK para re-INVITE
+            val ack = SipMessageBuilder.buildAckMessage(accountInfo, callData)
+            accountInfo.webSocketClient?.send(ack)
+
+            // Determinar si es hold o resume basado en SDP
+            val isRemoteOnHold = SipMessageParser.isSdpOnHold(remoteSdp)
+
+            when (currentState.state) {
+                CallState.PAUSING -> {
+                    // Completar transición a hold
+                    CallStateManager.callOnHold(callData.callId)
+                    sipCoreManager.notifyCallStateChanged(CallState.PAUSED)
+                    log.d(tag = TAG) { "Call successfully put on hold" }
+                }
+
+                CallState.RESUMING -> {
+                    // Completar transición a resume
+                    CallStateManager.callResumed(callData.callId)
+                    sipCoreManager.notifyCallStateChanged(CallState.STREAMS_RUNNING)
+                    log.d(tag = TAG) { "Call successfully resumed" }
+                }
+
+                else -> {
+                    log.w(tag = TAG) { "Unexpected re-INVITE 200 OK in state: ${currentState.state}" }
+                }
+            }
+
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error processing re-INVITE 200 OK: ${e.message}" }
+        }
+    }
     /**
      * Maneja 200 OK para INVITE
      */
@@ -352,7 +411,7 @@ class SipMessageHandler(private val sipCoreManager: SipCoreManager) {
 
             sipCoreManager.currentAccountInfo = accountInfo
 
-            // Extraer información del INVITE - MEJORADO
+            // Extraer headers MEJORADO
             val fromHeader = SipMessageParser.extractHeader(lines, "From")
             val toHeader = SipMessageParser.extractHeader(lines, "To")
             val callIdHeader = SipMessageParser.extractHeader(lines, "Call-ID")
@@ -361,7 +420,7 @@ class SipMessageHandler(private val sipCoreManager: SipCoreManager) {
             val cseqHeader = SipMessageParser.extractHeader(lines, "CSeq")
             val remoteSdp = SipMessageParser.extractSdpContent(lines.joinToString("\r\n"))
 
-            // VALIDACIÓN CRÍTICA: Verificar headers obligatorios
+            // VALIDACIÓN CRÍTICA
             if (callIdHeader.isEmpty() || fromHeader.isEmpty() || viaHeader.isEmpty()) {
                 log.e(tag = TAG) { "ERROR: Missing required headers in INVITE" }
                 return
@@ -372,6 +431,13 @@ class SipMessageHandler(private val sipCoreManager: SipCoreManager) {
             val fromTag = SipMessageParser.extractTag(fromHeader)
             val displayName = SipMessageParser.extractDisplayName(fromHeader)
 
+            // CRÍTICO: Extraer Contact URI correctamente
+            val remoteContactUri = if (contactHeader.isNotEmpty()) {
+                SipMessageParser.extractUriFromContact(contactHeader)
+            } else {
+                "sip:$fromUser@${accountInfo.domain}"
+            }
+
             // Crear datos de llamada entrante
             val callData = CallData(
                 callId = callIdHeader,
@@ -380,15 +446,15 @@ class SipMessageHandler(private val sipCoreManager: SipCoreManager) {
                 direction = CallDirections.INCOMING,
                 startTime = Clock.System.now().toEpochMilliseconds(),
                 fromTag = fromTag,
-                toTag = generateId(), // ASEGURAR que siempre tengamos toTag
-                remoteContactUri = SipMessageParser.extractUriFromContact(contactHeader),
+                toTag = generateId(),
+                remoteContactUri = remoteContactUri, // CRÍTICO: Guardar correctamente
                 remoteDisplayName = displayName,
                 remoteSdp = remoteSdp,
                 via = viaHeader,
                 originalInviteMessage = lines.joinToString("\r\n")
             )
 
-            // CRÍTICO: Extraer y almacenar CSeq para respuestas
+            // CRÍTICO: Extraer y almacenar CSeq
             val cseqParts = cseqHeader.split(" ")
             if (cseqParts.size >= 2) {
                 callData.lastCSeqValue = cseqParts[0].toIntOrNull() ?: 1
@@ -397,6 +463,7 @@ class SipMessageHandler(private val sipCoreManager: SipCoreManager) {
             accountInfo.currentCallData = callData
             callData.storeInviteMessage(lines.joinToString("\r\n"))
 
+            // CRÍTICO: Actualizar CSeq del account para respuestas
             SipMessageParser.updateCSeqIfPresent(lines, accountInfo)
 
             // Estado de llamada entrante
@@ -407,13 +474,11 @@ class SipMessageHandler(private val sipCoreManager: SipCoreManager) {
             val tryingResponse = SipMessageBuilder.buildTryingResponse(accountInfo, callData)
             accountInfo.webSocketClient?.send(tryingResponse)
 
-            // Pequeño delay antes del ringing
             CoroutineScope(Dispatchers.IO).launch {
                 delay(100)
                 val ringingResponse = SipMessageBuilder.buildRingingResponse(accountInfo, callData)
                 accountInfo.webSocketClient?.send(ringingResponse)
 
-                // CRÍTICO: Iniciar ringtone DESPUÉS de enviar 180 Ringing
                 delay(200)
                 sipCoreManager.audioManager.playRingtone()
             }
@@ -422,7 +487,6 @@ class SipMessageHandler(private val sipCoreManager: SipCoreManager) {
 
         } catch (e: Exception) {
             log.e(tag = TAG) { "Error handling incoming INVITE: ${e.message}" }
-            // En caso de error, asegurar que no quede sonando
             sipCoreManager.audioManager.stopAllRingtones()
         }
     }

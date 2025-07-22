@@ -442,7 +442,9 @@ object CallStateManager {
             callId = callId
         )
     }
-
+    /**
+     * NUEVO: Método para completar resume
+     */
     fun callResumed(callId: String) {
         if (!isInitialized) return
 
@@ -456,6 +458,7 @@ object CallStateManager {
             callId = callId
         )
     }
+
 
     /**
      * Diagnóstico mejorado

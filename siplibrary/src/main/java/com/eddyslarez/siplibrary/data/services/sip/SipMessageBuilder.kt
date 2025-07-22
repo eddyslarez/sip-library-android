@@ -139,44 +139,70 @@ object SipMessageBuilder {
     /**
      * Build call control messages (BYE, CANCEL, ACK)
      */
+    /**
+     * Build call control messages (BYE, CANCEL, ACK) - CORREGIDO
+     */
     private fun buildCallControlMessage(
         method: String,
         accountInfo: AccountInfo,
         callData: CallData,
         useOriginalVia: Boolean = false
     ): String {
-        val targetUri = getTargetUri(accountInfo, callData)
-        val branch = if (useOriginalVia) {
-            callData.inviteViaBranch ?: generateId()
-        } else {
-            generateId()
-        }
-
         val builder = StringBuilder()
-        builder.append("$method $targetUri $SIP_VERSION\r\n")
 
-        if (useOriginalVia && method == "CANCEL") {
-            val originalViaHeader = SipMessageParser.extractHeader(
-                callData.originalCallInviteMessage.split("\r\n"), "Via"
-            )
-            builder.append("Via: $originalViaHeader\r\n")
-        } else {
-            builder.append("Via: $SIP_VERSION/$SIP_TRANSPORT ${accountInfo.domain};branch=z9hG4bK$branch\r\n")
+        // CRÍTICO: URI y headers diferentes según dirección de llamada
+        when (callData.direction) {
+            CallDirections.OUTGOING -> {
+                // Para llamadas salientes, el target es el destinatario
+                val targetUri = "sip:${callData.to}@${accountInfo.domain}"
+                builder.append("$method $targetUri $SIP_VERSION\r\n")
+
+                // Via header
+                if (useOriginalVia && method == "CANCEL" && callData.inviteViaBranch.isNotEmpty()) {
+                    builder.append("Via: $SIP_VERSION/$SIP_TRANSPORT ${accountInfo.domain};branch=${callData.inviteViaBranch}\r\n")
+                } else {
+                    val branch = if (method == "CANCEL") callData.inviteViaBranch else "z9hG4bK${generateId()}"
+                    builder.append("Via: $SIP_VERSION/$SIP_TRANSPORT ${accountInfo.domain};branch=$branch\r\n")
+                }
+
+                builder.append("Max-Forwards: $MAX_FORWARDS\r\n")
+                builder.append("From: <sip:${accountInfo.username}@${accountInfo.domain}>;tag=${callData.inviteFromTag}\r\n")
+
+                // To header - CRÍTICO: incluir toTag si existe
+                if (callData.inviteToTag.isNotEmpty() && method != "CANCEL") {
+                    builder.append("To: <$targetUri>;tag=${callData.inviteToTag}\r\n")
+                } else {
+                    builder.append("To: <$targetUri>\r\n")
+                }
+            }
+
+            CallDirections.INCOMING -> {
+                // CRÍTICO: Para llamadas entrantes, usar el contactUri del caller
+                val targetUri = if (callData.remoteContactUri?.isNotEmpty() == true) {
+                    callData.remoteContactUri!!
+                } else {
+                    "sip:${callData.from}@${accountInfo.domain}"
+                }
+
+                builder.append("$method $targetUri $SIP_VERSION\r\n")
+
+                // Via header - usar nuevo branch
+                val branch = "z9hG4bK${generateId()}"
+                builder.append("Via: $SIP_VERSION/$SIP_TRANSPORT ${accountInfo.domain};branch=$branch\r\n")
+                builder.append("Max-Forwards: $MAX_FORWARDS\r\n")
+
+                // CRÍTICO: Intercambiar From/To para llamadas entrantes
+                builder.append("From: <sip:${accountInfo.username}@${accountInfo.domain}>;tag=${callData.toTag}\r\n")
+                builder.append("To: <sip:${callData.from}@${accountInfo.domain}>;tag=${callData.fromTag}\r\n")
+            }
         }
-
-        builder.append("Max-Forwards: $MAX_FORWARDS\r\n")
-
-        // Add From/To headers based on call direction
-        appendFromToHeaders(builder, accountInfo, callData, method)
 
         builder.append("Call-ID: ${callData.callId}\r\n")
 
-        // Handle CSeq for different methods
-        val cseqValue = if (method == "CANCEL") {
-            val originalCseqHeader = SipMessageParser.extractHeader(
-                callData.originalCallInviteMessage.split("\r\n"), "CSeq"
-            )
-            originalCseqHeader.split(" ")[0].trim().toInt()
+        // CSeq handling
+        val cseqValue = if (method == "CANCEL" && callData.direction == CallDirections.OUTGOING) {
+            // Para CANCEL, usar el mismo CSeq que el INVITE original
+            callData.lastCSeqValue
         } else {
             ++accountInfo.cseq
         }
@@ -271,19 +297,26 @@ object SipMessageBuilder {
         contentType: String? = null,
         content: String = ""
     ): String {
-        val toUri = "sip:${accountInfo.username}@${accountInfo.domain}"
-        val fromUri = "sip:${callData.from}@${accountInfo.domain}"
-        val viaHeader = callData.via
-
         return buildString {
             append("$SIP_VERSION $statusCode $reasonPhrase\r\n")
-            append("Via: $viaHeader\r\n")
-            append("From: <$fromUri>;tag=${callData.fromTag}\r\n")
-            append("To: <$toUri>")
-            if (includeToTag) append(";tag=${callData.toTag}")
+
+            // CRÍTICO: Via header exactamente como vino
+            append("Via: ${callData.via}\r\n")
+
+            // CRÍTICO: From header exactamente como vino (incluyendo tag)
+            append("From: <sip:${callData.from}@${accountInfo.domain}>;tag=${callData.fromTag}\r\n")
+
+            // To header con nuestro tag si es necesario
+            append("To: <sip:${accountInfo.username}@${accountInfo.domain}>")
+            if (includeToTag && callData.toTag?.isNotEmpty() == true) {
+                append(";tag=${callData.toTag}")
+            }
             append("\r\n")
+
             append("Call-ID: ${callData.callId}\r\n")
-            append("CSeq: ${accountInfo.cseq} $method\r\n")
+
+            // CRÍTICO: CSeq debe coincidir con el request
+            append("CSeq: ${callData.lastCSeqValue} $method\r\n")
 
             if (includeContact) {
                 append("Contact: <sip:${accountInfo.username}@${accountInfo.domain};transport=ws>\r\n")
@@ -390,30 +423,42 @@ object SipMessageBuilder {
         callData: CallData,
         sdp: String
     ): String {
-        val targetUri = getTargetUri(accountInfo, callData)
-        val branch = "z9hG4bK${generateId()}"
+        val builder = StringBuilder()
 
-        return buildString {
-            append("INVITE $targetUri $SIP_VERSION\r\n")
-            append("Via: $SIP_VERSION/$SIP_TRANSPORT ${accountInfo.domain};branch=$branch\r\n")
-            append("Max-Forwards: $MAX_FORWARDS\r\n")
-
-            // From/To headers based on call direction
-            if (callData.direction == CallDirections.OUTGOING) {
-                append("From: <sip:${accountInfo.username}@${accountInfo.domain}>;tag=${callData.inviteFromTag}\r\n")
-                append("To: <sip:${callData.to}@${accountInfo.domain}>;tag=${callData.inviteToTag}\r\n")
-            } else {
-                append("From: <sip:${accountInfo.username}@${accountInfo.domain}>;tag=${callData.inviteToTag}\r\n")
-                append("To: <sip:${callData.from}@${accountInfo.domain}>;tag=${callData.inviteFromTag}\r\n")
+        when (callData.direction) {
+            CallDirections.OUTGOING -> {
+                val targetUri = "sip:${callData.to}@${accountInfo.domain}"
+                builder.append("INVITE $targetUri $SIP_VERSION\r\n")
+                builder.append("Via: $SIP_VERSION/$SIP_TRANSPORT ${accountInfo.domain};branch=z9hG4bK${generateId()}\r\n")
+                builder.append("Max-Forwards: $MAX_FORWARDS\r\n")
+                builder.append("From: <sip:${accountInfo.username}@${accountInfo.domain}>;tag=${callData.inviteFromTag}\r\n")
+                builder.append("To: <$targetUri>;tag=${callData.inviteToTag}\r\n")
             }
 
-            append("Call-ID: ${callData.callId}\r\n")
-            append("CSeq: ${++accountInfo.cseq} INVITE\r\n")
-            append("Contact: <sip:${accountInfo.username}@${accountInfo.domain};transport=ws>\r\n")
-            append("Content-Type: application/sdp\r\n")
-            append("Content-Length: ${sdp.length}\r\n\r\n")
-            append(sdp)
+            CallDirections.INCOMING -> {
+                // CRÍTICO: Para re-INVITE en llamadas entrantes
+                val targetUri = if (callData.remoteContactUri?.isNotEmpty() == true) {
+                    callData.remoteContactUri!!
+                } else {
+                    "sip:${callData.from}@${accountInfo.domain}"
+                }
+
+                builder.append("INVITE $targetUri $SIP_VERSION\r\n")
+                builder.append("Via: $SIP_VERSION/$SIP_TRANSPORT ${accountInfo.domain};branch=z9hG4bK${generateId()}\r\n")
+                builder.append("Max-Forwards: $MAX_FORWARDS\r\n")
+                builder.append("From: <sip:${accountInfo.username}@${accountInfo.domain}>;tag=${callData.toTag}\r\n")
+                builder.append("To: <sip:${callData.from}@${accountInfo.domain}>;tag=${callData.fromTag}\r\n")
+            }
         }
+
+        builder.append("Call-ID: ${callData.callId}\r\n")
+        builder.append("CSeq: ${++accountInfo.cseq} INVITE\r\n")
+        builder.append("Contact: <sip:${accountInfo.username}@${accountInfo.domain};transport=ws>\r\n")
+        builder.append("Content-Type: application/sdp\r\n")
+        builder.append("Content-Length: ${sdp.length}\r\n\r\n")
+        builder.append(sdp)
+
+        return builder.toString()
     }
 
     /**
