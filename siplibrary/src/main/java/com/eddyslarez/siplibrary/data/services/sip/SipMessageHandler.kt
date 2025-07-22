@@ -384,19 +384,29 @@ class SipMessageHandler(private val sipCoreManager: SipCoreManager) {
         lines: List<String>,
         accountInfo: AccountInfo
     ) {
-        // Detener outgoing ringtone
-        sipCoreManager.audioManager.stopOutgoingRingtone()
+        try {
+            log.d(tag = TAG) { "Processing 487 Request Terminated for call: ${callData.callId}" }
 
-        // Enviar ACK para 487
-        val ackMessage = SipMessageBuilder.buildAckFor487Response(accountInfo, callData, lines)
-        accountInfo.webSocketClient?.send(ackMessage)
+            // Detener outgoing ringtone
+            sipCoreManager.audioManager.stopOutgoingRingtone()
 
-        // Actualizar estado
-        CallStateManager.callEnded(callData.callId, 487, "Request Terminated")
-        sipCoreManager.notifyCallStateChanged(CallState.ENDED)
+            // CRÍTICO: Enviar ACK para 487 usando headers correctos
+            val ackMessage = SipMessageBuilder.buildAckFor487Response(accountInfo, callData, lines)
+            accountInfo.webSocketClient?.send(ackMessage)
+            log.d(tag = TAG) { "ACK sent for 487 response" }
 
-        // Limpiar recursos
-        cleanupCall(callData)
+            // Actualizar estado
+            CallStateManager.callEnded(callData.callId, 487, "Request Terminated")
+            sipCoreManager.notifyCallStateChanged(CallState.ENDED)
+
+            // Limpiar recursos
+            cleanupCall(callData)
+
+            log.d(tag = TAG) { "Call cancellation completed successfully" }
+
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error handling call cancellation: ${e.message}" }
+        }
     }
 
     /**
