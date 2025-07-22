@@ -1044,6 +1044,7 @@ class EddysSipLibrary private constructor() {
     }
 
     fun diagnoseListeners(): String {
+
         return buildString {
             appendLine("=== LISTENERS DIAGNOSTIC ===")
             appendLine("Library initialized: $isInitialized")
