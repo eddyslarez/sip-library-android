@@ -142,7 +142,7 @@ object SipMessageBuilder {
     /**
      * Build call control messages (BYE, CANCEL, ACK) - CORREGIDO
      */
-    private fun buildCallControlMessage(
+    private fun  buildCallControlMessage(
         method: String,
         accountInfo: AccountInfo,
         callData: CallData,
@@ -200,12 +200,8 @@ object SipMessageBuilder {
         builder.append("Call-ID: ${callData.callId}\r\n")
 
         // CSeq handling
-        val cseqValue = if (method == "CANCEL" && callData.direction == CallDirections.OUTGOING) {
-            // Para CANCEL, usar el mismo CSeq que el INVITE original
-            callData.lastCSeqValue
-        } else {
-            ++accountInfo.cseq
-        }
+        val cseqValue = ++accountInfo.cseq
+
 
         builder.append("CSeq: $cseqValue $method\r\n")
         builder.append("Content-Length: 0\r\n\r\n")
@@ -261,61 +257,61 @@ object SipMessageBuilder {
     /**
      * Build CANCEL message
      */
-//    fun buildCancelMessage(accountInfo: AccountInfo, callData: CallData): String =
-//        buildCallControlMessage("CANCEL", accountInfo, callData, useOriginalVia = true)
-    /**
-     * Build CANCEL message - CORREGIDO para usar headers exactos del INVITE original
-     */
-    fun buildCancelMessage(accountInfo: AccountInfo, callData: CallData): String {
-        try {
-            log.d(tag = "SipMessageBuilder") { "Building CANCEL for call: ${callData.callId}" }
-
-            // CRÍTICO: Verificar que tenemos el mensaje INVITE original
-            if (callData.originalCallInviteMessage.isEmpty()) {
-                log.e(tag = "SipMessageBuilder") { "ERROR: No original INVITE message stored for CANCEL" }
-                throw IllegalStateException("Cannot build CANCEL without original INVITE")
-            }
-
-            val originalLines = callData.originalCallInviteMessage.split("\r\n")
-            val originalFirstLine = originalLines.firstOrNull() ?: throw IllegalStateException("Invalid original INVITE")
-
-            // Extraer headers exactos del INVITE original
-            val originalVia = SipMessageParser.extractHeader(originalLines, "Via")
-            val originalFrom = SipMessageParser.extractHeader(originalLines, "From")
-            val originalTo = SipMessageParser.extractHeader(originalLines, "To")
-            val originalCallId = SipMessageParser.extractHeader(originalLines, "Call-ID")
-            val originalCSeq = SipMessageParser.extractHeader(originalLines, "CSeq")
-
-            // CRÍTICO: Extraer solo el número de secuencia del CSeq original
-            val originalCSeqNumber = originalCSeq.split(" ").firstOrNull()?.trim()
-                ?: throw IllegalStateException("Invalid CSeq in original INVITE")
-
-            // CRÍTICO: Extraer URI del INVITE original
-            val requestUri = originalFirstLine.substringAfter("INVITE ").substringBefore(" SIP/2.0").trim()
-
-            log.d(tag = "SipMessageBuilder") {
-                "CANCEL details - URI: $requestUri, CSeq: $originalCSeqNumber, Via: ${originalVia.take(50)}..."
-            }
-
-            return buildString {
-                // Request line - EXACTAMENTE la misma URI que el INVITE
-                append("CANCEL $requestUri SIP/2.0\r\n")
-
-                // CRÍTICO: Headers EXACTAMENTE iguales al INVITE original
-                append("Via: $originalVia\r\n")
-                append("Max-Forwards: $MAX_FORWARDS\r\n")
-                append("From: $originalFrom\r\n")
-                append("To: $originalTo\r\n")  // SIN tag en CANCEL
-                append("Call-ID: $originalCallId\r\n")
-                append("CSeq: $originalCSeqNumber CANCEL\r\n")  // Mismo número, método CANCEL
-                append("Content-Length: 0\r\n\r\n")
-            }
-
-        } catch (e: Exception) {
-            log.e(tag = "SipMessageBuilder") { "Error building CANCEL: ${e.message}" }
-            throw e
-        }
-    }
+    fun buildCancelMessage(accountInfo: AccountInfo, callData: CallData): String =
+       buildCallControlMessage("CANCEL", accountInfo, callData, useOriginalVia = true)
+//    /**
+//     * Build CANCEL message - CORREGIDO para usar headers exactos del INVITE original
+//     */
+//    fun buildCancelMessage(accountInfo: AccountInfo, callData: CallData): String {
+//        try {
+//            log.d(tag = "SipMessageBuilder") { "Building CANCEL for call: ${callData.callId}" }
+//
+//            // CRÍTICO: Verificar que tenemos el mensaje INVITE original
+//            if (callData.originalCallInviteMessage.isEmpty()) {
+//                log.e(tag = "SipMessageBuilder") { "ERROR: No original INVITE message stored for CANCEL" }
+//                throw IllegalStateException("Cannot build CANCEL without original INVITE")
+//            }
+//
+//            val originalLines = callData.originalCallInviteMessage.split("\r\n")
+//            val originalFirstLine = originalLines.firstOrNull() ?: throw IllegalStateException("Invalid original INVITE")
+//
+//            // Extraer headers exactos del INVITE original
+//            val originalVia = SipMessageParser.extractHeader(originalLines, "Via")
+//            val originalFrom = SipMessageParser.extractHeader(originalLines, "From")
+//            val originalTo = SipMessageParser.extractHeader(originalLines, "To")
+//            val originalCallId = SipMessageParser.extractHeader(originalLines, "Call-ID")
+//            val originalCSeq = SipMessageParser.extractHeader(originalLines, "CSeq")
+//
+//            // CRÍTICO: Extraer solo el número de secuencia del CSeq original
+//            val originalCSeqNumber = (originalCSeq.split(" ").firstOrNull()?.trim() + 1)
+//                ?: throw IllegalStateException("Invalid CSeq in original INVITE")
+//
+//            // CRÍTICO: Extraer URI del INVITE original
+//            val requestUri = originalFirstLine.substringAfter("INVITE ").substringBefore(" SIP/2.0").trim()
+//
+//            log.d(tag = "SipMessageBuilder") {
+//                "CANCEL details - URI: $requestUri, CSeq: $originalCSeqNumber, Via: ${originalVia.take(50)}..."
+//            }
+//
+//            return buildString {
+//                // Request line - EXACTAMENTE la misma URI que el INVITE
+//                append("CANCEL $requestUri SIP/2.0\r\n")
+//
+//                // CRÍTICO: Headers EXACTAMENTE iguales al INVITE original
+//                append("Via: $originalVia\r\n")
+//                append("Max-Forwards: $MAX_FORWARDS\r\n")
+//                append("From: $originalFrom\r\n")
+//                append("To: $originalTo\r\n")  // SIN tag en CANCEL
+//                append("Call-ID: $originalCallId\r\n")
+//                append("CSeq: $originalCSeqNumber CANCEL\r\n")  // Mismo número, método CANCEL
+//                append("Content-Length: 0\r\n\r\n")
+//            }
+//
+//        } catch (e: Exception) {
+//            log.e(tag = "SipMessageBuilder") { "Error building CANCEL: ${e.message}" }
+//            throw e
+//        }
+//    }
 
     /**
      * Build ACK message
