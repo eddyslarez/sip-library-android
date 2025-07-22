@@ -706,6 +706,8 @@ class SipMessageHandler(private val sipCoreManager: SipCoreManager) {
                             callData,
                             callData.localSdp
                         )
+                        callData.originalCallInviteMessage = authenticatedInvite
+
                         accountInfo.webSocketClient?.send(authenticatedInvite)
                     }
                 }

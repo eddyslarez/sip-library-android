@@ -3,6 +3,7 @@ package com.eddyslarez.siplibrary.data.services.sip
 import com.eddyslarez.siplibrary.data.models.*
 import com.eddyslarez.siplibrary.utils.generateId
 import com.eddyslarez.siplibrary.utils.log
+import kotlin.inc
 
 /**
  * Builder for creating different types of SIP messages
@@ -199,8 +200,14 @@ object SipMessageBuilder {
 
         builder.append("Call-ID: ${callData.callId}\r\n")
 
-        // CSeq handling
-        val cseqValue = ++accountInfo.cseq
+        val cseqValue = if (method == "CANCEL") {
+            val originalCseqHeader = SipMessageParser.extractHeader(
+                callData.originalCallInviteMessage.split("\r\n"), "CSeq"
+            )
+            originalCseqHeader.split(" ")[0].trim().toInt()
+        } else {
+            ++accountInfo.cseq
+        }
 
 
         builder.append("CSeq: $cseqValue $method\r\n")
