@@ -922,14 +922,11 @@ class EddysSipLibrary private constructor() {
         return MultiCallManager.getAllCalls().mapNotNull { callData ->
             try {
                 val account = sipCoreManager?.currentAccountInfo ?: return@mapNotNull null
-                val calls = MultiCallManager.getAllCalls()
-                val currentCall1 = calls.size == 1 &&
-                        CallStateManager.getCurrentState().let { state ->
-                            state.state != CallState.ENDED &&
-                                    state.state != CallState.ERROR &&
-                                    state.state != CallState.ENDING &&
-                                    state.state != CallState.IDLE
-                        }
+                val allActiveCalls = MultiCallManager.getActiveCalls()
+
+                // Determinar si es la llamada actual
+                val isCurrentCall = allActiveCalls.size == 1 &&
+                        allActiveCalls.first().callId == callData.callId
 
                 CallInfo(
                     callId = callData.callId,
@@ -943,13 +940,28 @@ class EddysSipLibrary private constructor() {
                     localAccount = account.username,
                     codec = null,
                     state = CallStateManager.getStateForCall(callData.callId)?.state,
-                    isCurrentCall = currentCall1 && callData.callId == CallStateManager.getCurrentCallId()
+                    isCurrentCall = isCurrentCall
                 )
             } catch (e: Exception) {
                 log.e(tag = TAG) { "Error creating CallInfo for ${callData.callId}: ${e.message}" }
                 null
             }
         }
+    }
+    /**
+     * Fuerza la limpieza de llamadas terminadas
+     */
+    fun cleanupTerminatedCalls() {
+        checkInitialized()
+        sipCoreManager?.cleanupTerminatedCalls()
+    }
+
+    /**
+     * Obtiene información detallada sobre las llamadas
+     */
+    fun getCallsDiagnostic(): String {
+        checkInitialized()
+        return sipCoreManager?.getCallsInfo() ?: "No call information available"
     }
 
     fun toggleMute() {

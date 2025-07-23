@@ -1289,10 +1289,26 @@ class SipCoreManager private constructor(
     fun getCurrentCallState(): CallStateInfo = CallStateManager.getCurrentState()
 
     /**
-     * Obtiene todas las llamadas activas
+     * Obtiene todas las llamadas activas (filtradas automáticamente)
      */
     fun getAllActiveCalls(): List<CallData> = MultiCallManager.getAllCalls()
 
+    /**
+     * Obtiene solo las llamadas realmente activas (sin estados terminales)
+     */
+    fun getActiveCalls(): List<CallData> = MultiCallManager.getActiveCalls()
+
+    /**
+     * Limpia manualmente las llamadas terminadas
+     */
+    fun cleanupTerminatedCalls() {
+        MultiCallManager.cleanupTerminatedCalls()
+    }
+
+    /**
+     * Obtiene información detallada sobre el estado de las llamadas
+     */
+    fun getCallsInfo(): String = MultiCallManager.getDiagnosticInfo()
     fun isSipCoreManagerHealthy(): Boolean {
         return try {
             webRtcManager.isInitialized() &&

@@ -30,6 +30,18 @@ object MultiCallManager {
     val callStatesFlow: StateFlow<Map<String, CallStateInfo>> = _callStates.asStateFlow()
 
     /**
+     * Determina si un estado de llamada es considerado "activo"
+     */
+    private fun isActiveCallState(state: CallState): Boolean {
+        return when (state) {
+            CallState.IDLE,
+            CallState.ENDED,
+            CallState.ERROR -> false
+            else -> true
+        }
+    }
+
+    /**
      * Añade una nueva llamada al gestor
      */
     fun addCall(callData: CallData) {
@@ -46,8 +58,7 @@ object MultiCallManager {
 
         updateCallState(callData.callId, initialState)
 
-        // Asumiendo que tienes un logger disponible
-        // log.d(tag = "MultiCallManager") { "Call added: ${callData.callId} (${callData.direction})" }
+        log.d(tag = "MultiCallManager") { "Call added: ${callData.callId} (${callData.direction})" }
     }
 
     /**
@@ -63,7 +74,7 @@ object MultiCallManager {
         _callStates.value = currentStates
 
         if (removedCall != null) {
-            // log.d(tag = "MultiCallManager") { "Call removed: $callId" }
+            log.d(tag = "MultiCallManager") { "Call removed: $callId" }
         }
     }
 
@@ -86,7 +97,7 @@ object MultiCallManager {
         currentStates[callId] = newStateInfo
         _callStates.value = currentStates
 
-        // Si la llamada terminó, removerla después de un breve delay
+        // Si la llamada terminó, programar su eliminación
         if (newState == CallState.ENDED || newState == CallState.ERROR) {
             scope.launch {
                 delay(1000) // Esperar 1 segundo
@@ -94,7 +105,7 @@ object MultiCallManager {
             }
         }
 
-        // log.d(tag = "MultiCallManager") { "Call state updated: $callId -> $newState" }
+        log.d(tag = "MultiCallManager") { "Call state updated: $callId -> $newState" }
     }
 
     /**
@@ -112,10 +123,81 @@ object MultiCallManager {
     }
 
     /**
-     * Obtiene todas las llamadas activas
+     * Obtiene todas las llamadas activas (filtradas por estado)
+     * Si hay una sola llamada y está terminada, retorna lista vacía
+     * Si hay múltiples llamadas, filtra las que no están activas
      */
     fun getAllCalls(): List<CallData> {
-        return _activeCalls.value.values.toList()
+        val allCalls = _activeCalls.value.values.toList()
+
+        // Si no hay llamadas, retornar lista vacía
+        if (allCalls.isEmpty()) {
+            return emptyList()
+        }
+
+        // Si hay una sola llamada
+        if (allCalls.size == 1) {
+            val singleCall = allCalls.first()
+            val callState = getCallState(singleCall.callId)
+
+            // Si la llamada está terminada o en error, retornar lista vacía
+            return if (callState != null && !isActiveCallState(callState.state)) {
+                // Remover inmediatamente la llamada terminada
+                removeCall(singleCall.callId)
+                emptyList()
+            } else {
+                allCalls
+            }
+        }
+
+        // Si hay múltiples llamadas, filtrar las activas
+        val activeCalls = allCalls.filter { callData ->
+            val callState = getCallState(callData.callId)
+            val isActive = callState != null && isActiveCallState(callState.state)
+
+            // Si la llamada no está activa, programar su eliminación
+            if (!isActive) {
+                scope.launch {
+                    delay(100) // Pequeño delay para evitar conflictos
+                    removeCall(callData.callId)
+                }
+            }
+
+            isActive
+        }
+
+        return activeCalls
+    }
+
+    /**
+     * Obtiene solo las llamadas realmente activas (sin estados terminales)
+     */
+    fun getActiveCalls(): List<CallData> {
+        return _activeCalls.value.values.filter { callData ->
+            val callState = getCallState(callData.callId)
+            callState != null && isActiveCallState(callState.state)
+        }
+    }
+
+    /**
+     * Obtiene llamadas terminadas que aún están en memoria
+     */
+    fun getTerminatedCalls(): List<CallData> {
+        return _activeCalls.value.values.filter { callData ->
+            val callState = getCallState(callData.callId)
+            callState != null && !isActiveCallState(callState.state)
+        }
+    }
+
+    /**
+     * Limpia inmediatamente las llamadas terminadas
+     */
+    fun cleanupTerminatedCalls() {
+        val terminatedCalls = getTerminatedCalls()
+        terminatedCalls.forEach { callData ->
+            removeCall(callData.callId)
+        }
+        log.d(tag = "MultiCallManager") { "Cleaned up ${terminatedCalls.size} terminated calls" }
     }
 
     /**
@@ -129,14 +211,14 @@ object MultiCallManager {
      * Verifica si hay llamadas activas
      */
     fun hasActiveCalls(): Boolean {
-        return _activeCalls.value.isNotEmpty()
+        return getActiveCalls().isNotEmpty()
     }
 
     /**
      * Obtiene la llamada actual (primera llamada activa)
      */
     fun getCurrentCall(): CallData? {
-        return _activeCalls.value.values.firstOrNull()
+        return getActiveCalls().firstOrNull()
     }
 
     /**
@@ -151,7 +233,7 @@ object MultiCallManager {
      * Obtiene llamadas entrantes
      */
     fun getIncomingCalls(): List<CallData> {
-        return _activeCalls.value.values.filter {
+        return getActiveCalls().filter {
             it.direction == com.eddyslarez.siplibrary.data.models.CallDirections.INCOMING
         }
     }
@@ -160,7 +242,7 @@ object MultiCallManager {
      * Obtiene llamadas salientes
      */
     fun getOutgoingCalls(): List<CallData> {
-        return _activeCalls.value.values.filter {
+        return getActiveCalls().filter {
             it.direction == com.eddyslarez.siplibrary.data.models.CallDirections.OUTGOING
         }
     }
@@ -185,7 +267,7 @@ object MultiCallManager {
     fun clearAllCalls() {
         _activeCalls.value = emptyMap()
         _callStates.value = emptyMap()
-         log.d(tag = "MultiCallManager") { "All calls cleared" }
+        log.d(tag = "MultiCallManager") { "All calls cleared" }
     }
 
     /**
@@ -194,16 +276,28 @@ object MultiCallManager {
     fun getDiagnosticInfo(): String {
         val calls = _activeCalls.value
         val states = _callStates.value
+        val activeCalls = getActiveCalls()
+        val terminatedCalls = getTerminatedCalls()
 
         return buildString {
             appendLine("=== MULTI CALL MANAGER DIAGNOSTIC ===")
-            appendLine("Active calls: ${calls.size}")
+            appendLine("Total calls in memory: ${calls.size}")
+            appendLine("Active calls: ${activeCalls.size}")
+            appendLine("Terminated calls: ${terminatedCalls.size}")
             appendLine("Call states: ${states.size}")
 
             appendLine("\n--- Active Calls ---")
-            calls.forEach { (callId, callData) ->
-                val state = states[callId]?.state ?: "UNKNOWN"
-                appendLine("$callId: ${callData.from} -> ${callData.to} ($state)")
+            activeCalls.forEach { callData ->
+                val state = states[callData.callId]?.state ?: "UNKNOWN"
+                appendLine("${callData.callId}: ${callData.from} -> ${callData.to} ($state)")
+            }
+
+            if (terminatedCalls.isNotEmpty()) {
+                appendLine("\n--- Terminated Calls (pending cleanup) ---")
+                terminatedCalls.forEach { callData ->
+                    val state = states[callData.callId]?.state ?: "UNKNOWN"
+                    appendLine("${callData.callId}: ${callData.from} -> ${callData.to} ($state)")
+                }
             }
 
             appendLine("\n--- Call States ---")
