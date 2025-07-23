@@ -461,7 +461,9 @@ class SipMessageHandler(private val sipCoreManager: SipCoreManager) {
                 remoteDisplayName = displayName,
                 remoteSdp = remoteSdp,
                 via = viaHeader,
-                originalInviteMessage = lines.joinToString("\r\n")
+                originalInviteMessage = lines.joinToString("\r\n"),
+                md5Hash= ""
+
             )
 
             // CRÍTICO: Extraer y almacenar CSeq
@@ -704,7 +706,8 @@ class SipMessageHandler(private val sipCoreManager: SipCoreManager) {
                         val authenticatedInvite = SipMessageBuilder.buildAuthenticatedInviteMessage(
                             accountInfo,
                             callData,
-                            callData.localSdp
+                            callData.localSdp,
+                            md5Hash= ""
                         )
                         callData.originalCallInviteMessage = authenticatedInvite
 
@@ -886,13 +889,17 @@ class SipMessageHandler(private val sipCoreManager: SipCoreManager) {
     fun sendInvite(accountInfo: AccountInfo, callData: CallData) {
         try {
             val inviteMessage = SipMessageBuilder.buildInviteMessage(
-                accountInfo, callData, callData.localSdp
+                accountInfo,
+                callData,
+                callData.localSdp,
+                callData.md5Hash
             )
 
             callData.originalCallInviteMessage = inviteMessage
             accountInfo.webSocketClient?.send(inviteMessage)
 
-            log.d(tag = TAG) { "INVITE sent for call ${callData.callId}" }
+            log.d(tag = TAG) { "INVITE sent for call ${callData.callId} with MD5: ${callData.md5Hash}" }
+            log.d(tag = TAG) { "INVITE sent $inviteMessage" }
 
         } catch (e: Exception) {
             log.e(tag = TAG) { "Error sending INVITE: ${e.message}" }

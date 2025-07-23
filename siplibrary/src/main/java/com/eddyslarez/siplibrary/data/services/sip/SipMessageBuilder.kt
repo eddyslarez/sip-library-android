@@ -97,6 +97,7 @@ object SipMessageBuilder {
         accountInfo: AccountInfo,
         callData: CallData,
         sdp: String,
+        md5Hash: String,
         isAuthenticated: Boolean = false
     ): String {
         val target = callData.to
@@ -117,6 +118,9 @@ object SipMessageBuilder {
         builder.append("CSeq: ${++accountInfo.cseq} INVITE\r\n")
         builder.append("Contact: <sip:${accountInfo.username}@${accountInfo.domain};transport=ws>\r\n")
 
+        if (md5Hash.isNotEmpty()) {
+            builder.append("X-MD5: $md5Hash\r\n")
+        }
         if (isAuthenticated && accountInfo.authorizationHeader != null) {
             builder.append("Authorization: ${accountInfo.authorizationHeader}\r\n")
         }
@@ -134,8 +138,9 @@ object SipMessageBuilder {
     fun buildAuthenticatedInviteMessage(
         accountInfo: AccountInfo,
         callData: CallData,
-        sdp: String
-    ): String = buildInviteMessage(accountInfo, callData, sdp, isAuthenticated = true)
+        sdp: String,
+        md5Hash: String,
+        ): String = buildInviteMessage(accountInfo, callData, sdp, md5Hash, isAuthenticated = true)
 
     /**
      * Build call control messages (BYE, CANCEL, ACK)

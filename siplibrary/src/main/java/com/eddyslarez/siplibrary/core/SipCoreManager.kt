@@ -26,6 +26,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.datetime.Clock
+import java.security.MessageDigest
 import kotlin.math.pow
 
 /**
@@ -813,9 +814,13 @@ class SipCoreManager private constructor(
             log.e(tag = TAG) { "Error during complete unregister: ${e.message}" }
         }
     }
-
+    private fun generateCallMd5(callId: String, domain: String): String {
+        val input = callId.replace("-", "") + "@" + domain
+        val md5 = MessageDigest.getInstance("MD5")
+        md5.update(input.toByteArray())
+        return md5.digest().joinToString("") { "%02x".format(it) }
+    }
     fun makeCall(phoneNumber: String, sipName: String, domain: String) {
-
         val accountKey = "$sipName@$domain"
         val accountInfo = activeAccounts[accountKey] ?: run {
             log.e(tag = TAG) { "Account not found: $accountKey" }
@@ -831,6 +836,7 @@ class SipCoreManager private constructor(
             sipCallbacks?.onCallFailed("Not registered with SIP server")
             return
         }
+
         log.d(tag = TAG) { "Making call from $accountKey to $phoneNumber" }
         audioManager.stopAllRingtones()
 
@@ -840,13 +846,18 @@ class SipCoreManager private constructor(
                 val sdp = webRtcManager.createOffer()
 
                 val callId = generateId()
+
+                // Generar MD5 usando el callId y domain
+                val md5Hash = generateCallMd5(callId, domain)
+
                 val callData = CallData(
                     callId = callId,
                     to = phoneNumber,
                     from = accountInfo.username,
                     direction = CallDirections.OUTGOING,
                     inviteFromTag = generateSipTag(),
-                    localSdp = sdp
+                    localSdp = sdp,
+                    md5Hash = md5Hash
                 )
 
                 accountInfo.currentCallData = callData
@@ -856,7 +867,7 @@ class SipCoreManager private constructor(
                 notifyCallStateChanged(CallState.OUTGOING_INIT)
 
                 // Iniciar outgoing ringtone
-//                audioManager.playOutgoingRingtone()
+                // audioManager.playOutgoingRingtone()
 
                 messageHandler.sendInvite(accountInfo, callData)
             } catch (e: Exception) {
