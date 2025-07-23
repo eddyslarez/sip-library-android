@@ -1,15 +1,17 @@
 package com.eddyslarez.siplibrary.core
 
+import android.annotation.SuppressLint
 import android.app.Application
 import com.eddyslarez.siplibrary.EddysSipLibrary
 import com.eddyslarez.siplibrary.data.models.*
+import com.eddyslarez.siplibrary.data.services.audio.AndroidWebRtcManager
 import com.eddyslarez.siplibrary.data.services.audio.AudioDevice
 import com.eddyslarez.siplibrary.data.services.audio.AudioDeviceManager
 import com.eddyslarez.siplibrary.data.services.audio.CallHoldManager
 import com.eddyslarez.siplibrary.data.services.audio.AudioManager
 import com.eddyslarez.siplibrary.data.services.audio.WebRtcConnectionState
-import com.eddyslarez.siplibrary.data.services.audio.WebRtcEventListener
 import com.eddyslarez.siplibrary.data.services.audio.WebRtcManagerFactory
+import com.eddyslarez.siplibrary.data.services.audio.newAudio.WebRtcEventListener
 import com.eddyslarez.siplibrary.data.services.sip.SipMessageHandler
 import com.eddyslarez.siplibrary.data.services.websocket.MultiplatformWebSocket
 import com.eddyslarez.siplibrary.data.services.websocket.WebSocket
@@ -71,11 +73,15 @@ class SipCoreManager private constructor(
     private var connectionRetryCount = 0
     private val maxRetryAttempts = 5
 
-    // WebRTC manager and other managers
-    val webRtcManager = WebRtcManagerFactory.createWebRtcManager(application)
+        // WebRTC manager refactorizado con audio virtual
+       val webRtcManager = AndroidWebRtcManager(application)
     private val platformRegistration = PlatformRegistration()
     private val callHoldManager = CallHoldManager(webRtcManager)
     private val audioDeviceManager = AudioDeviceManager()
+
+       // Callbacks para audio virtual
+        private val audioTranscriptionCallbacks = mutableListOf<(String) -> Unit>()
+        private val audioLevelCallbacks = mutableListOf<(Float) -> Unit>()
 
     companion object {
         private const val TAG = "SipCoreManager"
@@ -94,6 +100,15 @@ class SipCoreManager private constructor(
                 platformInfo = PlatformInfo(),
                 settingsDataStore = SettingsDataStore(application)
             )
+
+            override fun onRemoteAudioTranscribed(transcribedText: String) {
+                log.d(tag = TAG) { "Remote audio transcribed: $transcribedText" }
+                notifyAudioTranscription(transcribedText)
+            }
+
+            override fun onAudioLevelChanged(level: Float) {
+                notifyAudioLevel(level)
+            }
         }
     }
 
@@ -289,6 +304,7 @@ class SipCoreManager private constructor(
     /**
      * Get available audio devices
      */
+    @SuppressLint("MissingPermission")
     fun getAudioDevices(): Pair<List<AudioDevice>, List<AudioDevice>> {
         return webRtcManager.getAllAudioDevices()
     }
@@ -296,6 +312,7 @@ class SipCoreManager private constructor(
     /**
      * Get current audio devices
      */
+    @SuppressLint("MissingPermission")
     fun getCurrentDevices(): Pair<AudioDevice?, AudioDevice?> {
         return Pair(
             webRtcManager.getCurrentInputDevice(),
@@ -306,6 +323,7 @@ class SipCoreManager private constructor(
     /**
      * Refresh the list of available audio devices
      */
+    @SuppressLint("MissingPermission")
     fun refreshAudioDevices() {
         val (inputs, outputs) = webRtcManager.getAllAudioDevices()
         audioDeviceManager.updateDevices(inputs, outputs)
@@ -314,6 +332,7 @@ class SipCoreManager private constructor(
     /**
      * Change audio device during call
      */
+    @SuppressLint("MissingPermission")
     fun changeAudioDevice(device: AudioDevice) {
         CoroutineScope(Dispatchers.IO).launch {
             val isInput = audioDeviceManager.inputDevices.value.contains(device)
@@ -1383,4 +1402,99 @@ class SipCoreManager private constructor(
     }
 
     fun getMessageHandler(): SipMessageHandler = messageHandler
+
+
+    // === MÉTODOS DE AUDIO VIRTUAL ===
+
+    /**
+     * Habilita el procesamiento de audio virtual
+     */
+    suspend fun enableVirtualAudio(enable: Boolean) {
+        log.d(tag = TAG) { "Enabling virtual audio: $enable" }
+        webRtcManager.enableVirtualAudio(enable)
+    }
+
+    /**
+     * Inyecta audio personalizado en lugar del micrófono
+     */
+    fun injectCustomAudio(audioData: ByteArray, sampleRate: Int = 16000) {
+        webRtcManager.injectCustomAudio(audioData, sampleRate)
+    }
+
+    /**
+     * Reproduce audio personalizado en lugar del audio remoto
+     */
+    fun playCustomAudio(audioData: ByteArray, sampleRate: Int = 16000) {
+        webRtcManager.playCustomAudio(audioData, sampleRate)
+    }
+
+    /**
+     * Inicia la transcripción del audio remoto recibido
+     */
+    fun startRemoteAudioTranscription() {
+        log.d(tag = TAG) { "Starting remote audio transcription" }
+        webRtcManager.startRemoteAudioTranscription()
+    }
+
+    /**
+     * Detiene la transcripción del audio remoto
+     */
+    fun stopRemoteAudioTranscription() {
+        log.d(tag = TAG) { "Stopping remote audio transcription" }
+        webRtcManager.stopRemoteAudioTranscription()
+    }
+
+    /**
+     * Añade callback para transcripciones de audio
+     */
+    fun addAudioTranscriptionCallback(callback: (String) -> Unit) {
+        audioTranscriptionCallbacks.add(callback)
+    }
+
+    /**
+     * Remueve callback para transcripciones de audio
+     */
+    fun removeAudioTranscriptionCallback(callback: (String) -> Unit) {
+        audioTranscriptionCallbacks.remove(callback)
+    }
+
+    /**
+     * Añade callback para nivel de audio
+     */
+    fun addAudioLevelCallback(callback: (Float) -> Unit) {
+        audioLevelCallbacks.add(callback)
+    }
+
+    /**
+     * Remueve callback para nivel de audio
+     */
+    fun removeAudioLevelCallback(callback: (Float) -> Unit) {
+        audioLevelCallbacks.remove(callback)
+    }
+
+    /**
+     * Notifica transcripciones de audio a los callbacks
+     */
+    private fun notifyAudioTranscription(text: String) {
+        audioTranscriptionCallbacks.forEach { callback ->
+            try {
+                callback(text)
+            } catch (e: Exception) {
+                log.e(tag = TAG) { "Error in audio transcription callback: ${e.message}" }
+            }
+        }
+    }
+
+    /**
+     * Notifica nivel de audio a los callbacks
+     */
+    private fun notifyAudioLevel(level: Float) {
+        audioLevelCallbacks.forEach { callback ->
+            try {
+                callback(level)
+            } catch (e: Exception) {
+                log.e(tag = TAG) { "Error in audio level callback: ${e.message}" }
+            }
+        }
+    }
 }

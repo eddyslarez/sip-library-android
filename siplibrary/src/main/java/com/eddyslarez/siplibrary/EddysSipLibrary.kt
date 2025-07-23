@@ -1,5 +1,6 @@
 package com.eddyslarez.siplibrary
 
+import android.annotation.SuppressLint
 import android.app.Application
 import android.content.Context
 import com.eddyslarez.siplibrary.core.SipCoreManager
@@ -55,6 +56,87 @@ class EddysSipLibrary private constructor() {
         val incomingRingtoneUri: Uri? = null,
         val outgoingRingtoneUri: Uri? = null
     )
+    // === MÉTODOS DE AUDIO VIRTUAL ===
+
+    /**
+     * Habilita el procesamiento de audio virtual para inyectar audio personalizado
+     */
+    suspend fun enableVirtualAudio(enable: Boolean) {
+        checkInitialized()
+        log.d(tag = TAG) { "Enabling virtual audio: $enable" }
+        sipCoreManager?.enableVirtualAudio(enable)
+    }
+
+    /**
+     * Inyecta audio personalizado en lugar del micrófono durante una llamada
+     * @param audioData Los datos de audio en formato PCM (16-bit, mono)
+     * @param sampleRate La frecuencia de muestreo (por defecto 16kHz)
+     */
+    fun injectCustomAudio(audioData: ByteArray, sampleRate: Int = 16000) {
+        checkInitialized()
+        sipCoreManager?.injectCustomAudio(audioData, sampleRate)
+    }
+
+    /**
+     * Reproduce audio personalizado en lugar del audio remoto recibido
+     * @param audioData Los datos de audio en formato PCM (16-bit, mono)
+     * @param sampleRate La frecuencia de muestreo (por defecto 16kHz)
+     */
+    fun playCustomAudio(audioData: ByteArray, sampleRate: Int = 16000) {
+        checkInitialized()
+        sipCoreManager?.playCustomAudio(audioData, sampleRate)
+    }
+
+    /**
+     * Inicia la transcripción en tiempo real del audio remoto recibido
+     */
+    fun startRemoteAudioTranscription() {
+        checkInitialized()
+        log.d(tag = TAG) { "Starting remote audio transcription" }
+        sipCoreManager?.startRemoteAudioTranscription()
+    }
+
+    /**
+     * Detiene la transcripción del audio remoto
+     */
+    fun stopRemoteAudioTranscription() {
+        checkInitialized()
+        log.d(tag = TAG) { "Stopping remote audio transcription" }
+        sipCoreManager?.stopRemoteAudioTranscription()
+    }
+
+    /**
+     * Carga un archivo de audio y lo convierte al formato requerido
+     * @param filePath Ruta del archivo de audio
+     * @return ByteArray con los datos de audio en formato PCM
+     */
+    fun loadAudioFile(filePath: String): ByteArray? {
+        return try {
+            // Aquí implementarías la carga y conversión del archivo
+            // Por ahora retorna null, necesitarías usar una librería como FFmpeg
+            log.w(tag = TAG) { "loadAudioFile not implemented yet" }
+            null
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error loading audio file: ${e.message}" }
+            null
+        }
+    }
+
+    /**
+     * Convierte texto a audio usando TTS y lo inyecta
+     * @param text El texto a convertir
+     * @param language El idioma (por defecto español)
+     */
+    fun speakText(text: String, language: String = "es-ES") {
+        checkInitialized()
+        try {
+            // Aquí implementarías TTS
+            log.d(tag = TAG) { "Speaking text: $text" }
+            // Por ahora solo log, necesitarías integrar Android TTS
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error speaking text: ${e.message}" }
+        }
+    }
 
     /**
      * Listener principal para todos los eventos SIP
@@ -75,6 +157,8 @@ class EddysSipLibrary private constructor() {
         fun onDtmfReceived(digit: Char, callInfo: CallInfo) {}
         fun onAudioDeviceChanged(device: AudioDevice) {}
         fun onNetworkStateChanged(isConnected: Boolean) {}
+        fun onRemoteAudioTranscribed(transcribedText: String, callInfo: CallInfo)
+        fun onAudioLevelChanged(level: Float, callInfo: CallInfo)
     }
 
     /**
@@ -1004,11 +1088,13 @@ class EddysSipLibrary private constructor() {
         return sipCoreManager?.webRtcManager?.isMuted() ?: false
     }
 
+    @SuppressLint("MissingPermission")
     fun getAudioDevices(): Pair<List<AudioDevice>, List<AudioDevice>> {
         checkInitialized()
         return sipCoreManager?.webRtcManager?.getAllAudioDevices() ?: Pair(emptyList(), emptyList())
     }
 
+    @SuppressLint("MissingPermission")
     fun changeAudioOutput(device: AudioDevice): Boolean {
         checkInitialized()
         return sipCoreManager?.webRtcManager?.changeAudioOutputDeviceDuringCall(device) ?: false
@@ -1098,7 +1184,20 @@ class EddysSipLibrary private constructor() {
             log.d(tag = TAG) { "EddysSipLibrary disposed" }
         }
     }
-
+    /**
+     * Listener específico para audio virtual
+     */
+    interface VirtualAudioListener {
+        fun onRemoteAudioTranscribed(transcribedText: String, callInfo: CallInfo?)
+        fun onAudioLevelChanged(level: Float, callInfo: CallInfo?)
+        fun onVirtualAudioError(error: String)
+        fun onCallConnected(callInfo: CallInfo) {}
+        fun onCallEnded(callInfo: CallInfo, reason: CallEndReason) {}
+        fun onCallFailed(error: String, callInfo: CallInfo?) {}
+        fun onDtmfReceived(digit: Char, callInfo: CallInfo) {}
+        fun onAudioDeviceChanged(device: AudioDevice) {}
+        fun onNetworkStateChanged(isConnected: Boolean) {}
+    }
     // === INTERFAZ INTERNA DE CALLBACKS ===
 
     internal interface SipCallbacks {
