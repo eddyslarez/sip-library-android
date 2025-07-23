@@ -83,36 +83,30 @@ class SipCoreManager private constructor(
         private val audioTranscriptionCallbacks = mutableListOf<(String) -> Unit>()
         private val audioLevelCallbacks = mutableListOf<(Float) -> Unit>()
 
-    companion object {
-        private const val TAG = "SipCoreManager"
-        private const val WEBSOCKET_PROTOCOL = "sip"
-        private const val REGISTRATION_CHECK_INTERVAL_MS = 30 * 1000L
+        companion object {
+            private const val TAG = "SipCoreManager"
+            private const val WEBSOCKET_PROTOCOL = "sip"
+            private const val REGISTRATION_CHECK_INTERVAL_MS = 30 * 1000L
 
-        fun createInstance(
-            application: Application,
-            config: EddysSipLibrary.SipConfig
-        ): SipCoreManager {
-            return SipCoreManager(
-                application = application,
-                config = config,
-                audioManager = AudioManager(application),
-                windowManager = WindowManager(),
-                platformInfo = PlatformInfo(),
-                settingsDataStore = SettingsDataStore(application)
-            )
+            fun createInstance(
+                application: Application,
+                config: EddysSipLibrary.SipConfig
+            ): SipCoreManager {
+                return SipCoreManager(
+                    application = application,
+                    config = config,
+                    audioManager = AudioManager(application),
+                    windowManager = WindowManager(),
+                    platformInfo = PlatformInfo(),
+                    settingsDataStore = SettingsDataStore(application)
+                )
 
-            override fun onRemoteAudioTranscribed(transcribedText: String) {
-                log.d(tag = TAG) { "Remote audio transcribed: $transcribedText" }
-                notifyAudioTranscription(transcribedText)
-            }
 
-            override fun onAudioLevelChanged(level: Float) {
-                notifyAudioLevel(level)
             }
         }
-    }
 
-    private val messageHandler = SipMessageHandler(this)
+
+        private val messageHandler = SipMessageHandler(this)
 
     fun userAgent(): String = config.userAgent
 
@@ -297,6 +291,15 @@ class SipCoreManager private constructor(
 
             override fun onAudioDeviceChanged(device: AudioDevice?) {
                 log.d(tag = TAG) { "Audio device changed: ${device?.name}" }
+            }
+
+            override fun onRemoteAudioTranscribed(transcribedText: String) {
+                log.d(tag = TAG) { "Remote audio transcribed: $transcribedText" }
+                notifyAudioTranscription(transcribedText)
+            }
+
+            override fun onAudioLevelChanged(level: Float) {
+                notifyAudioLevel(level)
             }
         })
     }
@@ -1471,7 +1474,6 @@ class SipCoreManager private constructor(
     fun removeAudioLevelCallback(callback: (Float) -> Unit) {
         audioLevelCallbacks.remove(callback)
     }
-
     /**
      * Notifica transcripciones de audio a los callbacks
      */
@@ -1497,4 +1499,5 @@ class SipCoreManager private constructor(
             }
         }
     }
+
 }
