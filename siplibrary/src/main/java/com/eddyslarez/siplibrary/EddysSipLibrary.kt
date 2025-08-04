@@ -7,6 +7,7 @@ import com.eddyslarez.siplibrary.data.models.*
 import com.eddyslarez.siplibrary.data.services.audio.AudioDevice
 import com.eddyslarez.siplibrary.utils.CallStateManager
 import com.eddyslarez.siplibrary.utils.RegistrationStateManager
+import com.eddyslarez.siplibrary.utils.PushModeManager
 import com.eddyslarez.siplibrary.utils.log
 import com.eddyslarez.siplibrary.utils.MultiCallManager
 import kotlinx.coroutines.CoroutineScope
@@ -33,6 +34,9 @@ class EddysSipLibrary private constructor() {
     private var callListener: CallListener? = null
     private var incomingCallListener: IncomingCallListener? = null
 
+    // Push Mode Manager
+    private var pushModeManager: PushModeManager? = null
+
     companion object {
         @Volatile
         private var INSTANCE: EddysSipLibrary? = null
@@ -52,6 +56,7 @@ class EddysSipLibrary private constructor() {
         val enableLogs: Boolean = true,
         val enableAutoReconnect: Boolean = true,
         val pingIntervalMs: Long = 30000L,
+        val pushModeConfig: PushModeConfig = PushModeConfig(),
         val incomingRingtoneUri: Uri? = null,
         val outgoingRingtoneUri: Uri? = null
     )
@@ -179,6 +184,10 @@ class EddysSipLibrary private constructor() {
             sipCoreManager = SipCoreManager.createInstance(application, config)
             sipCoreManager?.initialize()
 
+            // Inicializar Push Mode Manager
+            pushModeManager = PushModeManager(config.pushModeConfig)
+            setupPushModeManager()
+
             // Configurar listeners internos
             setupInternalListeners()
 
@@ -197,6 +206,55 @@ class EddysSipLibrary private constructor() {
             log.e(tag = TAG) { "Error initializing library: ${e.message}" }
             throw SipLibraryException("Failed to initialize library", e)
         }
+    }
+
+    private fun setupPushModeManager() {
+        pushModeManager?.setCallbacks(
+            onModeChange = { pushModeState ->
+                log.d(tag = TAG) { "Push mode changed: ${pushModeState.currentMode} (${pushModeState.reason})" }
+
+                // Notificar a listeners si es necesario
+                listeners.forEach { listener ->
+                    try {
+                        // Podrías añadir un método onPushModeChanged al SipEventListener si lo necesitas
+                    } catch (e: Exception) {
+                        log.e(tag = TAG) { "Error in push mode change notification: ${e.message}" }
+                    }
+                }
+            },
+            onRegistrationRequired = { accounts, mode ->
+                log.d(tag = TAG) { "Registration required for ${accounts.size} accounts in $mode mode" }
+
+                // Reregistrar cuentas según el modo
+                accounts.forEach { accountKey ->
+                    val parts = accountKey.split("@")
+                    if (parts.size == 2) {
+                        val username = parts[0]
+                        val domain = parts[1]
+
+                        when (mode) {
+                            PushMode.PUSH -> {
+                                log.d(tag = TAG) { "Switching $accountKey to push mode" }
+                                sipCoreManager?.switchToPushMode(username, domain)
+                            }
+                            PushMode.FOREGROUND -> {
+                                log.d(tag = TAG) { "Switching $accountKey to foreground mode" }
+                                sipCoreManager?.switchToForegroundMode(username, domain)
+                            }
+                            else -> {}
+                        }
+                    }
+                }
+            }
+        )
+
+        // Observar cambios de lifecycle de la aplicación
+        setupAppLifecycleObserver()
+    }
+
+    private fun setupAppLifecycleObserver() {
+        // Este método se conectará con el PlatformRegistration para observar cambios de lifecycle
+        // y notificar al PushModeManager
     }
 
     private fun setupInternalListeners() {
@@ -225,6 +283,11 @@ class EddysSipLibrary private constructor() {
 
                 override fun onIncomingCall(callerNumber: String, callerName: String?) {
                     log.d(tag = TAG) { "Internal callback: onIncomingCall from $callerNumber" }
+
+                    // Notificar al Push Mode Manager
+                    val registeredAccounts = sipCoreManager?.getAllRegisteredAccountKeys() ?: emptySet()
+                    pushModeManager?.onIncomingCallReceived(registeredAccounts)
+
                     val callInfo = createIncomingCallInfoFromCurrentCall(callerNumber, callerName)
                     notifyIncomingCall(callInfo)
                 }
@@ -259,7 +322,14 @@ class EddysSipLibrary private constructor() {
                             CallState.OUTGOING_RINGING -> notifyCallRinging(info)
                             CallState.OUTGOING_INIT -> notifyCallInitiated(info)
                             CallState.INCOMING_RECEIVED -> handleIncomingCall()
-                            CallState.ENDED -> notifyCallEnded(info, CallEndReason.NORMAL_HANGUP)
+                            CallState.ENDED -> {
+                                val reason = mapErrorReasonToCallEndReason(stateInfo.errorReason)
+                                notifyCallEnded(info, reason)
+
+                                // Notificar al Push Mode Manager que la llamada terminó
+                                val registeredAccounts = sipCoreManager?.getAllRegisteredAccountKeys() ?: emptySet()
+                                pushModeManager?.onCallEnded(registeredAccounts)
+                            }
                             CallState.PAUSED -> notifyCallHeld(info)
                             CallState.STREAMS_RUNNING -> notifyCallResumed(info)
                             CallState.ERROR -> {
@@ -1034,6 +1104,81 @@ class EddysSipLibrary private constructor() {
         sipCoreManager?.clearCallLogs()
     }
 
+    // === MÉTODOS DE GESTIÓN DE MODO PUSH ===
+
+    /**
+     * Cambia manualmente a modo push para cuentas específicas
+     */
+    fun switchToPushMode(accounts: Set<String>? = null) {
+        checkInitialized()
+
+        val accountsToSwitch = accounts ?: sipCoreManager?.getAllRegisteredAccountKeys() ?: emptySet()
+        pushModeManager?.switchToPushMode(accountsToSwitch)
+
+        log.d(tag = TAG) { "Manual switch to push mode for ${accountsToSwitch.size} accounts" }
+    }
+
+    /**
+     * Cambia manualmente a modo foreground para cuentas específicas
+     */
+    fun switchToForegroundMode(accounts: Set<String>? = null) {
+        checkInitialized()
+
+        val accountsToSwitch = accounts ?: sipCoreManager?.getAllRegisteredAccountKeys() ?: emptySet()
+        pushModeManager?.switchToForegroundMode(accountsToSwitch)
+
+        log.d(tag = TAG) { "Manual switch to foreground mode for ${accountsToSwitch.size} accounts" }
+    }
+
+    /**
+     * Obtiene el modo push actual
+     */
+    fun getCurrentPushMode(): PushMode {
+        checkInitialized()
+        return pushModeManager?.getCurrentMode() ?: PushMode.FOREGROUND
+    }
+
+    /**
+     * Verifica si está en modo push
+     */
+    fun isInPushMode(): Boolean {
+        checkInitialized()
+        return pushModeManager?.isInPushMode() ?: false
+    }
+
+    /**
+     * Obtiene el estado completo del modo push
+     */
+    fun getPushModeState(): PushModeState {
+        checkInitialized()
+        return pushModeManager?.getCurrentState() ?: PushModeState(
+            currentMode = PushMode.FOREGROUND,
+            previousMode = null,
+            timestamp = System.currentTimeMillis(),
+            reason = "Not initialized"
+        )
+    }
+
+    /**
+     * Flow para observar cambios de modo push
+     */
+    fun getPushModeStateFlow(): Flow<PushModeState> {
+        checkInitialized()
+        return pushModeManager?.pushModeStateFlow ?: flowOf(getPushModeState())
+    }
+
+    /**
+     * Notifica que se recibió una notificación push (para uso interno o externo)
+     */
+    fun onPushNotificationReceived() {
+        checkInitialized()
+
+        val registeredAccounts = sipCoreManager?.getAllRegisteredAccountKeys() ?: emptySet()
+        pushModeManager?.onPushNotificationReceived(registeredAccounts)
+
+        log.d(tag = TAG) { "Push notification received, managing mode transition" }
+    }
+
     fun updatePushToken(token: String, provider: String = "fcm") {
         checkInitialized()
         sipCoreManager?.enterPushMode(token)
@@ -1071,6 +1216,8 @@ class EddysSipLibrary private constructor() {
             appendLine("Registration states: ${getAllRegistrationStates()}")
 
             appendLine("\n--- Active Accounts ---")
+            appendLine("Push Mode: ${getCurrentPushMode()}")
+            appendLine("Push Mode State: ${getPushModeState()}")
             sipCoreManager?.let { manager ->
                 appendLine("Current account: ${manager.getCurrentUsername()}")
                 appendLine("Core manager healthy: ${manager.isSipCoreManagerHealthy()}")
@@ -1090,6 +1237,8 @@ class EddysSipLibrary private constructor() {
             log.d(tag = TAG) { "Disposing EddysSipLibrary" }
             sipCoreManager?.dispose()
             sipCoreManager = null
+            pushModeManager?.dispose()
+            pushModeManager = null
             listeners.clear()
             registrationListener = null
             callListener = null

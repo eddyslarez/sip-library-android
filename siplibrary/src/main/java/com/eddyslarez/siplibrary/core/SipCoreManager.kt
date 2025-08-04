@@ -333,26 +333,55 @@ class SipCoreManager private constructor(
             }
         }
     }
-
+    /**
+     * Configuración mejorada de observadores de lifecycle
+     */
     private fun setupPlatformLifecycleObservers() {
         platformRegistration.setupNotificationObservers(object : AppLifecycleListener {
             override fun onEvent(event: AppLifecycleEvent) {
                 when (event) {
                     AppLifecycleEvent.EnterBackground -> {
-                        isAppInBackground = true
-                        refreshAllRegistrationsWithNewUserAgent()
+                        log.d(tag = TAG) { "App entering background" }
+                        onAppBackgrounded()
+
+                        // Notificar al PushModeManager a través de EddysSipLibrary si es necesario
+                        // Esto se manejaría desde EddysSipLibrary llamando pushModeManager?.onAppBackgrounded()
                     }
 
                     AppLifecycleEvent.EnterForeground -> {
-                        isAppInBackground = false
-                        refreshAllRegistrationsWithNewUserAgent()
+                        log.d(tag = TAG) { "App entering foreground" }
+                        onAppForegrounded()
+
+                        // Notificar al PushModeManager a través de EddysSipLibrary si es necesario
+                        // Esto se manejaría desde EddysSipLibrary llamando pushModeManager?.onAppForegrounded()
                     }
 
-                    else -> {}
+                    else -> {
+                        log.d(tag = TAG) { "Other lifecycle event: $event" }
+                    }
                 }
             }
         })
     }
+//    private fun setupPlatformLifecycleObservers() {
+//        platformRegistration.setupNotificationObservers(object : AppLifecycleListener {
+//            override fun onEvent(event: AppLifecycleEvent) {
+//                when (event) {
+//                    AppLifecycleEvent.EnterBackground -> {
+//                        isAppInBackground = true
+//                        refreshAllRegistrationsWithNewUserAgent()
+//                    }
+//
+//                    AppLifecycleEvent.EnterForeground -> {
+//                        isAppInBackground = false
+//                        refreshAllRegistrationsWithNewUserAgent()
+//                    }
+//
+//                    else -> {}
+//                }
+//            }
+//        })
+//    }
 
     private fun handleWebRtcConnected() {
         callStartTimeMillis = Clock.System.now().toEpochMilliseconds()
@@ -385,15 +414,41 @@ class SipCoreManager private constructor(
         sipCallbacks?.onCallTerminated()
     }
 
+//    private fun refreshAllRegistrationsWithNewUserAgent() {
+//        if (!CallStateManager.getCurrentState().isActive()) {
+//            return
+//        }
+//
+//        activeAccounts.values.forEach { accountInfo ->
+//            if (accountInfo.isRegistered) {
+//                accountInfo.userAgent = userAgent()
+//                messageHandler.sendRegister(accountInfo, isAppInBackground)
+//            }
+//        }
+//    }
+    /**
+     * Actualiza el user agent de todas las cuentas registradas
+     */
     private fun refreshAllRegistrationsWithNewUserAgent() {
-        if (!CallStateManager.getCurrentState().isActive()) {
+        if (CallStateManager.getCurrentState().isActive()) {
+            log.d(tag = TAG) { "Skipping registration refresh - call is active" }
             return
         }
 
         activeAccounts.values.forEach { accountInfo ->
-            if (accountInfo.isRegistered) {
-                accountInfo.userAgent = userAgent()
-                messageHandler.sendRegister(accountInfo, isAppInBackground)
+            if (accountInfo.isRegistered && accountInfo.webSocketClient?.isConnected() == true) {
+                try {
+                    // Actualizar user agent según el estado de la app
+                    accountInfo.userAgent = userAgent()
+
+                    // Re-registrar con nuevo user agent
+                    messageHandler.sendRegister(accountInfo, isAppInBackground)
+
+                    log.d(tag = TAG) { "Refreshed registration for: ${accountInfo.username}@${accountInfo.domain}" }
+
+                } catch (e: Exception) {
+                    log.e(tag = TAG) { "Error refreshing registration for ${accountInfo.username}: ${e.message}" }
+                }
             }
         }
     }
@@ -1383,4 +1438,192 @@ class SipCoreManager private constructor(
     }
 
     fun getMessageHandler(): SipMessageHandler = messageHandler
+
+//nuevas funciones de prueba
+    /**
+     * Cambia una cuenta específica a modo push
+     */
+    fun switchToPushMode(username: String, domain: String) {
+        val accountKey = "$username@$domain"
+        val accountInfo = activeAccounts[accountKey] ?: run {
+            log.w(tag = TAG) { "Account not found for push mode switch: $accountKey" }
+            return
+        }
+
+        if (!accountInfo.isRegistered) {
+            log.w(tag = TAG) { "Account not registered, cannot switch to push mode: $accountKey" }
+            return
+        }
+
+        log.d(tag = TAG) { "Switching account to push mode: $accountKey" }
+
+        try {
+            // Actualizar user agent para modo push
+            val pushUserAgent = "${userAgent()} Push"
+            accountInfo.userAgent = pushUserAgent
+
+            // Re-registrar con nuevo user agent para push
+            messageHandler.sendRegister(accountInfo, true) // true = push mode
+
+            log.d(tag = TAG) { "Account switched to push mode successfully: $accountKey" }
+
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error switching to push mode for $accountKey: ${e.message}" }
+        }
+    }
+
+    /**
+     * Cambia una cuenta específica a modo foreground
+     */
+    fun switchToForegroundMode(username: String, domain: String) {
+        val accountKey = "$username@$domain"
+        val accountInfo = activeAccounts[accountKey] ?: run {
+            log.w(tag = TAG) { "Account not found for foreground mode switch: $accountKey" }
+            return
+        }
+
+        if (!accountInfo.isRegistered) {
+            log.w(tag = TAG) { "Account not registered, cannot switch to foreground mode: $accountKey" }
+            return
+        }
+
+        log.d(tag = TAG) { "Switching account to foreground mode: $accountKey" }
+
+        try {
+            // Actualizar user agent para modo foreground (normal)
+            accountInfo.userAgent = userAgent()
+
+            // Re-registrar con user agent normal
+            messageHandler.sendRegister(accountInfo, false) // false = foreground mode
+
+            log.d(tag = TAG) { "Account switched to foreground mode successfully: $accountKey" }
+
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error switching to foreground mode for $accountKey: ${e.message}" }
+        }
+    }
+
+    /**
+     * Obtiene todas las cuentas registradas en formato "username@domain"
+     */
+    fun getAllRegisteredAccountKeys(): Set<String> {
+        val registeredKeys = mutableSetOf<String>()
+
+        activeAccounts.forEach { (accountKey, accountInfo) ->
+            if (accountInfo.isRegistered) {
+                registeredKeys.add(accountKey)
+            }
+        }
+
+        log.d(tag = TAG) { "Registered accounts: ${registeredKeys.size} - $registeredKeys" }
+        return registeredKeys
+    }
+
+    /**
+     * Obtiene todas las cuentas (registradas y no registradas)
+     */
+    fun getAllAccountKeys(): Set<String> {
+        return activeAccounts.keys.toSet()
+    }
+
+    /**
+     * Verifica si una cuenta específica está registrada
+     */
+    fun isAccountRegistered(username: String, domain: String): Boolean {
+        val accountKey = "$username@$domain"
+        return activeAccounts[accountKey]?.isRegistered ?: false
+    }
+
+    /**
+     * Obtiene información de una cuenta específica
+     */
+    fun getAccountInfo(username: String, domain: String): AccountInfo? {
+        val accountKey = "$username@$domain"
+        return activeAccounts[accountKey]
+    }
+
+
+    /**
+     * Funciones adicionales para integración completa con PushModeManager
+     */
+
+    /**
+     * Notifica que la aplicación pasó a segundo plano
+     */
+    fun onAppBackgrounded() {
+        log.d(tag = TAG) { "App backgrounded - updating all registrations" }
+        isAppInBackground = true
+
+        // Actualizar user agent y re-registrar todas las cuentas activas
+        refreshAllRegistrationsWithNewUserAgent()
+    }
+
+    /**
+     * Notifica que la aplicación pasó a primer plano
+     */
+    fun onAppForegrounded() {
+        log.d(tag = TAG) { "App foregrounded - updating all registrations" }
+        isAppInBackground = false
+
+        // Actualizar user agent y re-registrar todas las cuentas activas
+        refreshAllRegistrationsWithNewUserAgent()
+    }
+
+
+
+    /**
+     * Fuerza el re-registro de todas las cuentas (útil para cambios de push token)
+     */
+    fun forceReregisterAllAccounts() {
+        log.d(tag = TAG) { "Force re-registering all accounts" }
+
+        getAllRegisteredAccountKeys().forEach { accountKey ->
+            val parts = accountKey.split("@")
+            if (parts.size == 2) {
+                val username = parts[0]
+                val domain = parts[1]
+                val accountInfo = activeAccounts[accountKey]
+
+                if (accountInfo != null && accountInfo.isRegistered) {
+                    try {
+                        // Actualizar user agent
+                        accountInfo.userAgent = userAgent()
+
+                        // Re-registrar
+                        messageHandler.sendRegister(accountInfo, isAppInBackground)
+
+                        log.d(tag = TAG) { "Force re-registered: $accountKey" }
+
+                    } catch (e: Exception) {
+                        log.e(tag = TAG) { "Error force re-registering $accountKey: ${e.message}" }
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Actualiza el push token para todas las cuentas registradas
+     */
+    fun updatePushTokenForAllAccounts(newToken: String, provider: String = "fcm") {
+        log.d(tag = TAG) { "Updating push token for all accounts" }
+
+        activeAccounts.values.forEach { accountInfo ->
+            if (accountInfo.isRegistered) {
+                accountInfo.token = newToken
+                accountInfo.provider = provider
+
+                try {
+                    // Re-registrar con nuevo token
+                    messageHandler.sendRegister(accountInfo, isAppInBackground)
+                    log.d(tag = TAG) { "Updated push token for: ${accountInfo.username}@${accountInfo.domain}" }
+
+                } catch (e: Exception) {
+                    log.e(tag = TAG) { "Error updating push token for ${accountInfo.username}: ${e.message}" }
+                }
+            }
+        }
+    }
+
+
 }
