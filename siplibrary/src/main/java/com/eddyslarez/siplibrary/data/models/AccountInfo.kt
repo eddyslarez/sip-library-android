@@ -65,10 +65,12 @@ class AccountInfo(
     var provider: String = ""
 
     /**
-     * Genera un identificador único para requests SIP
+     * Generates a unique identifier for SIP requests
      */
-    fun generateId(): String {
-        return "${Clock.System.now().toEpochMilliseconds()}-${Random.nextInt(100000)}"
+    fun generateCallId(): String {
+        val timestamp = Clock.System.now().toEpochMilliseconds()
+        val randomPart = (1..32).joinToString("") { Random.nextInt(16).toString(16) }
+        return "$randomPart@$domain"
     }
 
     /**

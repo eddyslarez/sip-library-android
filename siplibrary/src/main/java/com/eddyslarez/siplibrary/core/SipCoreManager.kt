@@ -894,14 +894,16 @@ class SipCoreManager private constructor(
                 webRtcManager.setAudioEnabled(true)
                 val sdp = webRtcManager.createOffer()
 
-                val callId = generateId()
+                val callId = accountInfo.generateCallId()
+                val md5Hash = calculateMD5(callId)
                 val callData = CallData(
                     callId = callId,
                     to = phoneNumber,
                     from = accountInfo.username,
                     direction = CallDirections.OUTGOING,
                     inviteFromTag = generateSipTag(),
-                    localSdp = sdp
+                    localSdp = sdp,
+                    md5Hash = md5Hash
                 )
 
                 accountInfo.currentCallData = callData

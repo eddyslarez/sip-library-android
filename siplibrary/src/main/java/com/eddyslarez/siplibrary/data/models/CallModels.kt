@@ -57,7 +57,8 @@ data class CallData(
     var originalCallInviteMessage: String = "",
     var isOnHold: Boolean? = null,
     var lastCSeqValue: Int = 0,
-    var sipName: String = ""
+    var sipName: String = "",
+    val md5Hash: String = "",
 ) : Parcelable {
 
     fun storeInviteMessage(message: String) {

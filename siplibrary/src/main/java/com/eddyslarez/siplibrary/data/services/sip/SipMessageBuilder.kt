@@ -102,6 +102,7 @@ object SipMessageBuilder {
         val target = callData.to
         val uri = "sip:${target}@${accountInfo.domain}"
         val branch = "z9hG4bK${generateId()}"
+        val md5Hash= callData.md5Hash
 
         // Store branch for future reference
         callData.inviteViaBranch = branch
@@ -116,6 +117,11 @@ object SipMessageBuilder {
         builder.append("Call-ID: ${callData.callId}\r\n")
         builder.append("CSeq: ${++accountInfo.cseq} INVITE\r\n")
         builder.append("Contact: <sip:${accountInfo.username}@${accountInfo.domain};transport=ws>\r\n")
+
+
+        if (md5Hash.isNotEmpty()) {
+            builder.append("X-MD5: $md5Hash\r\n")
+        }
 
         if (isAuthenticated && accountInfo.authorizationHeader != null) {
             builder.append("Authorization: ${accountInfo.authorizationHeader}\r\n")
