@@ -147,18 +147,125 @@ class PushModeManager(
     /**
      * Notifica que se recibió una notificación push
      */
-    fun onPushNotificationReceived(registeredAccounts: Set<String>) {
+    fun onPushNotificationReceived(specificAccount: String? = null, allRegisteredAccounts: Set<String> = emptySet()) {
         log.d(tag = TAG) { "Push notification received" }
 
         val currentState = _pushModeStateFlow.value
         
-        // Si estamos en modo push, cambiar a foreground para manejar la notificación
+        // Si estamos en modo push, cambiar a foreground solo la cuenta específica o todas
         if (currentState.currentMode == PushMode.PUSH) {
             wasInPushBeforeCall = true
-            transitionToForeground(registeredAccounts, PushModeReasons.PUSH_NOTIFICATION_RECEIVED)
+            
+            if (specificAccount != null) {
+                // Solo cambiar la cuenta específica a foreground
+                log.d(tag = TAG) { "Switching specific account to foreground: $specificAccount" }
+                transitionSpecificAccountToForeground(specificAccount, PushModeReasons.PUSH_NOTIFICATION_RECEIVED)
+            } else {
+                // Cambiar todas las cuentas (comportamiento anterior)
+                transitionToForeground(allRegisteredAccounts, PushModeReasons.PUSH_NOTIFICATION_RECEIVED)
+            }
         }
     }
 
+    /**
+     * Transición de una cuenta específica a modo foreground
+     */
+    private fun transitionSpecificAccountToForeground(accountKey: String, reason: String) {
+        val currentState = _pushModeStateFlow.value
+        
+        log.d(tag = TAG) { "Transitioning specific account to FOREGROUND: $accountKey, reason: $reason" }
+
+        // Crear nuevo estado manteniendo las otras cuentas en push
+        val updatedAccountsInPush = currentState.accountsInPushMode.toMutableSet()
+        updatedAccountsInPush.remove(accountKey)
+        
+        val newState = PushModeState(
+            currentMode = if (updatedAccountsInPush.isEmpty()) PushMode.FOREGROUND else PushMode.PUSH,
+            previousMode = currentState.currentMode,
+            timestamp = Clock.System.now().toEpochMilliseconds(),
+            reason = reason,
+            accountsInPushMode = updatedAccountsInPush,
+            wasInPushBeforeCall = currentState.wasInPushBeforeCall,
+            specificAccountInForeground = accountKey
+        )
+
+        _pushModeStateFlow.value = newState
+
+        // Notificar que se requiere reregistro solo para la cuenta específica
+        onRegistrationRequiredCallback?.invoke(setOf(accountKey), PushMode.FOREGROUND)
+        onModeChangeCallback?.invoke(newState)
+    }
+
+    /**
+     * Notifica que una llamada terminó para una cuenta específica
+     */
+    fun onCallEndedForAccount(accountKey: String, allRegisteredAccounts: Set<String>) {
+        log.d(tag = TAG) { "Call ended for specific account: $accountKey, was in push before call: $wasInPushBeforeCall" }
+
+        isCallActive = false
+
+        // Si estábamos en modo push antes de la llamada y está configurado para volver
+        if (wasInPushBeforeCall && config.returnToPushAfterCallEnd) {
+            scheduleReturnToPushForSpecificAccount(accountKey)
+        }
+
+        // Reset del flag
+        wasInPushBeforeCall = false
+    }
+
+    /**
+     * Programa retorno a modo push para una cuenta específica después de que termine una llamada
+     */
+    private fun scheduleReturnToPushForSpecificAccount(accountKey: String) {
+        cancelCallEndTransition()
+
+        callEndTransitionJob = scope.launch {
+            try {
+                // Delay más corto para retorno después de llamada
+                val returnDelay = 2000L
+                log.d(tag = TAG) { "Scheduling return to push for account $accountKey in ${returnDelay}ms after call end" }
+                delay(returnDelay)
+                
+                // Verificar que no hay nueva llamada activa
+                if (!isCallActive) {
+                    transitionSpecificAccountToPush(accountKey, PushModeReasons.CALL_ENDED)
+                } else {
+                    log.d(tag = TAG) { "Return to push cancelled for $accountKey - new call is active" }
+                }
+            } catch (e: Exception) {
+                log.e(tag = TAG) { "Error in call end transition for $accountKey: ${e.message}" }
+            }
+        }
+    }
+
+    /**
+     * Transición de una cuenta específica a modo push
+     */
+    private fun transitionSpecificAccountToPush(accountKey: String, reason: String) {
+        val currentState = _pushModeStateFlow.value
+        
+        log.d(tag = TAG) { "Transitioning specific account to PUSH: $accountKey, reason: $reason" }
+
+        // Agregar la cuenta específica al conjunto de cuentas en push
+        val updatedAccountsInPush = currentState.accountsInPushMode.toMutableSet()
+        updatedAccountsInPush.add(accountKey)
+        
+        val newState = PushModeState(
+            currentMode = PushMode.PUSH,
+            previousMode = currentState.currentMode,
+            timestamp = Clock.System.now().toEpochMilliseconds(),
+            reason = reason,
+            accountsInPushMode = updatedAccountsInPush,
+            wasInPushBeforeCall = currentState.wasInPushBeforeCall,
+            specificAccountInForeground = null
+        )
+
+        _pushModeStateFlow.value = newState
+
+        // Notificar que se requiere reregistro en modo push para la cuenta específica
+        onRegistrationRequiredCallback?.invoke(setOf(accountKey), PushMode.PUSH)
+        onModeChangeCallback?.invoke(newState)
+    }
     /**
      * Programa transición a modo push con delay
      */
@@ -305,6 +412,7 @@ class PushModeManager(
             appendLine("Is Call Active: $isCallActive")
             appendLine("Was In Push Before Call: $wasInPushBeforeCall")
             appendLine("Accounts In Push Mode: ${state.accountsInPushMode}")
+            appendLine("Specific Account In Foreground: ${state.specificAccountInForeground}")
             appendLine("Transition Job Active: ${transitionJob?.isActive}")
             appendLine("Call End Job Active: ${callEndTransitionJob?.isActive}")
             appendLine("Auto Transition Delay: ${config.autoTransitionDelay}ms")

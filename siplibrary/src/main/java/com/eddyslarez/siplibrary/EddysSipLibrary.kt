@@ -302,6 +302,12 @@ class EddysSipLibrary private constructor() {
                     val callInfo = getCurrentCallInfo()
                     notifyCallFailed(error, callInfo)
                 }
+                
+                override fun onCallEndedForAccount(accountKey: String) {
+                    log.d(tag = TAG) { "Internal callback: onCallEndedForAccount - $accountKey" }
+                    val registeredAccounts = sipCoreManager?.getAllRegisteredAccountKeys() ?: emptySet()
+                    pushModeManager?.onCallEndedForAccount(accountKey, registeredAccounts)
+                }
             })
 
             // Observar estados usando el nuevo CallStateManager
@@ -1170,13 +1176,59 @@ class EddysSipLibrary private constructor() {
     /**
      * Notifica que se recibió una notificación push (para uso interno o externo)
      */
-    fun onPushNotificationReceived() {
+    fun onPushNotificationReceived(data: Map<String, Any>? = null) {
         checkInitialized()
 
-        val registeredAccounts = sipCoreManager?.getAllRegisteredAccountKeys() ?: emptySet()
-        pushModeManager?.onPushNotificationReceived(registeredAccounts)
+        if (data != null && data["type"] == "call" && data.containsKey("sipName")) {
+            // Notificación push específica para una cuenta
+            val sipName = data["sipName"] as? String
+            val phoneNumber = data["incomingPhoneNumber"] as? String
+            val callId = data["callId"] as? String
+            
+            log.d(tag = TAG) { 
+                "Push notification for specific account: sipName=$sipName, phoneNumber=$phoneNumber, callId=$callId" 
+            }
+            
+            if (sipName != null) {
+                // Buscar la cuenta completa (sipName@domain)
+                val registeredAccounts = sipCoreManager?.getAllRegisteredAccountKeys() ?: emptySet()
+                val specificAccount = registeredAccounts.find { it.startsWith("$sipName@") }
+                
+                if (specificAccount != null) {
+                    log.d(tag = TAG) { "Found specific account for push: $specificAccount" }
+                    pushModeManager?.onPushNotificationReceived(
+                        specificAccount = specificAccount,
+                        allRegisteredAccounts = registeredAccounts
+                    )
+                    
+                    // Preparar para la llamada entrante específica
+                    prepareForIncomingCall(specificAccount, phoneNumber, callId)
+                } else {
+                    log.w(tag = TAG) { "Account not found for sipName: $sipName" }
+                    // Fallback: cambiar todas las cuentas
+                    val allAccounts = sipCoreManager?.getAllRegisteredAccountKeys() ?: emptySet()
+                    pushModeManager?.onPushNotificationReceived(allRegisteredAccounts = allAccounts)
+                }
+            }
+        } else {
+            // Notificación push genérica (comportamiento anterior)
+            val registeredAccounts = sipCoreManager?.getAllRegisteredAccountKeys() ?: emptySet()
+            pushModeManager?.onPushNotificationReceived(allRegisteredAccounts = registeredAccounts)
+        }
 
-        log.d(tag = TAG) { "Push notification received, managing mode transition" }
+        log.d(tag = TAG) { "Push notification processed, managing mode transition" }
+    }
+    
+    /**
+     * Prepara el sistema para una llamada entrante específica
+     */
+    private fun prepareForIncomingCall(accountKey: String, phoneNumber: String?, callId: String?) {
+        log.d(tag = TAG) { "Preparing for incoming call on account: $accountKey" }
+        
+        // Aquí puedes agregar lógica adicional para preparar la llamada entrante
+        // Por ejemplo, pre-configurar el WebRTC, preparar la UI, etc.
+        
+        sipCoreManager?.prepareForIncomingCall(accountKey, phoneNumber, callId)
     }
 
     fun updatePushToken(token: String, provider: String = "fcm") {
@@ -1263,6 +1315,7 @@ class EddysSipLibrary private constructor() {
         fun onIncomingCall(callerNumber: String, callerName: String?) {}
         fun onCallConnected() {}
         fun onCallFailed(error: String) {}
+        fun onCallEndedForAccount(accountKey: String) {}
     }
 
     class SipLibraryException(message: String, cause: Throwable? = null) : Exception(message, cause)

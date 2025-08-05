@@ -38,7 +38,8 @@ data class PushModeState(
     val timestamp: Long,
     val reason: String,
     val accountsInPushMode: Set<String> = emptySet(),
-    val wasInPushBeforeCall: Boolean = false
+    val wasInPushBeforeCall: Boolean = false,
+    val specificAccountInForeground: String? = null // Cuenta específica que está en foreground
 ) : Parcelable
 
 /**
