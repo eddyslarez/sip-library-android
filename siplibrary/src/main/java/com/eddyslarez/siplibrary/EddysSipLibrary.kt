@@ -1375,7 +1375,6 @@ class EddysSipLibrary private constructor() {
         sipName: String,
         phoneNumber: String,
         callId: String? = null,
-        domain: String = "mcn.ru"
     ): String {
         checkInitialized()
 
@@ -1383,16 +1382,15 @@ class EddysSipLibrary private constructor() {
             "=== DEBUGGING: SIMULATING INCOMING CALL PUSH ===" +
                     "\nSIP Name: $sipName" +
                     "\nPhone Number: $phoneNumber" +
-                    "\nCall ID: $callId" +
-                    "\nDomain: $domain"
+                    "\nCall ID: $callId"
         }
 
         // Generar datos de push simulados
         val pushData = pushSimulator.simulateIncomingCallPush(
             sipName = sipName,
             phoneNumber = phoneNumber,
-            callId = callId,
-            domain = domain
+            callId = callId
+
         )
 
         // Procesar la notificación push simulada
@@ -1492,7 +1490,6 @@ class EddysSipLibrary private constructor() {
                 sipName = sipName,
                 phoneNumber = phoneNumber,
                 callId = callId,
-                domain = domain
             )
 
             // Paso 4: Procesar push notification

@@ -14,7 +14,6 @@ class PushNotificationSimulator {
         val incomingPhoneNumber: String,
         val callId: String,
         val timestamp: Long = System.currentTimeMillis(),
-        val domain: String = "mcn.ru"
     )
 
     /**
@@ -24,7 +23,6 @@ class PushNotificationSimulator {
         sipName: String,
         phoneNumber: String,
         callId: String? = null,
-        domain: String = "mcn.ru"
     ): Map<String, Any> {
         val finalCallId = callId ?: generateId()
 
@@ -33,7 +31,6 @@ class PushNotificationSimulator {
             sipName = sipName,
             incomingPhoneNumber = phoneNumber,
             callId = finalCallId,
-            domain = domain
         )
 
         log.d(tag = TAG) {
@@ -42,7 +39,6 @@ class PushNotificationSimulator {
                     "\nSIP Name: ${pushData.sipName}" +
                     "\nPhone Number: ${pushData.incomingPhoneNumber}" +
                     "\nCall ID: ${pushData.callId}" +
-                    "\nDomain: ${pushData.domain}" +
                     "\nTimestamp: ${pushData.timestamp}"
         }
 
@@ -51,7 +47,6 @@ class PushNotificationSimulator {
             "sipName" to pushData.sipName,
             "incomingPhoneNumber" to pushData.incomingPhoneNumber,
             "callId" to pushData.callId,
-            "domain" to pushData.domain,
             "timestamp" to pushData.timestamp
         )
     }
