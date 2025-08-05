@@ -50,6 +50,8 @@ class SipCoreManager private constructor(
     private var isShuttingDown = false
     val callHistoryManager = CallHistoryManager()
 
+    private var lifecycleCallback: ((String) -> Unit)? = null
+
     // Estados de registro por cuenta
     private val _registrationStates = MutableStateFlow<Map<String, RegistrationState>>(emptyMap())
     val registrationStatesFlow: StateFlow<Map<String, RegistrationState>> =
@@ -95,6 +97,11 @@ class SipCoreManager private constructor(
                 settingsDataStore = SettingsDataStore(application)
             )
         }
+    }
+
+    // Método para observar cambios de lifecycle
+    fun observeLifecycleChanges(callback: (String) -> Unit) {
+        this.lifecycleCallback = callback
     }
 
     private val messageHandler = SipMessageHandler(this)
@@ -333,27 +340,34 @@ class SipCoreManager private constructor(
             }
         }
     }
+
     /**
      * Configuración mejorada de observadores de lifecycle
      */
+    // Método mejorado para setup de lifecycle observers
     private fun setupPlatformLifecycleObservers() {
         platformRegistration.setupNotificationObservers(object : AppLifecycleListener {
             override fun onEvent(event: AppLifecycleEvent) {
                 when (event) {
                     AppLifecycleEvent.EnterBackground -> {
                         log.d(tag = TAG) { "App entering background" }
-                        onAppBackgrounded()
+                        isAppInBackground = true
 
-                        // Notificar al PushModeManager a través de EddysSipLibrary si es necesario
-                        // Esto se manejaría desde EddysSipLibrary llamando pushModeManager?.onAppBackgrounded()
+                        // Notificar al callback para EddysSipLibrary
+                        lifecycleCallback?.invoke("APP_BACKGROUNDED")
+
+
+                        onAppBackgrounded()
                     }
 
                     AppLifecycleEvent.EnterForeground -> {
                         log.d(tag = TAG) { "App entering foreground" }
-                        onAppForegrounded()
+                        isAppInBackground = false
 
-                        // Notificar al PushModeManager a través de EddysSipLibrary si es necesario
-                        // Esto se manejaría desde EddysSipLibrary llamando pushModeManager?.onAppForegrounded()
+                        // Notificar al callback para EddysSipLibrary
+                        lifecycleCallback?.invoke("APP_FOREGROUNDED")
+
+                        onAppForegrounded()
                     }
 
                     else -> {
@@ -363,6 +377,33 @@ class SipCoreManager private constructor(
             }
         })
     }
+//    private fun setupPlatformLifecycleObservers() {
+//        platformRegistration.setupNotificationObservers(object : AppLifecycleListener {
+//            override fun onEvent(event: AppLifecycleEvent) {
+//                when (event) {
+//                    AppLifecycleEvent.EnterBackground -> {
+//                        log.d(tag = TAG) { "App entering background" }
+//                        onAppBackgrounded()
+//
+//                        // Notificar al PushModeManager a través de EddysSipLibrary si es necesario
+//                        // Esto se manejaría desde EddysSipLibrary llamando pushModeManager?.onAppBackgrounded()
+//                    }
+//
+//                    AppLifecycleEvent.EnterForeground -> {
+//                        log.d(tag = TAG) { "App entering foreground" }
+//                        onAppForegrounded()
+//
+//                        // Notificar al PushModeManager a través de EddysSipLibrary si es necesario
+//                        // Esto se manejaría desde EddysSipLibrary llamando pushModeManager?.onAppForegrounded()
+//                    }
+//
+//                    else -> {
+//                        log.d(tag = TAG) { "Other lifecycle event: $event" }
+//                    }
+//                }
+//            }
+//        })
+//    }
 //    private fun setupPlatformLifecycleObservers() {
 //        platformRegistration.setupNotificationObservers(object : AppLifecycleListener {
 //            override fun onEvent(event: AppLifecycleEvent) {
@@ -1570,7 +1611,6 @@ class SipCoreManager private constructor(
         // Actualizar user agent y re-registrar todas las cuentas activas
         refreshAllRegistrationsWithNewUserAgent()
     }
-
 
 
     /**

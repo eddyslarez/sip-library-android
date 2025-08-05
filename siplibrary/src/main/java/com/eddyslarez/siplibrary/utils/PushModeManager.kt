@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.datetime.Clock
+import kotlin.coroutines.cancellation.CancellationException
 
 /**
  * Gestor de modo push con transiciones automáticas y manuales
@@ -56,31 +57,77 @@ class PushModeManager(
         this.onModeChangeCallback = onModeChange
         this.onRegistrationRequiredCallback = onRegistrationRequired
     }
-
     /**
      * Notifica que la aplicación pasó a segundo plano
      */
     fun onAppBackgrounded(registeredAccounts: Set<String>) {
-        log.d(tag = TAG) { "App backgrounded with ${registeredAccounts.size} accounts" }
+        log.d(tag = TAG) {
+            "=== APP BACKGROUNDED EVENT ===" +
+                    "\nRegistered accounts: ${registeredAccounts.size}" +
+                    "\nAccounts: $registeredAccounts" +
+                    "\nCurrent mode: ${getCurrentMode()}" +
+                    "\nStrategy: ${config.strategy}" +
+                    "\nIs call active: $isCallActive"
+        }
 
-        if (config.strategy == PushModeStrategy.AUTOMATIC && !isCallActive) {
+        if (config.strategy == PushModeStrategy.AUTOMATIC && !isCallActive && registeredAccounts.isNotEmpty()) {
+            log.d(tag = TAG) { "Conditions met for transition to push mode" }
             scheduleTransitionToPush(registeredAccounts, PushModeReasons.APP_BACKGROUNDED)
+        } else {
+            log.w(tag = TAG) {
+                "Transition to push NOT scheduled:" +
+                        "\n- Strategy: ${config.strategy}" +
+                        "\n- Call active: $isCallActive" +
+                        "\n- Accounts: ${registeredAccounts.size}"
+            }
         }
     }
-
+//    /**
+//     * Notifica que la aplicación pasó a segundo plano
+//     */
+//    fun onAppBackgrounded(registeredAccounts: Set<String>) {
+//        log.d(tag = TAG) { "App backgrounded with ${registeredAccounts.size} accounts" }
+//
+//        if (config.strategy == PushModeStrategy.AUTOMATIC && !isCallActive) {
+//            scheduleTransitionToPush(registeredAccounts, PushModeReasons.APP_BACKGROUNDED)
+//        }
+//    }
     /**
      * Notifica que la aplicación pasó a primer plano
      */
     fun onAppForegrounded(registeredAccounts: Set<String>) {
-        log.d(tag = TAG) { "App foregrounded with ${registeredAccounts.size} accounts" }
+        log.d(tag = TAG) {
+            "=== APP FOREGROUNDED EVENT ===" +
+                    "\nRegistered accounts: ${registeredAccounts.size}" +
+                    "\nAccounts: $registeredAccounts" +
+                    "\nCurrent mode: ${getCurrentMode()}" +
+                    "\nStrategy: ${config.strategy}"
+        }
 
         // Cancelar transición pendiente a push
         cancelPendingTransition()
 
-        if (config.strategy == PushModeStrategy.AUTOMATIC) {
+        if (config.strategy == PushModeStrategy.AUTOMATIC && registeredAccounts.isNotEmpty()) {
+            log.d(tag = TAG) { "Transitioning to foreground mode" }
             transitionToForeground(registeredAccounts, PushModeReasons.APP_FOREGROUNDED)
+        } else {
+            log.w(tag = TAG) { "Transition to foreground NOT executed - strategy: ${config.strategy}" }
         }
     }
+
+//    /**
+//     * Notifica que la aplicación pasó a primer plano
+//     */
+//    fun onAppForegrounded(registeredAccounts: Set<String>) {
+//        log.d(tag = TAG) { "App foregrounded with ${registeredAccounts.size} accounts" }
+//
+//        // Cancelar transición pendiente a push
+//        cancelPendingTransition()
+//
+//        if (config.strategy == PushModeStrategy.AUTOMATIC) {
+//            transitionToForeground(registeredAccounts, PushModeReasons.APP_FOREGROUNDED)
+//        }
+//    }
 
     /**
      * Notifica que se recibió una llamada entrante
@@ -269,20 +316,52 @@ class PushModeManager(
     /**
      * Programa transición a modo push con delay
      */
+//    private fun scheduleTransitionToPush(accounts: Set<String>, reason: String) {
+//        cancelPendingTransition()
+//
+//        transitionJob = scope.launch {
+//            try {
+//                log.d(tag = TAG) { "Scheduling transition to push in ${config.autoTransitionDelay}ms" }
+//                delay(config.autoTransitionDelay)
+//
+//                // Verificar que aún no hay llamada activa
+//                if (!isCallActive) {
+//                    transitionToPush(accounts, reason)
+//                } else {
+//                    log.d(tag = TAG) { "Transition to push cancelled - call is active" }
+//                }
+//            } catch (e: Exception) {
+//                log.e(tag = TAG) { "Error in scheduled transition: ${e.message}" }
+//            }
+//        }
+//    }
+    /**
+     * Programa transición a modo push con delay y logging mejorado
+     */
     private fun scheduleTransitionToPush(accounts: Set<String>, reason: String) {
+        log.d(tag = TAG) { "Scheduling transition to push mode..." }
+
         cancelPendingTransition()
 
         transitionJob = scope.launch {
             try {
-                log.d(tag = TAG) { "Scheduling transition to push in ${config.autoTransitionDelay}ms" }
+                log.d(tag = TAG) {
+                    "Starting transition delay of ${config.autoTransitionDelay}ms" +
+                            "\nReason: $reason" +
+                            "\nAccounts to switch: $accounts"
+                }
+
                 delay(config.autoTransitionDelay)
-                
+
                 // Verificar que aún no hay llamada activa
                 if (!isCallActive) {
+                    log.d(tag = TAG) { "Delay completed, executing transition to push" }
                     transitionToPush(accounts, reason)
                 } else {
-                    log.d(tag = TAG) { "Transition to push cancelled - call is active" }
+                    log.d(tag = TAG) { "Transition to push cancelled - call became active during delay" }
                 }
+            } catch (e: CancellationException) {
+                log.d(tag = TAG) { "Transition to push was cancelled" }
             } catch (e: Exception) {
                 log.e(tag = TAG) { "Error in scheduled transition: ${e.message}" }
             }
@@ -314,18 +393,26 @@ class PushModeManager(
         }
     }
 
+
     /**
-     * Transición inmediata a modo push
+     * Transición inmediata a modo push con logging detallado
      */
     private fun transitionToPush(accounts: Set<String>, reason: String) {
         val currentState = _pushModeStateFlow.value
-        
+
+        log.d(tag = TAG) {
+            "=== EXECUTING TRANSITION TO PUSH ===" +
+                    "\nFrom mode: ${currentState.currentMode}" +
+                    "\nReason: $reason" +
+                    "\nAccounts: $accounts" +
+                    "\nCallback set: ${onRegistrationRequiredCallback != null}" +
+                    "\nMode change callback set: ${onModeChangeCallback != null}"
+        }
+
         if (currentState.currentMode == PushMode.PUSH) {
             log.d(tag = TAG) { "Already in push mode, ignoring transition" }
             return
         }
-
-        log.d(tag = TAG) { "Transitioning to PUSH mode: $reason" }
 
         val newState = PushModeState(
             currentMode = PushMode.PUSH,
@@ -338,23 +425,65 @@ class PushModeManager(
 
         _pushModeStateFlow.value = newState
 
-        // Notificar que se requiere reregistro en modo push
-        onRegistrationRequiredCallback?.invoke(accounts, PushMode.PUSH)
-        onModeChangeCallback?.invoke(newState)
+        log.d(tag = TAG) { "Push mode state updated successfully" }
+
+        // Notificar callbacks
+        try {
+            log.d(tag = TAG) { "Calling registration required callback for ${accounts.size} accounts" }
+            onRegistrationRequiredCallback?.invoke(accounts, PushMode.PUSH)
+
+            log.d(tag = TAG) { "Calling mode change callback" }
+            onModeChangeCallback?.invoke(newState)
+
+            log.d(tag = TAG) { "=== TRANSITION TO PUSH COMPLETED ===" }
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error in transition callbacks: ${e.message}" }
+        }
     }
 
+//    private fun transitionToPush(accounts: Set<String>, reason: String) {
+//        val currentState = _pushModeStateFlow.value
+//
+//        if (currentState.currentMode == PushMode.PUSH) {
+//            log.d(tag = TAG) { "Already in push mode, ignoring transition" }
+//            return
+//        }
+//
+//        log.d(tag = TAG) { "Transitioning to PUSH mode: $reason" }
+//
+//        val newState = PushModeState(
+//            currentMode = PushMode.PUSH,
+//            previousMode = currentState.currentMode,
+//            timestamp = Clock.System.now().toEpochMilliseconds(),
+//            reason = reason,
+//            accountsInPushMode = accounts,
+//            wasInPushBeforeCall = currentState.wasInPushBeforeCall
+//        )
+//
+//        _pushModeStateFlow.value = newState
+//
+//        // Notificar que se requiere reregistro en modo push
+//        onRegistrationRequiredCallback?.invoke(accounts, PushMode.PUSH)
+//        onModeChangeCallback?.invoke(newState)
+//    }
+
     /**
-     * Transición inmediata a modo foreground
+     * Transición inmediata a modo foreground con logging detallado
      */
     private fun transitionToForeground(accounts: Set<String>, reason: String) {
         val currentState = _pushModeStateFlow.value
-        
+
+        log.d(tag = TAG) {
+            "=== EXECUTING TRANSITION TO FOREGROUND ===" +
+                    "\nFrom mode: ${currentState.currentMode}" +
+                    "\nReason: $reason" +
+                    "\nAccounts: $accounts"
+        }
+
         if (currentState.currentMode == PushMode.FOREGROUND) {
             log.d(tag = TAG) { "Already in foreground mode, ignoring transition" }
             return
         }
-
-        log.d(tag = TAG) { "Transitioning to FOREGROUND mode: $reason" }
 
         val newState = PushModeState(
             currentMode = PushMode.FOREGROUND,
@@ -367,10 +496,50 @@ class PushModeManager(
 
         _pushModeStateFlow.value = newState
 
-        // Notificar que se requiere reregistro en modo foreground
-        onRegistrationRequiredCallback?.invoke(accounts, PushMode.FOREGROUND)
-        onModeChangeCallback?.invoke(newState)
+        log.d(tag = TAG) { "Foreground mode state updated successfully" }
+
+        // Notificar callbacks
+        try {
+            log.d(tag = TAG) { "Calling registration required callback for ${accounts.size} accounts" }
+            onRegistrationRequiredCallback?.invoke(accounts, PushMode.FOREGROUND)
+
+            log.d(tag = TAG) { "Calling mode change callback" }
+            onModeChangeCallback?.invoke(newState)
+
+            log.d(tag = TAG) { "=== TRANSITION TO FOREGROUND COMPLETED ===" }
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error in transition callbacks: ${e.message}" }
+        }
     }
+
+    /**
+     * Transición inmediata a modo foreground
+     */
+//    private fun transitionToForeground(accounts: Set<String>, reason: String) {
+//        val currentState = _pushModeStateFlow.value
+//
+//        if (currentState.currentMode == PushMode.FOREGROUND) {
+//            log.d(tag = TAG) { "Already in foreground mode, ignoring transition" }
+//            return
+//        }
+//
+//        log.d(tag = TAG) { "Transitioning to FOREGROUND mode: $reason" }
+//
+//        val newState = PushModeState(
+//            currentMode = PushMode.FOREGROUND,
+//            previousMode = currentState.currentMode,
+//            timestamp = Clock.System.now().toEpochMilliseconds(),
+//            reason = reason,
+//            accountsInPushMode = emptySet(),
+//            wasInPushBeforeCall = currentState.wasInPushBeforeCall
+//        )
+//
+//        _pushModeStateFlow.value = newState
+//
+//        // Notificar que se requiere reregistro en modo foreground
+//        onRegistrationRequiredCallback?.invoke(accounts, PushMode.FOREGROUND)
+//        onModeChangeCallback?.invoke(newState)
+//    }
 
     /**
      * Cancela transición pendiente

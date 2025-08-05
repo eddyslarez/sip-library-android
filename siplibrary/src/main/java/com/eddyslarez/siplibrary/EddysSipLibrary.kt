@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
 import android.net.Uri
+import com.eddyslarez.siplibrary.utils.PushNotificationSimulator
 
 /**
  * EddysSipLibrary - Biblioteca SIP/VoIP para Android (Versión Optimizada)
@@ -33,6 +34,7 @@ class EddysSipLibrary private constructor() {
     private var registrationListener: RegistrationListener? = null
     private var callListener: CallListener? = null
     private var incomingCallListener: IncomingCallListener? = null
+    private val pushSimulator = PushNotificationSimulator()
 
     // Push Mode Manager
     private var pushModeManager: PushModeManager? = null
@@ -253,9 +255,30 @@ class EddysSipLibrary private constructor() {
     }
 
     private fun setupAppLifecycleObserver() {
-        // Este método se conectará con el PlatformRegistration para observar cambios de lifecycle
+        // Conectar con el PlatformRegistration para observar cambios de lifecycle
         // y notificar al PushModeManager
+        CoroutineScope(Dispatchers.Main).launch {
+            // Observar estados de lifecycle desde SipCoreManager
+            sipCoreManager?.let { manager ->
+                // Configurar observer para cambios de lifecycle
+                manager.observeLifecycleChanges { event ->
+                    val registeredAccounts = manager.getAllRegisteredAccountKeys()
+
+                    when (event) {
+                        "APP_BACKGROUNDED" -> {
+                            log.d(tag = TAG) { "App backgrounded - notifying PushModeManager" }
+                            pushModeManager?.onAppBackgrounded(registeredAccounts)
+                        }
+                        "APP_FOREGROUNDED" -> {
+                            log.d(tag = TAG) { "App foregrounded - notifying PushModeManager" }
+                            pushModeManager?.onAppForegrounded(registeredAccounts)
+                        }
+                    }
+                }
+            }
+        }
     }
+
 
     private fun setupInternalListeners() {
         sipCoreManager?.let { manager ->
@@ -1218,7 +1241,32 @@ class EddysSipLibrary private constructor() {
 
         log.d(tag = TAG) { "Push notification processed, managing mode transition" }
     }
-    
+
+    fun diagnosePushMode(): String {
+        return buildString {
+            appendLine("=== PUSH MODE DIAGNOSTIC ===")
+            appendLine("Push Mode Manager: ${pushModeManager != null}")
+            appendLine("SipCore Manager: ${sipCoreManager != null}")
+
+            pushModeManager?.let { pm ->
+                appendLine("\n--- Push Mode State ---")
+                appendLine(pm.getDiagnosticInfo())
+            }
+
+            sipCoreManager?.let { sm ->
+                appendLine("\n--- Registered Accounts ---")
+                val accounts = sm.getAllRegisteredAccountKeys()
+                appendLine("Count: ${accounts.size}")
+                accounts.forEach { account ->
+                    appendLine("- $account")
+                }
+
+                appendLine("\n--- App State ---")
+                appendLine("Is in background: ${sm.isAppInBackground}")
+            }
+        }
+    }
+
 //    /**
 //     * Prepara el sistema para una llamada entrante específica
 //     */
@@ -1316,4 +1364,198 @@ class EddysSipLibrary private constructor() {
     }
 
     class SipLibraryException(message: String, cause: Throwable? = null) : Exception(message, cause)
+
+
+    ////// métodos de debugging ///////
+
+    /**
+     * SOLO PARA DEBUGGING: Simula recibir una notificación push de llamada entrante
+     */
+    fun simulateIncomingCallPush(
+        sipName: String,
+        phoneNumber: String,
+        callId: String? = null,
+        domain: String = "mcn.ru"
+    ): String {
+        checkInitialized()
+
+        log.d(tag = TAG) {
+            "=== DEBUGGING: SIMULATING INCOMING CALL PUSH ===" +
+                    "\nSIP Name: $sipName" +
+                    "\nPhone Number: $phoneNumber" +
+                    "\nCall ID: $callId" +
+                    "\nDomain: $domain"
+        }
+
+        // Generar datos de push simulados
+        val pushData = pushSimulator.simulateIncomingCallPush(
+            sipName = sipName,
+            phoneNumber = phoneNumber,
+            callId = callId,
+            domain = domain
+        )
+
+        // Procesar la notificación push simulada
+        onPushNotificationReceived(pushData)
+
+        val result = buildString {
+            appendLine("=== PUSH SIMULATION COMPLETED ===")
+            appendLine("Generated Push Data:")
+            pushData.forEach { (key, value) ->
+                appendLine("  $key: $value")
+            }
+            appendLine("\nPush Mode State After Processing:")
+            appendLine(getPushModeState().toString())
+            appendLine("\nRegistered Accounts:")
+            getAllRegistrationStates().forEach { (account, state) ->
+                appendLine("  $account: $state")
+            }
+        }
+
+        log.d(tag = TAG) { result }
+        return result
+    }
+
+    /**
+     * SOLO PARA DEBUGGING: Simula recibir una notificación push genérica
+     */
+    fun simulateGenericPush(
+        type: String = "generic",
+        additionalData: Map<String, Any> = emptyMap()
+    ): String {
+        checkInitialized()
+
+        log.d(tag = TAG) {
+            "=== DEBUGGING: SIMULATING GENERIC PUSH ===" +
+                    "\nType: $type" +
+                    "\nAdditional Data: $additionalData"
+        }
+
+        val pushData = pushSimulator.simulateGenericPush(type, additionalData)
+
+        // Procesar la notificación push simulada
+        onPushNotificationReceived(pushData)
+
+        val result = buildString {
+            appendLine("=== GENERIC PUSH SIMULATION COMPLETED ===")
+            appendLine("Generated Push Data:")
+            pushData.forEach { (key, value) ->
+                appendLine("  $key: $value")
+            }
+            appendLine("\nPush Mode State After Processing:")
+            appendLine(getPushModeState().toString())
+        }
+
+        log.d(tag = TAG) { result }
+        return result
+    }
+
+    /**
+     * SOLO PARA DEBUGGING: Simula el flujo completo de una llamada entrante via push
+     */
+    fun simulateCompleteIncomingCallFlow(
+        sipName: String,
+        phoneNumber: String,
+        domain: String = "mcn.ru"
+    ): String {
+        checkInitialized()
+
+        val accountKey = "$sipName@$domain"
+        val callId = generateCallId()
+
+        log.d(tag = TAG) {
+            "=== DEBUGGING: SIMULATING COMPLETE INCOMING CALL FLOW ===" +
+                    "\nAccount: $accountKey" +
+                    "\nPhone Number: $phoneNumber" +
+                    "\nCall ID: $callId"
+        }
+
+        val steps = mutableListOf<String>()
+
+        try {
+            // Paso 1: Verificar que la cuenta esté registrada
+            val registrationState = getRegistrationState(sipName, domain)
+            steps.add("Step 1: Account registration check - $registrationState")
+
+            if (registrationState != RegistrationState.OK) {
+                steps.add("ERROR: Account not registered, cannot simulate call")
+                return steps.joinToString("\n")
+            }
+
+            // Paso 2: Verificar modo push actual
+            val currentMode = getCurrentPushMode()
+            steps.add("Step 2: Current push mode - $currentMode")
+
+            // Paso 3: Simular notificación push
+            steps.add("Step 3: Simulating push notification...")
+            val pushData = pushSimulator.simulateIncomingCallPush(
+                sipName = sipName,
+                phoneNumber = phoneNumber,
+                callId = callId,
+                domain = domain
+            )
+
+            // Paso 4: Procesar push notification
+            steps.add("Step 4: Processing push notification...")
+            onPushNotificationReceived(pushData)
+
+            // Paso 5: Verificar cambio de modo
+            val newMode = getCurrentPushMode()
+            steps.add("Step 5: Push mode after notification - $newMode")
+
+            // Paso 6: Simular llamada entrante real (opcional)
+            steps.add("Step 6: Ready to receive actual incoming call")
+            steps.add("  - Account switched to foreground mode: ${newMode == PushMode.FOREGROUND}")
+            steps.add("  - SIP registration refreshed for account: $accountKey")
+
+            // Información final
+            steps.add("\n=== SIMULATION SUMMARY ===")
+            steps.add("Account: $accountKey")
+            steps.add("Phone Number: $phoneNumber")
+            steps.add("Call ID: $callId")
+            steps.add("Mode Transition: $currentMode -> $newMode")
+            steps.add("Ready for incoming call: ${newMode == PushMode.FOREGROUND}")
+
+        } catch (e: Exception) {
+            steps.add("ERROR in simulation: ${e.message}")
+            log.e(tag = TAG) { "Error in complete call flow simulation: ${e.message}" }
+        }
+
+        val result = steps.joinToString("\n")
+        log.d(tag = TAG) { result }
+        return result
+    }
+
+    /**
+     * SOLO PARA DEBUGGING: Obtiene información detallada del estado de push
+     */
+    fun getDetailedPushState(): String {
+        checkInitialized()
+
+        return buildString {
+            appendLine("=== DETAILED PUSH STATE ===")
+            appendLine("Current Push Mode: ${getCurrentPushMode()}")
+            appendLine("Is In Push Mode: ${isInPushMode()}")
+
+            val pushState = getPushModeState()
+            appendLine("\n--- Push Mode State Details ---")
+            appendLine("Current Mode: ${pushState.currentMode}")
+            appendLine("Previous Mode: ${pushState.previousMode}")
+            appendLine("Reason: ${pushState.reason}")
+            appendLine("Timestamp: ${pushState.timestamp}")
+            appendLine("Accounts In Push: ${pushState.accountsInPushMode}")
+            appendLine("Was In Push Before Call: ${pushState.wasInPushBeforeCall}")
+            appendLine("Specific Account In Foreground: ${pushState.specificAccountInForeground}")
+
+            appendLine("\n--- Registered Accounts ---")
+            getAllRegistrationStates().forEach { (account, state) ->
+                appendLine("$account: $state")
+            }
+
+            appendLine("\n--- Push Mode Manager Diagnostic ---")
+            pushModeManager?.let { pm ->
+                appendLine(pm.getDiagnosticInfo())
+            } ?: appendLine("Push Mode Manager not initialized")
+        }
+    }
 }
