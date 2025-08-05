@@ -1201,8 +1201,8 @@ class EddysSipLibrary private constructor() {
                         allRegisteredAccounts = registeredAccounts
                     )
                     
-                    // Preparar para la llamada entrante específica
-                    prepareForIncomingCall(specificAccount, phoneNumber, callId)
+//                    // Preparar para la llamada entrante específica
+//                    prepareForIncomingCall(specificAccount, phoneNumber, callId)
                 } else {
                     log.w(tag = TAG) { "Account not found for sipName: $sipName" }
                     // Fallback: cambiar todas las cuentas
@@ -1219,17 +1219,14 @@ class EddysSipLibrary private constructor() {
         log.d(tag = TAG) { "Push notification processed, managing mode transition" }
     }
     
-    /**
-     * Prepara el sistema para una llamada entrante específica
-     */
-    private fun prepareForIncomingCall(accountKey: String, phoneNumber: String?, callId: String?) {
-        log.d(tag = TAG) { "Preparing for incoming call on account: $accountKey" }
-        
-        // Aquí puedes agregar lógica adicional para preparar la llamada entrante
-        // Por ejemplo, pre-configurar el WebRTC, preparar la UI, etc.
-        
-        sipCoreManager?.prepareForIncomingCall(accountKey, phoneNumber, callId)
-    }
+//    /**
+//     * Prepara el sistema para una llamada entrante específica
+//     */
+//    private fun prepareForIncomingCall(accountKey: String, phoneNumber: String?, callId: String?) {
+//        log.d(tag = TAG) { "Preparing for incoming call on account: $accountKey" }
+//
+//        sipCoreManager?.prepareForIncomingCall(accountKey, phoneNumber, callId)
+//    }
 
     fun updatePushToken(token: String, provider: String = "fcm") {
         checkInitialized()
