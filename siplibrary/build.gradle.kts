@@ -1,7 +1,7 @@
 plugins {
     id("com.android.library")
     id("org.jetbrains.kotlin.android")
-    id("kotlin-kapt")
+    id("com.google.devtools.ksp") version "2.1.10-1.0.29" // Reemplaza kotlin-kapt
     id("kotlin-parcelize")
     id("maven-publish")
     id("org.jetbrains.kotlin.plugin.serialization")
@@ -37,7 +37,6 @@ android {
     kotlinOptions {
         jvmTarget = "11"
     }
-
 }
 
 dependencies {
@@ -52,17 +51,18 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-datetime:0.6.1")
     implementation("androidx.datastore:datastore-preferences:1.1.7")
     implementation("androidx.bluetooth:bluetooth:1.0.0-alpha02")
-    
-    // Room Database
+
+    // Room Database - Cambia kapt por ksp
     implementation("androidx.room:room-runtime:2.6.1")
     implementation("androidx.room:room-ktx:2.6.1")
-    kapt("androidx.room:room-compiler:2.6.1")
-    
+    ksp("androidx.room:room-compiler:2.6.1") // ← Cambio aquí
+
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.6.1")
 }
 
+// Resto del código igual...
 publishing {
     publications {
         register<MavenPublication>("release") {
