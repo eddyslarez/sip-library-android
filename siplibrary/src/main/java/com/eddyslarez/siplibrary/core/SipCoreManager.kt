@@ -57,7 +57,7 @@ class SipCoreManager private constructor(
     val registrationStatesFlow: StateFlow<Map<String, RegistrationState>> =
         _registrationStates.asStateFlow()
 
-    private val activeAccounts = HashMap<String, AccountInfo>()
+    val activeAccounts = HashMap<String, AccountInfo>()
     var callStartTimeMillis: Long = 0
     var currentAccountInfo: AccountInfo? = null
     var isAppInBackground = false

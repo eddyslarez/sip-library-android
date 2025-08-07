@@ -16,6 +16,13 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
 import android.net.Uri
+import com.eddyslarez.siplibrary.data.database.DatabaseAutoIntegration
+import com.eddyslarez.siplibrary.data.database.DatabaseManager
+import com.eddyslarez.siplibrary.data.database.entities.ContactEntity
+import com.eddyslarez.siplibrary.data.database.entities.SipAccountEntity
+import com.eddyslarez.siplibrary.data.database.repository.CallLogWithContact
+import com.eddyslarez.siplibrary.data.database.repository.GeneralStatistics
+import com.eddyslarez.siplibrary.data.database.setupDatabaseIntegration
 import com.eddyslarez.siplibrary.utils.PushNotificationSimulator
 
 /**
@@ -35,6 +42,8 @@ class EddysSipLibrary private constructor() {
     private var callListener: CallListener? = null
     private var incomingCallListener: IncomingCallListener? = null
     private val pushSimulator = PushNotificationSimulator()
+    private var databaseIntegration: DatabaseAutoIntegration? = null
+    private var databaseManager: DatabaseManager? = null
 
     // Push Mode Manager
     private var pushModeManager: PushModeManager? = null
@@ -172,7 +181,8 @@ class EddysSipLibrary private constructor() {
 
     fun initialize(
         application: Application,
-        config: SipConfig = SipConfig()
+        config: SipConfig = SipConfig(),
+        enableDatabase: Boolean = true
     ) {
         if (isInitialized) {
             log.w(tag = TAG) { "Library already initialized" }
@@ -185,6 +195,10 @@ class EddysSipLibrary private constructor() {
             this.config = config
             sipCoreManager = SipCoreManager.createInstance(application, config)
             sipCoreManager?.initialize()
+
+            if (enableDatabase) {
+                setupDatabaseIntegration(application)
+            }
 
             // Inicializar Push Mode Manager
             pushModeManager = PushModeManager(config.pushModeConfig)
@@ -239,10 +253,12 @@ class EddysSipLibrary private constructor() {
                                 log.d(tag = TAG) { "Switching $accountKey to push mode" }
                                 sipCoreManager?.switchToPushMode(username, domain)
                             }
+
                             PushMode.FOREGROUND -> {
                                 log.d(tag = TAG) { "Switching $accountKey to foreground mode" }
                                 sipCoreManager?.switchToForegroundMode(username, domain)
                             }
+
                             else -> {}
                         }
                     }
@@ -269,6 +285,7 @@ class EddysSipLibrary private constructor() {
                             log.d(tag = TAG) { "App backgrounded - notifying PushModeManager" }
                             pushModeManager?.onAppBackgrounded(registeredAccounts)
                         }
+
                         "APP_FOREGROUNDED" -> {
                             log.d(tag = TAG) { "App foregrounded - notifying PushModeManager" }
                             pushModeManager?.onAppForegrounded(registeredAccounts)
@@ -308,7 +325,8 @@ class EddysSipLibrary private constructor() {
                     log.d(tag = TAG) { "Internal callback: onIncomingCall from $callerNumber" }
 
                     // Notificar al Push Mode Manager
-                    val registeredAccounts = sipCoreManager?.getAllRegisteredAccountKeys() ?: emptySet()
+                    val registeredAccounts =
+                        sipCoreManager?.getAllRegisteredAccountKeys() ?: emptySet()
                     pushModeManager?.onIncomingCallReceived(registeredAccounts)
 
                     val callInfo = createIncomingCallInfoFromCurrentCall(callerNumber, callerName)
@@ -325,10 +343,11 @@ class EddysSipLibrary private constructor() {
                     val callInfo = getCurrentCallInfo()
                     notifyCallFailed(error, callInfo)
                 }
-                
+
                 override fun onCallEndedForAccount(accountKey: String) {
                     log.d(tag = TAG) { "Internal callback: onCallEndedForAccount - $accountKey" }
-                    val registeredAccounts = sipCoreManager?.getAllRegisteredAccountKeys() ?: emptySet()
+                    val registeredAccounts =
+                        sipCoreManager?.getAllRegisteredAccountKeys() ?: emptySet()
                     pushModeManager?.onCallEndedForAccount(accountKey, registeredAccounts)
                 }
             })
@@ -356,9 +375,11 @@ class EddysSipLibrary private constructor() {
                                 notifyCallEnded(info, reason)
 
                                 // Notificar al Push Mode Manager que la llamada terminó
-                                val registeredAccounts = sipCoreManager?.getAllRegisteredAccountKeys() ?: emptySet()
+                                val registeredAccounts =
+                                    sipCoreManager?.getAllRegisteredAccountKeys() ?: emptySet()
                                 pushModeManager?.onCallEnded(registeredAccounts)
                             }
+
                             CallState.PAUSED -> notifyCallHeld(info)
                             CallState.STREAMS_RUNNING -> notifyCallResumed(info)
                             CallState.ERROR -> {
@@ -1047,6 +1068,7 @@ class EddysSipLibrary private constructor() {
             }
         }
     }
+
     /**
      * Fuerza la limpieza de llamadas terminadas
      */
@@ -1141,7 +1163,8 @@ class EddysSipLibrary private constructor() {
     fun switchToPushMode(accounts: Set<String>? = null) {
         checkInitialized()
 
-        val accountsToSwitch = accounts ?: sipCoreManager?.getAllRegisteredAccountKeys() ?: emptySet()
+        val accountsToSwitch =
+            accounts ?: sipCoreManager?.getAllRegisteredAccountKeys() ?: emptySet()
         pushModeManager?.switchToPushMode(accountsToSwitch)
 
         log.d(tag = TAG) { "Manual switch to push mode for ${accountsToSwitch.size} accounts" }
@@ -1153,7 +1176,8 @@ class EddysSipLibrary private constructor() {
     fun switchToForegroundMode(accounts: Set<String>? = null) {
         checkInitialized()
 
-        val accountsToSwitch = accounts ?: sipCoreManager?.getAllRegisteredAccountKeys() ?: emptySet()
+        val accountsToSwitch =
+            accounts ?: sipCoreManager?.getAllRegisteredAccountKeys() ?: emptySet()
         pushModeManager?.switchToForegroundMode(accountsToSwitch)
 
         log.d(tag = TAG) { "Manual switch to foreground mode for ${accountsToSwitch.size} accounts" }
@@ -1207,23 +1231,23 @@ class EddysSipLibrary private constructor() {
             val sipName = data["sipName"] as? String
             val phoneNumber = data["incomingPhoneNumber"] as? String
             val callId = data["callId"] as? String
-            
-            log.d(tag = TAG) { 
-                "Push notification for specific account: sipName=$sipName, phoneNumber=$phoneNumber, callId=$callId" 
+
+            log.d(tag = TAG) {
+                "Push notification for specific account: sipName=$sipName, phoneNumber=$phoneNumber, callId=$callId"
             }
-            
+
             if (sipName != null) {
                 // Buscar la cuenta completa (sipName@domain)
                 val registeredAccounts = sipCoreManager?.getAllRegisteredAccountKeys() ?: emptySet()
                 val specificAccount = registeredAccounts.find { it.startsWith("$sipName@") }
-                
+
                 if (specificAccount != null) {
                     log.d(tag = TAG) { "Found specific account for push: $specificAccount" }
                     pushModeManager?.onPushNotificationReceived(
                         specificAccount = specificAccount,
                         allRegisteredAccounts = registeredAccounts
                     )
-                    
+
 //                    // Preparar para la llamada entrante específica
 //                    prepareForIncomingCall(specificAccount, phoneNumber, callId)
                 } else {
@@ -1337,6 +1361,13 @@ class EddysSipLibrary private constructor() {
             pushModeManager?.dispose()
             pushModeManager = null
             listeners.clear()
+//            // Limpiar integración de base de datos
+//            databaseIntegration?.dispose()
+//            databaseIntegration = null
+//
+//            // Cerrar base de datos si es necesario
+//            databaseManager?.closeDatabase()
+//            databaseManager = null
             registrationListener = null
             callListener = null
             incomingCallListener = null
@@ -1553,6 +1584,180 @@ class EddysSipLibrary private constructor() {
             pushModeManager?.let { pm ->
                 appendLine(pm.getDiagnosticInfo())
             } ?: appendLine("Push Mode Manager not initialized")
+        }
+    }
+
+    ///////////base de datos //////
+
+    private fun setupDatabaseIntegration(application: Application) {
+        try {
+            databaseManager = DatabaseManager.getInstance(application)
+            sipCoreManager?.let { coreManager ->
+                databaseIntegration = coreManager.setupDatabaseIntegration(application)
+                log.d(tag = TAG) { "Database integration initialized successfully" }
+            }
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error setting up database integration: ${e.message}" }
+            // Continuar sin base de datos si falla
+        }
+    }
+
+    // === NUEVOS MÉTODOS PÚBLICOS PARA BD ===
+
+    /**
+     * Obtiene el manager de base de datos (si está habilitado)
+     */
+    fun getDatabaseManager(): DatabaseManager? {
+        checkInitialized()
+        return databaseManager
+    }
+
+    /**
+     * Obtiene historial de llamadas desde la base de datos
+     */
+    fun getCallHistoryFromDB(limit: Int = 50): Flow<List<CallLogWithContact>>? {
+        checkInitialized()
+        return databaseManager?.getRecentCallLogs(limit)
+    }
+
+    /**
+     * Busca en historial de llamadas
+     */
+    fun searchCallHistoryFromDB(query: String): Flow<List<CallLogWithContact>>? {
+        checkInitialized()
+        return databaseManager?.searchCallLogs(query)
+    }
+
+    /**
+     * Obtiene contactos desde la base de datos
+     */
+    fun getContactsFromDB(): Flow<List<ContactEntity>>? {
+        checkInitialized()
+        return databaseManager?.getAllContacts()
+    }
+
+    /**
+     * Busca contactos en la base de datos
+     */
+    fun searchContactsFromDB(query: String): Flow<List<ContactEntity>>? {
+        checkInitialized()
+        return databaseManager?.searchContacts(query)
+    }
+
+    /**
+     * Obtiene cuentas SIP desde la base de datos
+     */
+    fun getSipAccountsFromDB(): Flow<List<SipAccountEntity>>? {
+        checkInitialized()
+        return databaseManager?.getActiveSipAccounts()
+    }
+
+    /**
+     * Obtiene estadísticas generales desde la base de datos
+     */
+    suspend fun getStatisticsFromDB(): GeneralStatistics? {
+        checkInitialized()
+        return try {
+            databaseManager?.getGeneralStatistics()
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error getting statistics: ${e.message}" }
+            null
+        }
+    }
+
+    /**
+     * Crea o actualiza un contacto en la base de datos
+     */
+    suspend fun createOrUpdateContactInDB(
+        phoneNumber: String,
+        displayName: String,
+        firstName: String? = null,
+        lastName: String? = null,
+        email: String? = null,
+        company: String? = null
+    ): ContactEntity? {
+        checkInitialized()
+        return try {
+            databaseManager?.createOrUpdateContact(
+                phoneNumber = phoneNumber,
+                displayName = displayName,
+                firstName = firstName,
+                lastName = lastName,
+                email = email,
+                company = company
+            )
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error creating/updating contact: ${e.message}" }
+            null
+        }
+    }
+
+    /**
+     * Verifica si un número está bloqueado
+     */
+    suspend fun isPhoneNumberBlocked(phoneNumber: String): Boolean {
+        checkInitialized()
+        return try {
+            databaseManager?.isPhoneNumberBlocked(phoneNumber) ?: false
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error checking if number is blocked: ${e.message}" }
+            false
+        }
+    }
+
+    /**
+     * Limpia historial de llamadas
+     */
+    suspend fun clearCallHistoryFromDB(): Boolean {
+        checkInitialized()
+        return try {
+            databaseManager?.clearAllCallLogs()
+            true
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error clearing call history: ${e.message}" }
+            false
+        }
+    }
+
+    /**
+     * Fuerza la sincronización de todas las cuentas con la BD
+     */
+    fun forceDatabaseSync() {
+        checkInitialized()
+        databaseIntegration?.forceSyncAllAccounts()
+    }
+
+    /**
+     * Obtiene información de diagnóstico de la base de datos
+     */
+    suspend fun getDatabaseDiagnostic(): String {
+        checkInitialized()
+        return try {
+            databaseIntegration?.getDiagnosticInfo() ?: "Database integration not available"
+        } catch (e: Exception) {
+            "Error getting database diagnostic: ${e.message}"
+        }
+    }
+
+    /**
+     * Configura limpieza automática de la base de datos
+     */
+    fun configureDatabaseMaintenance(
+        daysToKeepLogs: Int = 30,
+        maxCallLogs: Int = 1000,
+        maxStateHistory: Int = 5000
+    ) {
+        checkInitialized()
+        databaseManager?.let { dbManager ->
+            CoroutineScope(Dispatchers.IO).launch {
+                try {
+                    dbManager.cleanupOldData(daysToKeepLogs)
+                    dbManager.keepOnlyRecentData(maxCallLogs, maxStateHistory)
+                    log.d(tag = TAG) { "Database maintenance configured and executed" }
+                } catch (e: Exception) {
+                    log.e(tag = TAG) { "Error in database maintenance: ${e.message}" }
+                }
+            }
         }
     }
 }
