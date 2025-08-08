@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
 import android.net.Uri
+import com.eddyslarez.siplibrary.data.services.network.NetworkMonitor
 import com.eddyslarez.siplibrary.utils.PushNotificationSimulator
 
 /**
@@ -38,7 +39,8 @@ class EddysSipLibrary private constructor() {
 
     // Push Mode Manager
     private var pushModeManager: PushModeManager? = null
-
+    private var networkStatusListener: NetworkStatusListener? = null
+    private var autoReconnectionListener: AutoReconnectionListener? = null
     companion object {
         @Volatile
         private var INSTANCE: EddysSipLibrary? = null
@@ -92,6 +94,22 @@ class EddysSipLibrary private constructor() {
         fun onRegistrationFailed(username: String, domain: String, error: String)
         fun onUnregistered(username: String, domain: String)
         fun onRegistrationExpiring(username: String, domain: String, expiresIn: Long)
+    }
+
+    // NUEVO: Listener para estado de red
+    interface NetworkStatusListener {
+        fun onNetworkConnected(networkType: String, hasInternet: Boolean)
+        fun onNetworkDisconnected()
+        fun onNetworkChanged(oldNetworkType: String, newNetworkType: String)
+        fun onInternetConnectivityChanged(hasInternet: Boolean)
+    }
+
+    // NUEVO: Listener para reconexión automática
+    interface AutoReconnectionListener {
+        fun onReconnectionStarted(accountKey: String, reason: String)
+        fun onReconnectionSuccess(accountKey: String, attempts: Int)
+        fun onReconnectionFailed(accountKey: String, attempts: Int, error: String)
+        fun onReconnectionProgress(accountKey: String, attempt: Int, maxAttempts: Int)
     }
 
     /**
@@ -1555,4 +1573,322 @@ class EddysSipLibrary private constructor() {
             } ?: appendLine("Push Mode Manager not initialized")
         }
     }
+
+
+    /////// nuevos metodos de red ////////
+
+    /**
+     * NUEVO: Configura el listener interno de red
+     */
+    private fun setupNetworkStatusListener() {
+        sipCoreManager?.setNetworkStatusListener(object : SipCoreManager.NetworkStatusListener {
+            override fun onNetworkConnected(networkInfo: NetworkMonitor.NetworkInfo) {
+                log.d(tag = TAG) { "Network connected: ${networkInfo.networkType}" }
+
+                networkStatusListener?.onNetworkConnected(
+                    networkInfo.networkType.name,
+                    networkInfo.hasInternet
+                )
+            }
+
+            override fun onNetworkDisconnected(previousNetworkInfo: NetworkMonitor.NetworkInfo) {
+                log.d(tag = TAG) { "Network disconnected: ${previousNetworkInfo.networkType}" }
+
+                networkStatusListener?.onNetworkDisconnected()
+            }
+
+            override fun onNetworkChanged(
+                oldNetworkInfo: NetworkMonitor.NetworkInfo,
+                newNetworkInfo: NetworkMonitor.NetworkInfo
+            ) {
+                log.d(tag = TAG) {
+                    "Network changed: ${oldNetworkInfo.networkType} -> ${newNetworkInfo.networkType}"
+                }
+
+                networkStatusListener?.onNetworkChanged(
+                    oldNetworkInfo.networkType.name,
+                    newNetworkInfo.networkType.name
+                )
+            }
+
+            override fun onInternetConnectivityChanged(hasInternet: Boolean) {
+                log.d(tag = TAG) { "Internet connectivity changed: $hasInternet" }
+
+                networkStatusListener?.onInternetConnectivityChanged(hasInternet)
+            }
+        })
+    }
+
+    /**
+     * NUEVO: Configura listener para cambios de estado de red
+     */
+    fun setNetworkStatusListener(listener: NetworkStatusListener?) {
+        this.networkStatusListener = listener
+        log.d(tag = TAG) { "Network status listener configured" }
+    }
+
+    /**
+     * NUEVO: Configura listener para eventos de reconexión automática
+     */
+    fun setAutoReconnectionListener(listener: AutoReconnectionListener?) {
+        this.autoReconnectionListener = listener
+        log.d(tag = TAG) { "Auto-reconnection listener configured" }
+    }
+
+    /**
+     * NUEVO: Habilita o deshabilita la reconexión automática
+     */
+    fun setAutoReconnectEnabled(enabled: Boolean) {
+        checkInitialized()
+        sipCoreManager?.setAutoReconnectEnabled(enabled)
+        log.d(tag = TAG) { "Auto-reconnection ${if (enabled) "enabled" else "disabled"}" }
+    }
+
+    /**
+     * NUEVO: Verifica si la reconexión automática está habilitada
+     */
+    fun isAutoReconnectEnabled(): Boolean {
+        checkInitialized()
+        return sipCoreManager?.isAutoReconnectEnabled() ?: false
+    }
+
+    /**
+     * NUEVO: Fuerza la verificación del estado de red
+     */
+    fun forceNetworkCheck() {
+        checkInitialized()
+        log.d(tag = TAG) { "Forcing network check" }
+        sipCoreManager?.forceNetworkCheck()
+    }
+
+    /**
+     * NUEVO: Fuerza el registro de una cuenta específica
+     */
+    fun forceRegister(username: String, domain: String) {
+        checkInitialized()
+        log.d(tag = TAG) { "Force registering account: $username@$domain" }
+        sipCoreManager?.forceRegister(username, domain)
+    }
+
+    /**
+     * NUEVO: Fuerza el registro de todas las cuentas registradas
+     */
+    fun forceRegisterAllAccounts() {
+        checkInitialized()
+        log.d(tag = TAG) { "Force registering all accounts" }
+        sipCoreManager?.forceRegisterAllAccounts()
+    }
+
+    /**
+     * NUEVO: Fuerza la reconexión de una cuenta específica
+     */
+    fun forceReconnection(username: String, domain: String) {
+        checkInitialized()
+        log.d(tag = TAG) { "Force reconnection for account: $username@$domain" }
+        sipCoreManager?.forceReconnection(username, domain)
+    }
+
+    /**
+     * NUEVO: Fuerza la reconexión de todas las cuentas registradas
+     */
+    fun forceReconnectionAllAccounts() {
+        checkInitialized()
+        log.d(tag = TAG) { "Force reconnection for all accounts" }
+        sipCoreManager?.forceReconnectionAllAccounts()
+    }
+
+    /**
+     * NUEVO: Obtiene información del estado de red actual
+     */
+    fun getCurrentNetworkInfo(): NetworkInfo? {
+        checkInitialized()
+        val networkInfo = sipCoreManager?.getCurrentNetworkInfo()
+
+        return networkInfo?.let {
+            NetworkInfo(
+                isConnected = it.isConnected,
+                networkType = it.networkType.name,
+                networkName = it.networkName,
+                hasInternet = it.hasInternet,
+                isMetered = it.isMetered,
+                ipAddress = it.ipAddress
+            )
+        }
+    }
+
+    /**
+     * NUEVO: Data class para información de red simplificada
+     */
+    data class NetworkInfo(
+        val isConnected: Boolean,
+        val networkType: String,
+        val networkName: String,
+        val hasInternet: Boolean,
+        val isMetered: Boolean,
+        val ipAddress: String
+    )
+
+    /**
+     * NUEVO: Verifica si hay conexión de red
+     */
+    fun isNetworkConnected(): Boolean {
+        checkInitialized()
+        return sipCoreManager?.isNetworkConnected() ?: false
+    }
+
+    /**
+     * NUEVO: Verifica si hay conectividad a internet
+     */
+    fun hasInternetConnectivity(): Boolean {
+        checkInitialized()
+        return sipCoreManager?.hasInternetConnectivity() ?: false
+    }
+
+    /**
+     * NUEVO: Verifica si una cuenta está en proceso de reconexión
+     */
+    fun isAccountReconnecting(username: String, domain: String): Boolean {
+        checkInitialized()
+        return sipCoreManager?.isAccountReconnecting(username, domain) ?: false
+    }
+
+    /**
+     * NUEVO: Obtiene el número de intentos de reconexión para una cuenta
+     */
+    fun getReconnectionAttempts(username: String, domain: String): Int {
+        checkInitialized()
+        return sipCoreManager?.getReconnectionAttempts(username, domain) ?: 0
+    }
+
+    /**
+     * NUEVO: Resetea los intentos de reconexión para una cuenta
+     */
+    fun resetReconnectionAttempts(username: String, domain: String) {
+        checkInitialized()
+        sipCoreManager?.resetReconnectionAttempts(username, domain)
+        log.d(tag = TAG) { "Reset reconnection attempts for: $username@$domain" }
+    }
+
+    /**
+     * NUEVO: Obtiene estados de reconexión para todas las cuentas
+     */
+    fun getAllReconnectionStates(): Map<String, ReconnectionState> {
+        checkInitialized()
+
+        return sipCoreManager?.getAllReconnectionStates()?.mapValues { (_, state) ->
+            ReconnectionState(
+                accountKey = state.accountKey,
+                isReconnecting = state.isReconnecting,
+                attempts = state.attempts,
+                maxAttempts = state.maxAttempts,
+                lastAttemptTime = state.lastAttemptTime,
+                nextAttemptTime = state.nextAttemptTime,
+                reason = state.reason.name,
+                lastError = state.lastError,
+                isNetworkAvailable = state.isNetworkAvailable
+            )
+        } ?: emptyMap()
+    }
+
+    /**
+     * NUEVO: Data class para estado de reconexión simplificado
+     */
+    data class ReconnectionState(
+        val accountKey: String,
+        val isReconnecting: Boolean,
+        val attempts: Int,
+        val maxAttempts: Int,
+        val lastAttemptTime: Long,
+        val nextAttemptTime: Long,
+        val reason: String,
+        val lastError: String?,
+        val isNetworkAvailable: Boolean
+    )
+
+    /**
+     * NUEVO: Obtiene información de diagnóstico completa del sistema
+     */
+    fun getCompleteDiagnosticInfo(): String {
+        checkInitialized()
+        return buildString {
+            appendLine("=== EDDYS SIP LIBRARY COMPLETE DIAGNOSTIC ===")
+            appendLine("Library Version: v1.5.0 with Auto-Reconnection")
+            appendLine("Initialized: $isInitialized")
+            appendLine("Auto-Reconnect Enabled: ${isAutoReconnectEnabled()}")
+
+            val networkInfo = getCurrentNetworkInfo()
+            if (networkInfo != null) {
+                appendLine("\n--- Network Information ---")
+                appendLine("Connected: ${networkInfo.isConnected}")
+                appendLine("Has Internet: ${networkInfo.hasInternet}")
+                appendLine("Type: ${networkInfo.networkType}")
+                appendLine("Name: ${networkInfo.networkName}")
+                appendLine("IP Address: ${networkInfo.ipAddress}")
+                appendLine("Is Metered: ${networkInfo.isMetered}")
+            }
+
+            appendLine("\n--- Reconnection States ---")
+            val reconnectionStates = getAllReconnectionStates()
+            if (reconnectionStates.isNotEmpty()) {
+                reconnectionStates.forEach { (accountKey, state) ->
+                    appendLine("$accountKey:")
+                    appendLine("  Reconnecting: ${state.isReconnecting}")
+                    appendLine("  Attempts: ${state.attempts}/${state.maxAttempts}")
+                    appendLine("  Reason: ${state.reason}")
+                    appendLine("  Last Error: ${state.lastError ?: "None"}")
+                    appendLine("  Network Available: ${state.isNetworkAvailable}")
+                }
+            } else {
+                appendLine("No accounts in reconnection state")
+            }
+
+            appendLine("\n--- Core System ---")
+            appendLine(sipCoreManager?.getCompleteDiagnosticInfo() ?: "SipCoreManager not available")
+
+            appendLine("\n--- Listeners ---")
+            appendLine("Network Status Listener: ${networkStatusListener != null}")
+            appendLine("Auto-Reconnection Listener: ${autoReconnectionListener != null}")
+            appendLine("General SIP Listeners: ${listeners.size}")
+        }
+    }
+
+    /**
+     * NUEVO: Método para obtener estadísticas de conectividad
+     */
+    fun getConnectivityStatistics(): ConnectivityStatistics {
+        checkInitialized()
+
+        val reconnectionStates = getAllReconnectionStates()
+        val networkInfo = getCurrentNetworkInfo()
+        val totalAccounts = getAllRegistrationStates().size
+        val registeredAccounts = getAllRegistrationStates().count { it.value == RegistrationState.OK }
+        val reconnectingAccounts = reconnectionStates.count { it.value.isReconnecting }
+        val totalReconnectionAttempts = reconnectionStates.values.sumOf { it.attempts }
+
+        return ConnectivityStatistics(
+            totalAccounts = totalAccounts,
+            registeredAccounts = registeredAccounts,
+            reconnectingAccounts = reconnectingAccounts,
+            totalReconnectionAttempts = totalReconnectionAttempts,
+            networkConnected = networkInfo?.isConnected ?: false,
+            hasInternet = networkInfo?.hasInternet ?: false,
+            networkType = networkInfo?.networkType ?: "Unknown",
+            autoReconnectEnabled = isAutoReconnectEnabled()
+        )
+    }
+
+    /**
+     * NUEVO: Data class para estadísticas de conectividad
+     */
+    data class ConnectivityStatistics(
+        val totalAccounts: Int,
+        val registeredAccounts: Int,
+        val reconnectingAccounts: Int,
+        val totalReconnectionAttempts: Int,
+        val networkConnected: Boolean,
+        val hasInternet: Boolean,
+        val networkType: String,
+        val autoReconnectEnabled: Boolean
+    )
+
 }
