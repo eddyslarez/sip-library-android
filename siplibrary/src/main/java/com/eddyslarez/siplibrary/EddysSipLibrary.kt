@@ -18,6 +18,7 @@ import kotlinx.coroutines.launch
 import android.net.Uri
 import com.eddyslarez.siplibrary.data.services.network.NetworkMonitor
 import com.eddyslarez.siplibrary.utils.PushNotificationSimulator
+import kotlinx.coroutines.delay
 
 /**
  * EddysSipLibrary - Biblioteca SIP/VoIP para Android (Versión Optimizada)
@@ -299,7 +300,7 @@ class EddysSipLibrary private constructor() {
 
 
     /**
-     * Método setupInternalListeners() corregido para incluir el NetworkStatusListener
+     * Método setupInternalListeners() COMPLETO con reconexión automática
      */
     private fun setupInternalListeners() {
         sipCoreManager?.let { manager ->
@@ -354,10 +355,9 @@ class EddysSipLibrary private constructor() {
                 }
             })
 
-            // *** AGREGAR ESTA CONFIGURACIÓN DEL NETWORK STATUS LISTENER ***
+            // *** CONFIGURAR LISTENERS DE RED Y RECONEXIÓN ***
             setupNetworkStatusListener()
-
-//            setupAutoReconnectionListener()
+            setupAutoReconnectionListener()
 
             // Observar estados usando el nuevo CallStateManager
             CoroutineScope(Dispatchers.Main).launch {
@@ -1585,12 +1585,133 @@ class EddysSipLibrary private constructor() {
 
     /////// nuevos metodos de red ////////
 
+    /**
+     * NUEVO: Configura listener para eventos de reconexión automática
+     */
+    private fun setupAutoReconnectionListener() {
+        sipCoreManager?.let { manager ->
 
+            // Configurar callback interno para eventos de reconexión
+            CoroutineScope(Dispatchers.IO).launch {
+                // Observar estados de reconexión del NetworkAwareReconnectionService
+                manager.getAllReconnectionStates().let { initialStates ->
+                    log.d(tag = TAG) { "Initial reconnection states: ${initialStates.size}" }
+                }
+
+                // Configurar observador de cambios de estado de red para reconexión
+                var previousNetworkState: Boolean? = null
+
+                while (isInitialized) {
+                    try {
+                        val isNetworkConnected = manager.isNetworkConnected()
+                        val hasInternet = manager.hasInternetConnectivity()
+                        val reconnectionStates = manager.getAllReconnectionStates()
+
+                        // Detectar cambios en el estado de red
+                        if (previousNetworkState != null && previousNetworkState != isNetworkConnected) {
+                            log.d(tag = TAG) { "Network state changed: $previousNetworkState -> $isNetworkConnected" }
+
+                            if (isNetworkConnected && hasInternet) {
+                                // Red recuperada - notificar reconexión
+                                notifyNetworkRecovery()
+                            } else {
+                                // Red perdida
+                                notifyNetworkLoss()
+                            }
+                        }
+
+                        // Verificar estados de reconexión
+                        reconnectionStates.forEach { (accountKey, state) ->
+                            val parts = accountKey.split("@")
+                            if (parts.size == 2) {
+                                val username = parts[0]
+                                val domain = parts[1]
+
+                                when {
+                                    state.isReconnecting && state.attempts == 1 -> {
+                                        // Primera vez que inicia reconexión
+                                        autoReconnectionListener?.onReconnectionStarted(
+                                            accountKey,
+                                            state.reason.name
+                                        )
+                                    }
+
+                                    state.isReconnecting && state.attempts > 1 -> {
+                                        // Progreso de reconexión
+                                        autoReconnectionListener?.onReconnectionProgress(
+                                            accountKey,
+                                            state.attempts,
+                                            state.maxAttempts
+                                        )
+                                    }
+
+                                    !state.isReconnecting && state.attempts > 0 -> {
+                                        // Reconexión terminó
+                                        val registrationState = getRegistrationState(username, domain)
+
+                                        if (registrationState == RegistrationState.OK) {
+                                            autoReconnectionListener?.onReconnectionSuccess(
+                                                accountKey,
+                                                state.attempts
+                                            )
+                                        } else if (state.lastError != null) {
+                                            autoReconnectionListener?.onReconnectionFailed(
+                                                accountKey,
+                                                state.attempts,
+                                                state.lastError ?: "Unknown error"
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        previousNetworkState = isNetworkConnected
+                        delay(2000) // Verificar cada 2 segundos
+
+                    } catch (e: Exception) {
+                        log.e(tag = TAG) { "Error in auto-reconnection listener loop: ${e.message}" }
+                        delay(5000) // Esperar más tiempo si hay error
+                    }
+                }
+            }
+        }
+    }
+    /**
+     * Notifica que la red se recuperó
+     */
+    private fun notifyNetworkRecovery() {
+        log.d(tag = TAG) { "Network recovery detected - checking for needed reconnections" }
+
+        // Verificar qué cuentas necesitan reconexión
+        getAllRegistrationStates().forEach { (accountKey, state) ->
+            if (state != RegistrationState.OK) {
+                val parts = accountKey.split("@")
+                if (parts.size == 2) {
+                    log.d(tag = TAG) { "Account $accountKey needs reconnection after network recovery" }
+
+                    // Forzar reconexión
+                    forceReconnection(parts[0], parts[1])
+                }
+            }
+        }
+    }
+
+    /**
+     * Notifica que se perdió la red
+     */
+    private fun notifyNetworkLoss() {
+        log.d(tag = TAG) { "Network loss detected - preparing for reconnection when recovered" }
+
+        // Los listeners ya serán notificados por el NetworkStatusListener
+        // Aquí podríamos sepuede hacer preparativos adicionales si es necesario
+    }
     /**
      * Método setupNetworkStatusListener()
      */
     private fun setupNetworkStatusListener() {
         sipCoreManager?.setNetworkStatusListener(object : SipCoreManager.NetworkStatusListener {
+
             override fun onNetworkConnected(networkInfo: NetworkMonitor.NetworkInfo) {
                 log.d(tag = TAG) { "Network connected: ${networkInfo.networkType}" }
 
@@ -1608,6 +1729,38 @@ class EddysSipLibrary private constructor() {
                     networkInfo.networkType.name,
                     networkInfo.hasInternet
                 )
+
+                // *** NUEVO: Verificar y reconectar cuentas desconectadas ***
+                CoroutineScope(Dispatchers.IO).launch {
+                    delay(2000) // Esperar que la red se estabilice
+
+                    log.d(tag = TAG) { "Network stabilized - checking account states" }
+
+                    val accountStates = getAllRegistrationStates()
+                    val accountsToReconnect = mutableListOf<Pair<String, String>>()
+
+                    accountStates.forEach { (accountKey, state) ->
+                        val parts = accountKey.split("@")
+                        if (parts.size == 2 && state != RegistrationState.OK) {
+                            accountsToReconnect.add(Pair(parts[0], parts[1]))
+                            log.d(tag = TAG) { "Account $accountKey needs reconnection (current state: $state)" }
+                        }
+                    }
+
+                    if (accountsToReconnect.isNotEmpty()) {
+                        log.d(tag = TAG) { "Reconnecting ${accountsToReconnect.size} accounts after network recovery" }
+
+                        // Reconectar cuentas una por una con delay
+                        accountsToReconnect.forEach { (username, domain) ->
+                            try {
+                                forceRegister(username, domain)
+                                delay(1000) // Esperar entre reconexiones
+                            } catch (e: Exception) {
+                                log.e(tag = TAG) { "Error reconnecting $username@$domain: ${e.message}" }
+                            }
+                        }
+                    }
+                }
             }
 
             override fun onNetworkDisconnected(previousNetworkInfo: NetworkMonitor.NetworkInfo) {
@@ -1624,6 +1777,9 @@ class EddysSipLibrary private constructor() {
 
                 // Notificar a listener específico
                 networkStatusListener?.onNetworkDisconnected()
+
+                // *** NUEVO: Preparar para reconexión cuando vuelva la red ***
+                log.d(tag = TAG) { "Network lost - accounts will be reconnected when network returns" }
             }
 
             override fun onNetworkChanged(
@@ -1639,6 +1795,22 @@ class EddysSipLibrary private constructor() {
                     oldNetworkInfo.networkType.name,
                     newNetworkInfo.networkType.name
                 )
+
+                // *** NUEVO: Manejar cambio de red ***
+                if (newNetworkInfo.hasInternet) {
+                    CoroutineScope(Dispatchers.IO).launch {
+                        delay(3000) // Esperar más tiempo para cambio de red
+
+                        log.d(tag = TAG) { "Network change stabilized - refreshing registrations" }
+
+                        // Refrescar todas las registraciones para el nuevo network
+                        try {
+                            forceRegisterAllAccounts()
+                        } catch (e: Exception) {
+                            log.e(tag = TAG) { "Error refreshing registrations after network change: ${e.message}" }
+                        }
+                    }
+                }
             }
 
             override fun onInternetConnectivityChanged(hasInternet: Boolean) {
@@ -1646,6 +1818,30 @@ class EddysSipLibrary private constructor() {
 
                 // Notificar a listener específico
                 networkStatusListener?.onInternetConnectivityChanged(hasInternet)
+
+                // *** NUEVO: Manejar cambios de conectividad a internet ***
+                if (hasInternet) {
+                    CoroutineScope(Dispatchers.IO).launch {
+                        delay(1500) // Esperar que la conectividad se estabilice
+
+                        log.d(tag = TAG) { "Internet connectivity restored - verifying account states" }
+
+                        val disconnectedAccounts = getAllRegistrationStates().filter {
+                            it.value != RegistrationState.OK
+                        }
+
+                        if (disconnectedAccounts.isNotEmpty()) {
+                            log.d(tag = TAG) { "Found ${disconnectedAccounts.size} disconnected accounts - initiating reconnection" }
+
+                            disconnectedAccounts.forEach { (accountKey, _) ->
+                                val parts = accountKey.split("@")
+                                if (parts.size == 2) {
+                                    forceReconnection(parts[0], parts[1])
+                                }
+                            }
+                        }
+                    }
+                }
             }
         })
     }
@@ -1725,6 +1921,139 @@ class EddysSipLibrary private constructor() {
         checkInitialized()
         log.d(tag = TAG) { "Force reconnection for all accounts" }
         sipCoreManager?.forceReconnectionAllAccounts()
+    }
+    /**
+     * NUEVO: Notifica manualmente que se necesita verificar reconexiones
+     */
+    fun checkAndReconnectAll() {
+        checkInitialized()
+
+        log.d(tag = TAG) { "Manual check and reconnect all initiated" }
+
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                // Verificar estado de red primero
+                val networkConnected = isNetworkConnected()
+                val hasInternet = hasInternetConnectivity()
+
+                log.d(tag = TAG) { "Network status - Connected: $networkConnected, Internet: $hasInternet" }
+
+                if (!networkConnected || !hasInternet) {
+                    log.w(tag = TAG) { "Network not available - cannot perform reconnection check" }
+                    return@launch
+                }
+
+                // Verificar estados de todas las cuentas
+                val accountStates = getAllRegistrationStates()
+                val needReconnection = mutableListOf<Pair<String, String>>()
+
+                accountStates.forEach { (accountKey, state) ->
+                    val parts = accountKey.split("@")
+                    if (parts.size == 2) {
+                        val username = parts[0]
+                        val domain = parts[1]
+
+                        when (state) {
+                            RegistrationState.NONE,
+                            RegistrationState.FAILED,
+                            RegistrationState.CLEARED -> {
+                                needReconnection.add(Pair(username, domain))
+                                log.d(tag = TAG) { "Account $accountKey needs reconnection (state: $state)" }
+                            }
+                            RegistrationState.IN_PROGRESS -> {
+                                log.d(tag = TAG) { "Account $accountKey already reconnecting" }
+                            }
+                            RegistrationState.OK -> {
+                                log.d(tag = TAG) { "Account $accountKey is properly registered" }
+                            }
+
+                            RegistrationState.PROGRESS -> TODO()
+                        }
+                    }
+                }
+
+                if (needReconnection.isNotEmpty()) {
+                    log.d(tag = TAG) { "Starting reconnection for ${needReconnection.size} accounts" }
+
+                    needReconnection.forEach { (username, domain) ->
+                        try {
+                            log.d(tag = TAG) { "Reconnecting account: $username@$domain" }
+                            forceRegister(username, domain)
+                            delay(2000) // Esperar entre reconexiones
+                        } catch (e: Exception) {
+                            log.e(tag = TAG) { "Error reconnecting $username@$domain: ${e.message}" }
+                        }
+                    }
+
+                    log.d(tag = TAG) { "Reconnection process completed" }
+                } else {
+                    log.d(tag = TAG) { "All accounts are properly registered - no reconnection needed" }
+                }
+
+            } catch (e: Exception) {
+                log.e(tag = TAG) { "Error in checkAndReconnectAll: ${e.message}" }
+            }
+        }
+    }
+    /**
+     * NUEVO: Diagnóstico completo de reconexión
+     */
+    fun diagnoseReconnectionSystem(): String {
+        checkInitialized()
+
+        return buildString {
+            appendLine("=== RECONNECTION SYSTEM DIAGNOSTIC ===")
+            appendLine("Auto-Reconnect Enabled: ${isAutoReconnectEnabled()}")
+            appendLine("Network Connected: ${isNetworkConnected()}")
+            appendLine("Has Internet: ${hasInternetConnectivity()}")
+
+            val networkInfo = getCurrentNetworkInfo()
+            if (networkInfo != null) {
+                appendLine("Network Type: ${networkInfo.networkType}")
+                appendLine("Network Name: ${networkInfo.networkName}")
+                appendLine("IP Address: ${networkInfo.ipAddress}")
+                appendLine("Is Metered: ${networkInfo.isMetered}")
+            }
+
+            appendLine("\n--- Account States ---")
+            val accountStates = getAllRegistrationStates()
+            accountStates.forEach { (accountKey, state) ->
+                val reconnectAttempts = getReconnectionAttempts(accountKey.split("@")[0], accountKey.split("@")[1])
+                val isReconnecting = isAccountReconnecting(accountKey.split("@")[0], accountKey.split("@")[1])
+
+                appendLine("$accountKey:")
+                appendLine("  State: $state")
+                appendLine("  Reconnecting: $isReconnecting")
+                appendLine("  Attempts: $reconnectAttempts")
+            }
+
+            appendLine("\n--- Reconnection States ---")
+            val reconnectionStates = getAllReconnectionStates()
+            if (reconnectionStates.isNotEmpty()) {
+                reconnectionStates.forEach { (accountKey, state) ->
+                    appendLine("$accountKey:")
+                    appendLine("  Reconnecting: ${state.isReconnecting}")
+                    appendLine("  Attempts: ${state.attempts}/${state.maxAttempts}")
+                    appendLine("  Reason: ${state.reason}")
+                    appendLine("  Last Error: ${state.lastError ?: "None"}")
+                    appendLine("  Network Available: ${state.isNetworkAvailable}")
+                    appendLine("  Last Attempt: ${state.lastAttemptTime}")
+                    appendLine("  Next Attempt: ${state.nextAttemptTime}")
+                }
+            } else {
+                appendLine("No active reconnection states")
+            }
+
+            appendLine("\n--- Listeners Status ---")
+            appendLine("Network Status Listener: ${networkStatusListener != null}")
+            appendLine("Auto-Reconnection Listener: ${autoReconnectionListener != null}")
+
+            appendLine("\n--- System Health ---")
+            appendLine("System Healthy: ${isSystemHealthy()}")
+
+            // Información detallada del core
+            appendLine("\n${getCompleteDiagnosticInfo()}")
+        }
     }
 
     /**
