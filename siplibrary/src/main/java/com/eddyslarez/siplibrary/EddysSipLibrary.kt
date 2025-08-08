@@ -298,6 +298,9 @@ class EddysSipLibrary private constructor() {
     }
 
 
+    /**
+     * Método setupInternalListeners() corregido para incluir el NetworkStatusListener
+     */
     private fun setupInternalListeners() {
         sipCoreManager?.let { manager ->
 
@@ -343,13 +346,18 @@ class EddysSipLibrary private constructor() {
                     val callInfo = getCurrentCallInfo()
                     notifyCallFailed(error, callInfo)
                 }
-                
+
                 override fun onCallEndedForAccount(accountKey: String) {
                     log.d(tag = TAG) { "Internal callback: onCallEndedForAccount - $accountKey" }
                     val registeredAccounts = sipCoreManager?.getAllRegisteredAccountKeys() ?: emptySet()
                     pushModeManager?.onCallEndedForAccount(accountKey, registeredAccounts)
                 }
             })
+
+            // *** AGREGAR ESTA CONFIGURACIÓN DEL NETWORK STATUS LISTENER ***
+            setupNetworkStatusListener()
+
+//            setupAutoReconnectionListener()
 
             // Observar estados usando el nuevo CallStateManager
             CoroutineScope(Dispatchers.Main).launch {
@@ -1577,14 +1585,25 @@ class EddysSipLibrary private constructor() {
 
     /////// nuevos metodos de red ////////
 
+
     /**
-     * NUEVO: Configura el listener interno de red
+     * Método setupNetworkStatusListener()
      */
     private fun setupNetworkStatusListener() {
         sipCoreManager?.setNetworkStatusListener(object : SipCoreManager.NetworkStatusListener {
             override fun onNetworkConnected(networkInfo: NetworkMonitor.NetworkInfo) {
                 log.d(tag = TAG) { "Network connected: ${networkInfo.networkType}" }
 
+                // Notificar a listeners generales
+                listeners.forEach { listener ->
+                    try {
+                        listener.onNetworkStateChanged(true)
+                    } catch (e: Exception) {
+                        log.e(tag = TAG) { "Error in listener onNetworkStateChanged: ${e.message}" }
+                    }
+                }
+
+                // Notificar a listener específico
                 networkStatusListener?.onNetworkConnected(
                     networkInfo.networkType.name,
                     networkInfo.hasInternet
@@ -1594,6 +1613,16 @@ class EddysSipLibrary private constructor() {
             override fun onNetworkDisconnected(previousNetworkInfo: NetworkMonitor.NetworkInfo) {
                 log.d(tag = TAG) { "Network disconnected: ${previousNetworkInfo.networkType}" }
 
+                // Notificar a listeners generales
+                listeners.forEach { listener ->
+                    try {
+                        listener.onNetworkStateChanged(false)
+                    } catch (e: Exception) {
+                        log.e(tag = TAG) { "Error in listener onNetworkStateChanged: ${e.message}" }
+                    }
+                }
+
+                // Notificar a listener específico
                 networkStatusListener?.onNetworkDisconnected()
             }
 
@@ -1605,6 +1634,7 @@ class EddysSipLibrary private constructor() {
                     "Network changed: ${oldNetworkInfo.networkType} -> ${newNetworkInfo.networkType}"
                 }
 
+                // Notificar a listener específico
                 networkStatusListener?.onNetworkChanged(
                     oldNetworkInfo.networkType.name,
                     newNetworkInfo.networkType.name
@@ -1614,11 +1644,11 @@ class EddysSipLibrary private constructor() {
             override fun onInternetConnectivityChanged(hasInternet: Boolean) {
                 log.d(tag = TAG) { "Internet connectivity changed: $hasInternet" }
 
+                // Notificar a listener específico
                 networkStatusListener?.onInternetConnectivityChanged(hasInternet)
             }
         })
     }
-
     /**
      * NUEVO: Configura listener para cambios de estado de red
      */
