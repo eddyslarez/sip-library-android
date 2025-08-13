@@ -24,6 +24,7 @@ import com.eddyslarez.siplibrary.data.database.entities.SipAccountEntity
 import com.eddyslarez.siplibrary.data.database.repository.CallLogWithContact
 import com.eddyslarez.siplibrary.data.database.repository.GeneralStatistics
 import com.eddyslarez.siplibrary.data.database.setupDatabaseIntegration
+import com.eddyslarez.siplibrary.data.services.Assistant.SipCoreManagerExtension
 import com.eddyslarez.siplibrary.utils.PushNotificationSimulator
 import kotlinx.coroutines.delay
 
@@ -46,6 +47,7 @@ class EddysSipLibrary private constructor() {
     private val pushSimulator = PushNotificationSimulator()
     private var databaseIntegration: DatabaseAutoIntegration? = null
     private var databaseManager: DatabaseManager? = null
+    private var assistantExtension: SipCoreManagerExtension? = null
 
     // Push Mode Manager
     private var pushModeManager: PushModeManager? = null
@@ -197,7 +199,42 @@ class EddysSipLibrary private constructor() {
         TIMEOUT,
         ERROR
     }
+    fun initializeWithAI(
+        application: Application,
+        config: SipConfig = SipConfig(),
+        openAIApiKey: String,
+        enableDatabase: Boolean = true
+    ) {
+        // Inicializar biblioteca normal
+        initialize(application, config, enableDatabase)
 
+        // Inicializar extensión de AI
+        sipCoreManager?.let { coreManager ->
+            assistantExtension = SipCoreManagerExtension(coreManager, openAIApiKey)
+            assistantExtension?.initializeAssistant(application)
+        }
+    }
+
+
+    /**
+     * Habilita el asistente AI para llamadas
+     */
+    fun enableAIAssistant() {
+        assistantExtension?.enableAssistantForCalls()
+        log.d("EddysSipLibraryWithAI") { "AI Assistant enabled for calls" }
+    }
+
+    /**
+     * Deshabilita el asistente AI
+     */
+    fun disableAIAssistant() {
+        assistantExtension?.disableAssistantForCalls()
+        log.d("EddysSipLibraryWithAI") { "AI Assistant disabled for calls" }
+    }
+
+    /**
+     * Acepta llamada con asistente AI (si está habilitado)
+     */
     fun initialize(
         application: Application,
         config: SipConfig = SipConfig(),
@@ -945,7 +982,9 @@ class EddysSipLibrary private constructor() {
         val targetCallId = if (callId == null && calls.size == 1) {
             // Llamada única, usar sin callId
             log.d(tag = TAG) { "Accepting single call" }
-            sipCoreManager?.acceptCall()
+//            sipCoreManager?.acceptCall()
+            assistantExtension?.handleIncomingCallWithAssistant()
+
             return
         } else {
             callId ?: calls.firstOrNull()?.callId
@@ -993,7 +1032,8 @@ class EddysSipLibrary private constructor() {
         val targetCallId = if (callId == null && calls.size == 1) {
             // Llamada única, usar sin callId
             log.d(tag = TAG) { "Ending single call" }
-            sipCoreManager?.endCall()
+//            sipCoreManager?.endCall()
+            assistantExtension?.endCallWithAssistant()
             return
         } else {
             callId ?: calls.firstOrNull()?.callId

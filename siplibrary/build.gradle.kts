@@ -51,6 +51,9 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-datetime:0.6.1")
     implementation("androidx.datastore:datastore-preferences:1.1.7")
     implementation("androidx.bluetooth:bluetooth:1.0.0-alpha02")
+    // OkHttp dependencies - AGREGAR ESTAS LÍNEAS
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("com.squareup.okhttp3:logging-interceptor:4.12.0")
 
     // Room Database - Cambia kapt por ksp
     implementation("androidx.room:room-runtime:2.6.1")
