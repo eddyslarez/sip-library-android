@@ -469,7 +469,7 @@ class SipRepository(private val database: SipDatabase) {
                 transcriptionSessionDao.updateSessionStatistics(
                     sessionId = sessionId,
                     total = analysis.wordCount,
-                    final = analysis.wordCount,
+                    finalCount = analysis.wordCount,
                     partial = analysis.wordCount - analysis.wordCount,
                     words = analysis.wordCount,
                     confidence = analysis.confidence,
