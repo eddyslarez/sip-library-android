@@ -23,8 +23,8 @@ import com.eddyslarez.siplibrary.data.database.converters.DatabaseConverters
         CallDataEntity::class,
         ContactEntity::class,
         CallStateHistoryEntity::class,
-        TranscriptionEntity::class,
-        TranscriptionSessionEntity::class
+//        TranscriptionEntity::class,
+//        TranscriptionSessionEntity::class
     ],
     version = 2,
     exportSchema = true
@@ -38,8 +38,8 @@ abstract class SipDatabase : RoomDatabase() {
     abstract fun callDataDao(): CallDataDao
     abstract fun contactDao(): ContactDao
     abstract fun callStateHistoryDao(): CallStateHistoryDao
-    abstract fun transcriptionDao(): TranscriptionDao
-    abstract fun transcriptionSessionDao(): TranscriptionSessionDao
+//    abstract fun transcriptionDao(): TranscriptionDao
+//    abstract fun transcriptionSessionDao(): TranscriptionSessionDao
     
     companion object {
         private const val DATABASE_NAME = "sip_database"
