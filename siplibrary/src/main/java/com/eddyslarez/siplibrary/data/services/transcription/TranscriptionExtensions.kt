@@ -190,6 +190,7 @@ fun EddysSipLibrary.clearTranscriptionHistory() {
 /**
  * Obtiene el WebRTC Manager (método interno)
  */
+
 private fun EddysSipLibrary.getWebRtcManager(): Any? {
     // Este método necesitaría ser implementado en EddysSipLibrary
     // para exponer el WebRtcManager interno
