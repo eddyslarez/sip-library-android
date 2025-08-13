@@ -7,6 +7,7 @@ import com.eddyslarez.siplibrary.data.database.SipDatabase
 import com.eddyslarez.siplibrary.data.database.entities.*
 import com.eddyslarez.siplibrary.data.database.dao.*
 import com.eddyslarez.siplibrary.data.models.*
+import com.eddyslarez.siplibrary.data.services.transcription.AudioTranscriptionService
 import com.eddyslarez.siplibrary.utils.generateId
 import com.eddyslarez.siplibrary.utils.log
 
@@ -22,6 +23,8 @@ class SipRepository(private val database: SipDatabase) {
     private val callDataDao = database.callDataDao()
     private val contactDao = database.contactDao()
     private val callStateHistoryDao = database.callStateHistoryDao()
+    private val transcriptionDao = database.transcriptionDao()
+    private val transcriptionSessionDao = database.transcriptionSessionDao()
     
     private val TAG = "SipRepository"
     
@@ -357,6 +360,130 @@ class SipRepository(private val database: SipDatabase) {
         return contactDao.isPhoneNumberBlocked(phoneNumber) ?: false
     }
     
+    // === OPERACIONES DE TRANSCRIPCIÓN ===
+    
+    /**
+     * Crea sesión de transcripción
+     */
+    suspend fun createTranscriptionSession(
+        callLogId: String,
+        callId: String,
+        config: AudioTranscriptionService.TranscriptionConfig
+    ): TranscriptionSessionEntity {
+        val session = TranscriptionSessionEntity(
+            id = generateId(),
+            callLogId = callLogId,
+            callId = callId,
+            startTime = System.currentTimeMillis(),
+            language = config.language,
+            audioSource = config.audioSource,
+            transcriptionProvider = config.transcriptionProvider,
+            enablePartialResults = config.enablePartialResults,
+            confidenceThreshold = config.confidenceThreshold,
+            enableProfanityFilter = config.enableProfanityFilter,
+            enablePunctuation = config.enablePunctuation
+        )
+        
+        transcriptionSessionDao.insertSession(session)
+        log.d(tag = TAG) { "Transcription session created: ${session.id}" }
+        
+        return session
+    }
+    
+    /**
+     * Crea resultado de transcripción
+     */
+    suspend fun createTranscriptionResult(
+        sessionId: String,
+        callLogId: String,
+        result: AudioTranscriptionService.TranscriptionResult
+    ): TranscriptionEntity {
+        val transcription = TranscriptionEntity(
+            id = result.id,
+            sessionId = sessionId,
+            callLogId = callLogId,
+            text = result.text,
+            confidence = result.confidence,
+            isFinal = result.isFinal,
+            timestamp = result.timestamp,
+            duration = result.duration,
+            audioSource = result.audioSource,
+            language = result.language,
+            speakerLabel = result.speakerLabel,
+            wordCount = result.text.split("\\s+".toRegex()).size
+        )
+        
+        transcriptionDao.insertTranscription(transcription)
+        
+        // Actualizar estadísticas de sesión si es resultado final
+        if (result.isFinal) {
+            updateTranscriptionSessionStats(sessionId)
+        }
+        
+        log.d(tag = TAG) { "Transcription result created: ${transcription.id}" }
+        
+        return transcription
+    }
+    
+    /**
+     * Finaliza sesión de transcripción
+     */
+    suspend fun endTranscriptionSession(sessionId: String) {
+        val endTime = System.currentTimeMillis()
+        transcriptionSessionDao.endSession(sessionId, endTime)
+        
+        // Actualizar estadísticas finales
+        updateTranscriptionSessionStats(sessionId)
+        
+        log.d(tag = TAG) { "Transcription session ended: $sessionId" }
+    }
+    
+    /**
+     * Obtiene transcripciones por sesión
+     */
+    fun getTranscriptionsBySession(sessionId: String): Flow<List<TranscriptionEntity>> {
+        return transcriptionDao.getTranscriptionsBySession(sessionId)
+    }
+    
+    /**
+     * Obtiene sesiones de transcripción
+     */
+    fun getTranscriptionSessions(): Flow<List<TranscriptionSessionEntity>> {
+        return transcriptionSessionDao.getAllSessions()
+    }
+    
+    /**
+     * Busca en transcripciones
+     */
+    fun searchTranscriptions(query: String): Flow<List<TranscriptionEntity>> {
+        return transcriptionDao.searchTranscriptions(query)
+    }
+    
+    /**
+     * Actualiza estadísticas de sesión de transcripción
+     */
+    private suspend fun updateTranscriptionSessionStats(sessionId: String) {
+        try {
+            val analysis = transcriptionDao.getSessionAnalysis(sessionId)
+            if (analysis != null) {
+                transcriptionSessionDao.updateSessionStatistics(
+                    sessionId = sessionId,
+                    total = analysis.transcriptionCount,
+                    final = analysis.finalCount,
+                    partial = analysis.transcriptionCount - analysis.finalCount,
+                    words = analysis.totalWords,
+                    confidence = analysis.avgConfidence,
+                    speechDuration = 0L, // Se calcularía de los timestamps
+                    silenceDuration = 0L, // Se calcularía de los gaps
+                    audioFrames = 0L, // Se trackearía desde el interceptor
+                    errors = 0 // Se trackearían los errores
+                )
+            }
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error updating transcription session stats: ${e.message}" }
+        }
+    }
+    
     // === ESTADÍSTICAS ===
     
     /**
@@ -369,6 +496,8 @@ class SipRepository(private val database: SipDatabase) {
         val missedCalls = callLogDao.getCallCountByType(CallTypes.MISSED)
         val totalContacts = contactDao.getTotalContactCount()
         val activeCalls = callDataDao.getActiveCallCount()
+        val totalTranscriptions = transcriptionDao.getTotalTranscriptionCount()
+        val activeSessions = transcriptionSessionDao.getActiveSessionCount()
         
         return GeneralStatistics(
             totalAccounts = totalAccounts,
@@ -376,7 +505,9 @@ class SipRepository(private val database: SipDatabase) {
             totalCalls = totalCalls,
             missedCalls = missedCalls,
             totalContacts = totalContacts,
-            activeCalls = activeCalls
+            activeCalls = activeCalls,
+            totalTranscriptions = totalTranscriptions,
+            activeTranscriptionSessions = activeSessions
         )
     }
     
@@ -432,6 +563,8 @@ class SipRepository(private val database: SipDatabase) {
         callLogDao.deleteCallLogsOlderThan(threshold)
         callStateHistoryDao.deleteStateHistoryOlderThan(threshold)
         callDataDao.deleteInactiveCallsOlderThan(threshold)
+        transcriptionDao.deleteTranscriptionsOlderThan(threshold)
+        transcriptionSessionDao.deleteSessionsOlderThan(threshold)
         
         log.d(tag = TAG) { "Cleanup completed for data older than $daysToKeep days" }
     }
@@ -441,12 +574,16 @@ class SipRepository(private val database: SipDatabase) {
      */
     suspend fun keepOnlyRecentData(
         callLogsLimit: Int = 1000,
-        stateHistoryLimit: Int = 5000
+        stateHistoryLimit: Int = 5000,
+        transcriptionsLimit: Int = 2000
     ) {
         callLogDao.keepOnlyRecentCallLogs(callLogsLimit)
         callStateHistoryDao.keepOnlyRecentStateHistory(stateHistoryLimit)
+        transcriptionDao.keepOnlyRecentTranscriptions(transcriptionsLimit)
         
-        log.d(tag = TAG) { "Kept only recent data: $callLogsLimit call logs, $stateHistoryLimit state history" }
+        log.d(tag = TAG) { 
+            "Kept only recent data: $callLogsLimit call logs, $stateHistoryLimit state history, $transcriptionsLimit transcriptions" 
+        }
     }
 }
 
@@ -480,5 +617,7 @@ data class GeneralStatistics(
     val totalCalls: Int,
     val missedCalls: Int,
     val totalContacts: Int,
-    val activeCalls: Int
+    val activeCalls: Int,
+    val totalTranscriptions: Int,
+    val activeTranscriptionSessions: Int
 )

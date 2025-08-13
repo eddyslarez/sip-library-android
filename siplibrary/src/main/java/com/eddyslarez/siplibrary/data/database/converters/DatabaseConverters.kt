@@ -2,6 +2,7 @@ package com.eddyslarez.siplibrary.data.database.converters
 
 import androidx.room.TypeConverter
 import com.eddyslarez.siplibrary.data.models.*
+import com.eddyslarez.siplibrary.data.services.transcription.AudioTranscriptionService
 
 /**
  * Convertidores de tipos para Room Database
@@ -87,6 +88,38 @@ class DatabaseConverters {
             CallErrorReason.valueOf(reason)
         } catch (e: IllegalArgumentException) {
             CallErrorReason.NONE
+        }
+    }
+    
+    // === AUDIO SOURCE ===
+    
+    @TypeConverter
+    fun fromAudioSource(source: AudioTranscriptionService.AudioSource): String {
+        return source.name
+    }
+    
+    @TypeConverter
+    fun toAudioSource(source: String): AudioTranscriptionService.AudioSource {
+        return try {
+            AudioTranscriptionService.AudioSource.valueOf(source)
+        } catch (e: IllegalArgumentException) {
+            AudioTranscriptionService.AudioSource.WEBRTC_REMOTE
+        }
+    }
+    
+    // === TRANSCRIPTION PROVIDER ===
+    
+    @TypeConverter
+    fun fromTranscriptionProvider(provider: AudioTranscriptionService.TranscriptionProvider): String {
+        return provider.name
+    }
+    
+    @TypeConverter
+    fun toTranscriptionProvider(provider: String): AudioTranscriptionService.TranscriptionProvider {
+        return try {
+            AudioTranscriptionService.TranscriptionProvider.valueOf(provider)
+        } catch (e: IllegalArgumentException) {
+            AudioTranscriptionService.TranscriptionProvider.ANDROID_SPEECH
         }
     }
     

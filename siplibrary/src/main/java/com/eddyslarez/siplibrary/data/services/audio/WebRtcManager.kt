@@ -84,6 +84,31 @@ interface WebRtcManager {
     fun isInitialized(): Boolean
     
     /**
+     * Enable/disable audio transcription
+     * @param enabled Whether transcription should be enabled
+     * @param config Transcription configuration
+     */
+    fun enableTranscription(enabled: Boolean, config: com.eddyslarez.siplibrary.data.services.transcription.AudioTranscriptionService.TranscriptionConfig? = null)
+    
+    /**
+     * Start transcription session for a specific call
+     * @param callId The call identifier
+     * @param config Transcription configuration
+     */
+    fun startTranscriptionSession(callId: String, config: com.eddyslarez.siplibrary.data.services.transcription.AudioTranscriptionService.TranscriptionConfig)
+    
+    /**
+     * Stop current transcription session
+     */
+    fun stopTranscriptionSession()
+    
+    /**
+     * Get transcription manager instance
+     * @return The transcription manager or null if not available
+     */
+    fun getTranscriptionManager(): com.eddyslarez.siplibrary.data.services.transcription.TranscriptionManager?
+    
+    /**
      * Send DTMF tones via RTP (RFC 2833)
      * @param tones The DTMF tones to send (0-9, *, #, A-D)
      * @param duration Duration in milliseconds for each tone (optional, default 100ms)

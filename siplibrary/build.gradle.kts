@@ -51,6 +51,10 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-datetime:0.6.1")
     implementation("androidx.datastore:datastore-preferences:1.1.7")
     implementation("androidx.bluetooth:bluetooth:1.0.0-alpha02")
+    
+    // Dependencias para transcripción de audio
+    implementation("androidx.core:core-ktx:1.16.0")
+    implementation("com.squareup.okio:okio:3.9.1") // Para operaciones de I/O eficientes
 
     // Room Database - Cambia kapt por ksp
     implementation("androidx.room:room-runtime:2.6.1")
