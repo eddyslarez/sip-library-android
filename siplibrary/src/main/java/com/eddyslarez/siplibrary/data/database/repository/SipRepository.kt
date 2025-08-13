@@ -23,8 +23,8 @@ class SipRepository(private val database: SipDatabase) {
     private val callDataDao = database.callDataDao()
     private val contactDao = database.contactDao()
     private val callStateHistoryDao = database.callStateHistoryDao()
-    private val transcriptionDao = database.transcriptionDao()
-    private val transcriptionSessionDao = database.transcriptionSessionDao()
+//    private val transcriptionDao = database.transcriptionDao()
+//    private val transcriptionSessionDao = database.transcriptionSessionDao()
     
     private val TAG = "SipRepository"
     
@@ -384,7 +384,7 @@ class SipRepository(private val database: SipDatabase) {
             enablePunctuation = config.enablePunctuation
         )
         
-        transcriptionSessionDao.insertSession(session)
+//        transcriptionSessionDao.insertSession(session)
         log.d(tag = TAG) { "Transcription session created: ${session.id}" }
         
         return session
@@ -413,78 +413,78 @@ class SipRepository(private val database: SipDatabase) {
             wordCount = result.text.split("\\s+".toRegex()).size
         )
         
-        transcriptionDao.insertTranscription(transcription)
-        
+//        transcriptionDao.insertTranscription(transcription)
+
         // Actualizar estadísticas de sesión si es resultado final
         if (result.isFinal) {
-            updateTranscriptionSessionStats(sessionId)
+//            updateTranscriptionSessionStats(sessionId)
         }
-        
+
         log.d(tag = TAG) { "Transcription result created: ${transcription.id}" }
-        
+
         return transcription
     }
     
-    /**
-     * Finaliza sesión de transcripción
-     */
-    suspend fun endTranscriptionSession(sessionId: String) {
-        val endTime = System.currentTimeMillis()
-        transcriptionSessionDao.endSession(sessionId, endTime)
-        
-        // Actualizar estadísticas finales
-        updateTranscriptionSessionStats(sessionId)
-        
-        log.d(tag = TAG) { "Transcription session ended: $sessionId" }
-    }
+//    /**
+//     * Finaliza sesión de transcripción
+//     */
+//    suspend fun endTranscriptionSession(sessionId: String) {
+//        val endTime = System.currentTimeMillis()
+////        transcriptionSessionDao.endSession(sessionId, endTime)
+//
+//        // Actualizar estadísticas finales
+////        updateTranscriptionSessionStats(sessionId)
+//
+//        log.d(tag = TAG) { "Transcription session ended: $sessionId" }
+//    }
     
-    /**
-     * Obtiene transcripciones por sesión
-     */
-    fun getTranscriptionsBySession(sessionId: String): Flow<List<TranscriptionEntity>> {
-        return transcriptionDao.getTranscriptionsBySession(sessionId)
-    }
+//    /**
+//     * Obtiene transcripciones por sesión
+//     */
+//    fun getTranscriptionsBySession(sessionId: String): Flow<List<TranscriptionEntity>> {
+//        return transcriptionDao.getTranscriptionsBySession(sessionId)
+//    }
     
-    /**
-     * Obtiene sesiones de transcripción
-     */
-    fun getTranscriptionSessions(): Flow<List<TranscriptionSessionEntity>> {
-        return transcriptionSessionDao.getAllSessions()
-    }
+//    /**
+//     * Obtiene sesiones de transcripción
+//     */
+//    fun getTranscriptionSessions(): Flow<List<TranscriptionSessionEntity>> {
+//        return transcriptionSessionDao.getAllSessions()
+//    }
     
     /**
      * Busca en transcripciones
      */
-    fun searchTranscriptions(query: String): Flow<List<TranscriptionEntity>> {
-        return transcriptionDao.searchTranscriptions(query)
-    }
+//    fun searchTranscriptions(query: String): Flow<List<TranscriptionEntity>> {
+//        return transcriptionDao.searchTranscriptions(query)
+//    }
     
-    /**
-     * Actualiza estadísticas de sesión de transcripción
-     */
-    private suspend fun updateTranscriptionSessionStats(sessionId: String) {
-        try {
-            val analysis = transcriptionDao.getTranscriptionById(sessionId)
-            if (analysis != null) {
-                transcriptionSessionDao.updateSessionStatistics(
-                    sessionId = sessionId,
-                    total = analysis.wordCount,
-                    finalCount = 10,
-                    partial = analysis.wordCount - analysis.wordCount,
-                    words = analysis.wordCount,
-                    confidence = analysis.confidence,
-                    speechDuration = 0L, // Se calcularía de los timestamps
-                    silenceDuration = 0L, // Se calcularía de los gaps
-                    audioFrames = 0L, // Se trackearía desde el interceptor
-                    errors = 0 // Se trackearían los errores
-
-
-                )
-            }
-        } catch (e: Exception) {
-            log.e(tag = TAG) { "Error updating transcription session stats: ${e.message}" }
-        }
-    }
+//    /**
+//     * Actualiza estadísticas de sesión de transcripción
+//     */
+//    private suspend fun updateTranscriptionSessionStats(sessionId: String) {
+//        try {
+//            val analysis = transcriptionDao.getTranscriptionById(sessionId)
+//            if (analysis != null) {
+//                transcriptionSessionDao.updateSessionStatistics(
+//                    sessionId = sessionId,
+//                    total = analysis.wordCount,
+//                    finalCount = 10,
+//                    partial = analysis.wordCount - analysis.wordCount,
+//                    words = analysis.wordCount,
+//                    confidence = analysis.confidence,
+//                    speechDuration = 0L, // Se calcularía de los timestamps
+//                    silenceDuration = 0L, // Se calcularía de los gaps
+//                    audioFrames = 0L, // Se trackearía desde el interceptor
+//                    errors = 0 // Se trackearían los errores
+//
+//
+//                )
+//            }
+//        } catch (e: Exception) {
+//            log.e(tag = TAG) { "Error updating transcription session stats: ${e.message}" }
+//        }
+//    }
     
     // === ESTADÍSTICAS ===
     
@@ -498,8 +498,8 @@ class SipRepository(private val database: SipDatabase) {
         val missedCalls = callLogDao.getCallCountByType(CallTypes.MISSED)
         val totalContacts = contactDao.getTotalContactCount()
         val activeCalls = callDataDao.getActiveCallCount()
-        val totalTranscriptions = transcriptionDao.getTotalTranscriptionCount()
-        val activeSessions = transcriptionSessionDao.getActiveSessionCount()
+//        val totalTranscriptions = transcriptionDao.getTotalTranscriptionCount()
+//        val activeSessions = transcriptionSessionDao.getActiveSessionCount()
         
         return GeneralStatistics(
             totalAccounts = totalAccounts,
@@ -507,9 +507,9 @@ class SipRepository(private val database: SipDatabase) {
             totalCalls = totalCalls,
             missedCalls = missedCalls,
             totalContacts = totalContacts,
-            activeCalls = activeCalls,
-            totalTranscriptions = totalTranscriptions,
-            activeTranscriptionSessions = activeSessions
+            activeCalls = activeCalls
+//            totalTranscriptions = totalTranscriptions,
+//            activeTranscriptionSessions = activeSessions
         )
     }
     
@@ -565,8 +565,8 @@ class SipRepository(private val database: SipDatabase) {
         callLogDao.deleteCallLogsOlderThan(threshold)
         callStateHistoryDao.deleteStateHistoryOlderThan(threshold)
         callDataDao.deleteInactiveCallsOlderThan(threshold)
-        transcriptionDao.deleteTranscriptionsOlderThan(threshold)
-        transcriptionSessionDao.deleteSessionsOlderThan(threshold)
+//        transcriptionDao.deleteTranscriptionsOlderThan(threshold)
+//        transcriptionSessionDao.deleteSessionsOlderThan(threshold)
         
         log.d(tag = TAG) { "Cleanup completed for data older than $daysToKeep days" }
     }
@@ -581,7 +581,7 @@ class SipRepository(private val database: SipDatabase) {
     ) {
         callLogDao.keepOnlyRecentCallLogs(callLogsLimit)
         callStateHistoryDao.keepOnlyRecentStateHistory(stateHistoryLimit)
-        transcriptionDao.keepOnlyRecentTranscriptions(transcriptionsLimit)
+//        transcriptionDao.keepOnlyRecentTranscriptions(transcriptionsLimit)
         
         log.d(tag = TAG) { 
             "Kept only recent data: $callLogsLimit call logs, $stateHistoryLimit state history, $transcriptionsLimit transcriptions" 
@@ -620,6 +620,6 @@ data class GeneralStatistics(
     val missedCalls: Int,
     val totalContacts: Int,
     val activeCalls: Int,
-    val totalTranscriptions: Int,
-    val activeTranscriptionSessions: Int
+//    val totalTranscriptions: Int,
+//    val activeTranscriptionSessions: Int
 )

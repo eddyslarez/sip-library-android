@@ -236,55 +236,55 @@ class DatabaseManager private constructor(application: Application) {
     
     // === OPERACIONES DE TRANSCRIPCIÓN ===
     
-    /**
-     * Crea sesión de transcripción
-     */
-    suspend fun createTranscriptionSession(
-        callLogId: String,
-        callId: String,
-        config: AudioTranscriptionService.TranscriptionConfig
-    ): TranscriptionSessionEntity {
-        return repository.createTranscriptionSession(callLogId, callId, config)
-    }
+//    /**
+//     * Crea sesión de transcripción
+//     */
+//    suspend fun createTranscriptionSession(
+//        callLogId: String,
+//        callId: String,
+//        config: AudioTranscriptionService.TranscriptionConfig
+//    ): TranscriptionSessionEntity {
+//        return repository.createTranscriptionSession(callLogId, callId, config)
+//    }
     
-    /**
-     * Crea resultado de transcripción
-     */
-    suspend fun createTranscriptionResult(
-        sessionId: String,
-        callLogId: String,
-        result: AudioTranscriptionService.TranscriptionResult
-    ): TranscriptionEntity {
-        return repository.createTranscriptionResult(sessionId, callLogId, result)
-    }
+//    /**
+//     * Crea resultado de transcripción
+//     */
+//    suspend fun createTranscriptionResult(
+//        sessionId: String,
+//        callLogId: String,
+//        result: AudioTranscriptionService.TranscriptionResult
+//    ): TranscriptionEntity {
+//        return repository.createTranscriptionResult(sessionId, callLogId, result)
+//    }
     
-    /**
-     * Finaliza sesión de transcripción
-     */
-    suspend fun endTranscriptionSession(sessionId: String) {
-        repository.endTranscriptionSession(sessionId)
-    }
+//    /**
+//     * Finaliza sesión de transcripción
+//     */
+//    suspend fun endTranscriptionSession(sessionId: String) {
+//        repository.endTranscriptionSession(sessionId)
+//    }
     
-    /**
-     * Obtiene transcripciones por sesión
-     */
-    fun getTranscriptionsBySession(sessionId: String): Flow<List<TranscriptionEntity>> {
-        return repository.getTranscriptionsBySession(sessionId)
-    }
-    
-    /**
-     * Obtiene sesiones de transcripción
-     */
-    fun getTranscriptionSessions(): Flow<List<TranscriptionSessionEntity>> {
-        return repository.getTranscriptionSessions()
-    }
-    
-    /**
-     * Busca en transcripciones
-     */
-    fun searchTranscriptions(query: String): Flow<List<TranscriptionEntity>> {
-        return repository.searchTranscriptions(query)
-    }
+//    /**
+//     * Obtiene transcripciones por sesión
+//     */
+//    fun getTranscriptionsBySession(sessionId: String): Flow<List<TranscriptionEntity>> {
+//        return repository.getTranscriptionsBySession(sessionId)
+//    }
+//
+//    /**
+//     * Obtiene sesiones de transcripción
+//     */
+//    fun getTranscriptionSessions(): Flow<List<TranscriptionSessionEntity>> {
+//        return repository.getTranscriptionSessions()
+//    }
+//
+//    /**
+//     * Busca en transcripciones
+//     */
+//    fun searchTranscriptions(query: String): Flow<List<TranscriptionEntity>> {
+//        return repository.searchTranscriptions(query)
+//    }
     
     // === ESTADÍSTICAS ===
     
@@ -367,8 +367,6 @@ class DatabaseManager private constructor(application: Application) {
                 appendLine("Missed Calls: ${stats.missedCalls}")
                 appendLine("Total Contacts: ${stats.totalContacts}")
                 appendLine("Active Calls: ${stats.activeCalls}")
-                appendLine("Total Transcriptions: ${stats.totalTranscriptions}")
-                appendLine("Active Transcription Sessions: ${stats.activeTranscriptionSessions}")
                 appendLine("Database Path: ${database.openHelper.readableDatabase.path}")
                 appendLine("Database Version: ${database.openHelper.readableDatabase.version}")
             }
