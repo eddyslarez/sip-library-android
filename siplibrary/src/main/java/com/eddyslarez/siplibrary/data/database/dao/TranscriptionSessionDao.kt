@@ -1,6 +1,7 @@
 package com.eddyslarez.siplibrary.data.database.dao
 
 import androidx.room.*
+import com.eddyslarez.siplibrary.data.database.entities.TranscriptionEntity
 import kotlinx.coroutines.flow.Flow
 import com.eddyslarez.siplibrary.data.database.entities.TranscriptionSessionEntity
 import com.eddyslarez.siplibrary.data.services.transcription.AudioTranscriptionService
@@ -215,7 +216,7 @@ interface TranscriptionSessionDao {
     @Transaction
     suspend fun createSessionWithInitialTranscription(
         session: TranscriptionSessionEntity,
-        initialTranscription: com.eddyslarez.siplibrary.data.database.entities.TranscriptionEntity
+        initialTranscription: TranscriptionEntity
     ) {
         insertSession(session)
         // Necesitaríamos acceso al TranscriptionDao aquí
@@ -236,7 +237,11 @@ interface TranscriptionSessionDao {
             partial = finalStats.partialTranscriptions,
             words = finalStats.totalWords,
             confidence = finalStats.averageConfidence,
-            timestamp = System.currentTimeMillis()
+            timestamp = System.currentTimeMillis(),
+            speechDuration = finalStats.totalTranscriptions.toLong(),
+            silenceDuration = finalStats.totalTranscriptions.toLong(),
+            audioFrames = finalStats.totalTranscriptions.toLong(),
+            errors = finalStats.totalTranscriptions
         )
     }
 }

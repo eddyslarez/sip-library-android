@@ -464,19 +464,21 @@ class SipRepository(private val database: SipDatabase) {
      */
     private suspend fun updateTranscriptionSessionStats(sessionId: String) {
         try {
-            val analysis = transcriptionDao.getSessionAnalysis(sessionId)
+            val analysis = transcriptionDao.getTranscriptionById(sessionId)
             if (analysis != null) {
                 transcriptionSessionDao.updateSessionStatistics(
                     sessionId = sessionId,
-                    total = analysis.transcriptionCount,
-                    final = analysis.finalCount,
-                    partial = analysis.transcriptionCount - analysis.finalCount,
-                    words = analysis.totalWords,
-                    confidence = analysis.avgConfidence,
+                    total = analysis.wordCount,
+                    final = analysis.wordCount,
+                    partial = analysis.wordCount - analysis.wordCount,
+                    words = analysis.wordCount,
+                    confidence = analysis.confidence,
                     speechDuration = 0L, // Se calcularía de los timestamps
                     silenceDuration = 0L, // Se calcularía de los gaps
                     audioFrames = 0L, // Se trackearía desde el interceptor
                     errors = 0 // Se trackearían los errores
+
+
                 )
             }
         } catch (e: Exception) {
