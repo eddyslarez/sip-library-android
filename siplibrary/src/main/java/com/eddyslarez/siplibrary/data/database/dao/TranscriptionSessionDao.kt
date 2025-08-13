@@ -62,8 +62,9 @@ interface TranscriptionSessionDao {
     @Query("""
     UPDATE transcription_sessions SET 
     totalTranscriptions = :total,
-    finalTranscriptions = :finalCount,  
-totalWords = :words,
+    finalTranscriptions = :finalCount,
+    partialTranscriptions = :partial,   -- aquí lo usas
+    totalWords = :words,
     averageConfidence = :confidence,
     speechDuration = :speechDuration,
     silenceDuration = :silenceDuration,
@@ -72,6 +73,7 @@ totalWords = :words,
     updatedAt = :timestamp
     WHERE id = :sessionId
 """)
+
     suspend fun updateSessionStatistics(
         sessionId: String,
         total: Int,
