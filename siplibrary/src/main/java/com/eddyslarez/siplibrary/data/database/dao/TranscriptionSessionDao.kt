@@ -62,7 +62,7 @@ interface TranscriptionSessionDao {
     @Query("""
         UPDATE transcription_sessions SET 
         totalTranscriptions = :total,
-        finalTranscriptions = :final,
+        finalTranscriptions = :finalCount,
         partialTranscriptions = :partial,
         totalWords = :words,
         averageConfidence = :confidence,
@@ -76,7 +76,7 @@ interface TranscriptionSessionDao {
     suspend fun updateSessionStatistics(
         sessionId: String,
         total: Int,
-        final: Int,
+        finalCount: Int,
         partial: Int,
         words: Int,
         confidence: Float,
@@ -86,7 +86,7 @@ interface TranscriptionSessionDao {
         errors: Int,
         timestamp: Long = System.currentTimeMillis()
     )
-    
+
     @Query("""
         UPDATE transcription_sessions SET 
         averageAudioLevel = :avgLevel,
@@ -233,7 +233,7 @@ interface TranscriptionSessionDao {
         updateSessionStatistics(
             sessionId = sessionId,
             total = finalStats.totalTranscriptions,
-            final = finalStats.finalTranscriptions,
+            finalCount = finalStats.finalTranscriptions,
             partial = finalStats.partialTranscriptions,
             words = finalStats.totalWords,
             confidence = finalStats.averageConfidence,
