@@ -1,7 +1,7 @@
 plugins {
     id("com.android.library")
     id("org.jetbrains.kotlin.android")
-    id("com.google.devtools.ksp") version "2.1.10-1.0.29" // Reemplaza kotlin-kapt
+    id("com.google.devtools.ksp") version "2.1.10-1.0.29"
     id("kotlin-parcelize")
     id("maven-publish")
     id("org.jetbrains.kotlin.plugin.serialization")
@@ -17,6 +17,16 @@ android {
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         consumerProguardFiles("consumer-rules.pro")
+
+        // Fix Room schema export warning
+        javaCompileOptions {
+            annotationProcessorOptions {
+                arguments += mapOf(
+                    "room.schemaLocation" to "$projectDir/schemas",
+                    "room.incremental" to "true"
+                )
+            }
+        }
     }
 
     buildTypes {
@@ -36,6 +46,11 @@ android {
 
     kotlinOptions {
         jvmTarget = "11"
+    }
+
+    // Enable View Binding if needed
+    buildFeatures {
+        viewBinding = true
     }
 }
 

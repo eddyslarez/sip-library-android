@@ -58,25 +58,24 @@ interface TranscriptionSessionDao {
     suspend fun setSessionActive(sessionId: String, isActive: Boolean, timestamp: Long = System.currentTimeMillis())
     
     // === ACTUALIZACIÓN DE ESTADÍSTICAS ===
-    
+
     @Query("""
-        UPDATE transcription_sessions SET 
-        totalTranscriptions = :total,
-        finalTranscriptions = :finalCount,
-        partialTranscriptions = :partial,
-        totalWords = :words,
-        averageConfidence = :confidence,
-        speechDuration = :speechDuration,
-        silenceDuration = :silenceDuration,
-        audioFramesProcessed = :audioFrames,
-        errorsCount = :errors,
-        updatedAt = :timestamp
-        WHERE id = :sessionId
-    """)
+    UPDATE transcription_sessions SET 
+    totalTranscriptions = :total,
+    finalTranscriptions = :finalCount,  
+totalWords = :words,
+    averageConfidence = :confidence,
+    speechDuration = :speechDuration,
+    silenceDuration = :silenceDuration,
+    audioFramesProcessed = :audioFrames,
+    errorsCount = :errors,
+    updatedAt = :timestamp
+    WHERE id = :sessionId
+""")
     suspend fun updateSessionStatistics(
         sessionId: String,
         total: Int,
-        finalCount: Int,
+        finalCount: Int,  // Changed to finalCount
         partial: Int,
         words: Int,
         confidence: Float,
