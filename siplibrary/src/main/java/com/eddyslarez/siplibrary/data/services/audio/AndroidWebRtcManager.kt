@@ -1,20 +1,33 @@
 package com.eddyslarez.siplibrary.data.services.audio
 
+import android.Manifest
 import android.app.Application
 import android.content.Context
+import android.content.pm.PackageManager
 import android.media.AudioDeviceInfo
+import android.media.AudioFormat
 import android.media.AudioManager
+import android.media.AudioRecord
+import android.media.MediaRecorder
 import android.os.Build
+import androidx.core.app.ActivityCompat
 import com.eddyslarez.siplibrary.data.models.AccountInfo
+import com.eddyslarez.siplibrary.data.services.transcription.AudioTranscriptionService
 import com.eddyslarez.siplibrary.data.services.transcription.TranscriptionManager
 import com.eddyslarez.siplibrary.utils.log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.webrtc.*
+import org.webrtc.audio.AudioDeviceModule
+import org.webrtc.audio.JavaAudioDeviceModule
 import java.nio.ByteBuffer
 import java.util.concurrent.Executors
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
+import kotlin.coroutines.suspendCoroutine
 
 /**
  * Implementación de WebRTC Manager para Android con interceptación de audio
@@ -109,135 +122,216 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
         return JavaAudioDeviceModule.builder(application)
             .setUseHardwareAcousticEchoCanceler(true)
             .setUseHardwareNoiseSuppressor(true)
-            .setAudioRecordErrorCallback { errorMessage ->
-                log.e(tag = TAG) { "Audio record error: $errorMessage" }
-            }
-            .setAudioTrackErrorCallback { errorMessage ->
-                log.e(tag = TAG) { "Audio track error: $errorMessage" }
-            }
-            .setAudioRecordStateCallback(object : JavaAudioDeviceModule.AudioRecordStateCallback {
-                override fun onWebRtcAudioRecordStart() {
-                    log.d(tag = TAG) { "WebRTC audio record started" }
-                }
-                
-                override fun onWebRtcAudioRecordStop() {
+            .setAudioRecordErrorCallback(object : JavaAudioDeviceModule.AudioRecordErrorCallback {
+                override fun onWebRtcAudioRecordInitError(p0: String?) {
+                    log.e(tag = TAG) { "Audio track error: $p0" }                }
+
+                override fun onWebRtcAudioRecordStartError(
+                    p0: JavaAudioDeviceModule.AudioRecordStartErrorCode?,
+                    p1: String?
+                ) {
                     log.d(tag = TAG) { "WebRTC audio record stopped" }
+                }
+
+                override fun onWebRtcAudioRecordError(errorMessage: String?) {
+                    log.e(tag = TAG) { "Audio record error: $errorMessage" }
+                }
+            })
+            .setAudioTrackErrorCallback(object : JavaAudioDeviceModule.AudioTrackErrorCallback {
+                override fun onWebRtcAudioTrackInitError(p0: String?) {
+                    log.e(tag = TAG) { "Audio track error: $p0" }
+                }
+
+                override fun onWebRtcAudioTrackStartError(
+                    p0: JavaAudioDeviceModule.AudioTrackStartErrorCode?,
+                    p1: String?
+                ) {
+                    log.e(tag = TAG) { "Audio track error: $p1" }
+                }
+
+                override fun onWebRtcAudioTrackError(errorMessage: String?) {
                 }
             })
             .setAudioTrackStateCallback(object : JavaAudioDeviceModule.AudioTrackStateCallback {
                 override fun onWebRtcAudioTrackStart() {
                     log.d(tag = TAG) { "WebRTC audio track started" }
                 }
-                
+
                 override fun onWebRtcAudioTrackStop() {
                     log.d(tag = TAG) { "WebRTC audio track stopped" }
                 }
             })
             .createAudioDeviceModule()
     }
-    
+
     override suspend fun createOffer(): String {
         if (!isInitialized) {
             throw IllegalStateException("WebRTC not initialized")
         }
-        
-        return try {
-            createPeerConnectionIfNeeded()
-            
-            // Create audio track
-            createLocalAudioTrack()
-            
-            // Create offer
-            val constraints = MediaConstraints().apply {
-                mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveAudio", "true"))
-                mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", "false"))
+
+        return suspendCoroutine { continuation ->
+            try {
+                createPeerConnectionIfNeeded()
+
+                // Create audio track
+                createLocalAudioTrack()
+
+                // Create offer - CORREGIDO
+                val constraints = MediaConstraints().apply {
+                    mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveAudio", "true"))
+                    mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", "false"))
+                }
+
+                peerConnection?.createOffer(object : SdpObserver {
+                    override fun onCreateSuccess(sessionDescription: SessionDescription?) {
+                        sessionDescription?.let { offer ->
+                            peerConnection?.setLocalDescription(object : SdpObserver {
+                                override fun onSetSuccess() {
+                                    continuation.resume(offer.description)
+                                }
+
+                                override fun onSetFailure(error: String?) {
+                                    continuation.resumeWithException(Exception("Failed to set local description: $error"))
+                                }
+
+                                override fun onCreateSuccess(p0: SessionDescription?) {}
+                                override fun onCreateFailure(p0: String?) {}
+                            }, offer)
+                        } ?: run {
+                            continuation.resumeWithException(Exception("Offer is null"))
+                        }
+                    }
+
+                    override fun onCreateFailure(error: String?) {
+                        continuation.resumeWithException(Exception("Failed to create offer: $error"))
+                    }
+
+                    override fun onSetSuccess() {}
+                    override fun onSetFailure(error: String?) {}
+                }, constraints)
+
+            } catch (e: Exception) {
+                log.e(tag = TAG) { "Error creating offer: ${e.message}" }
+                continuation.resumeWithException(e)
             }
-            
-            val offer = peerConnection?.createOffer(constraints)
-            if (offer != null) {
-                peerConnection?.setLocalDescription(offer)
-                offer.description
-            } else {
-                throw Exception("Failed to create offer")
-            }
-            
-        } catch (e: Exception) {
-            log.e(tag = TAG) { "Error creating offer: ${e.message}" }
-            throw e
         }
     }
-    
+
     override suspend fun createAnswer(accountInfo: AccountInfo, offerSdp: String): String {
         if (!isInitialized) {
             throw IllegalStateException("WebRTC not initialized")
         }
-        
-        return try {
-            createPeerConnectionIfNeeded()
-            
-            // Set remote description (offer)
-            val offer = SessionDescription(SessionDescription.Type.OFFER, offerSdp)
-            peerConnection?.setRemoteDescription(offer)
-            
-            // Create local audio track
-            createLocalAudioTrack()
-            
-            // Create answer
-            val constraints = MediaConstraints().apply {
-                mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveAudio", "true"))
-                mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", "false"))
+
+        return suspendCoroutine { continuation ->
+            try {
+                createPeerConnectionIfNeeded()
+
+                // Set remote description (offer)
+                val offer = SessionDescription(SessionDescription.Type.OFFER, offerSdp)
+                peerConnection?.setRemoteDescription(object : SdpObserver {
+                    override fun onSetSuccess() {
+                        // Create local audio track
+                        createLocalAudioTrack()
+
+                        // Create answer - CORREGIDO
+                        val constraints = MediaConstraints().apply {
+                            mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveAudio", "true"))
+                            mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", "false"))
+                        }
+
+                        peerConnection?.createAnswer(object : SdpObserver {
+                            override fun onCreateSuccess(sessionDescription: SessionDescription?) {
+                                sessionDescription?.let { answer ->
+                                    peerConnection?.setLocalDescription(object : SdpObserver {
+                                        override fun onSetSuccess() {
+                                            continuation.resume(answer.description)
+                                        }
+
+                                        override fun onSetFailure(error: String?) {
+                                            continuation.resumeWithException(Exception("Failed to set local answer: $error"))
+                                        }
+
+                                        override fun onCreateSuccess(p0: SessionDescription?) {}
+                                        override fun onCreateFailure(p0: String?) {}
+                                    }, answer)
+                                } ?: run {
+                                    continuation.resumeWithException(Exception("Answer is null"))
+                                }
+                            }
+
+                            override fun onCreateFailure(error: String?) {
+                                continuation.resumeWithException(Exception("Failed to create answer: $error"))
+                            }
+
+                            override fun onSetSuccess() {}
+                            override fun onSetFailure(error: String?) {}
+                        }, constraints)
+                    }
+
+                    override fun onSetFailure(error: String?) {
+                        continuation.resumeWithException(Exception("Failed to set remote description: $error"))
+                    }
+
+                    override fun onCreateSuccess(p0: SessionDescription?) {}
+                    override fun onCreateFailure(p0: String?) {}
+                }, offer)
+
+            } catch (e: Exception) {
+                log.e(tag = TAG) { "Error creating answer: ${e.message}" }
+                continuation.resumeWithException(e)
             }
-            
-            val answer = peerConnection?.createAnswer(constraints)
-            if (answer != null) {
-                peerConnection?.setLocalDescription(answer)
-                answer.description
-            } else {
-                throw Exception("Failed to create answer")
-            }
-            
-        } catch (e: Exception) {
-            log.e(tag = TAG) { "Error creating answer: ${e.message}" }
-            throw e
         }
     }
-    
+
     override suspend fun setRemoteDescription(sdp: String, type: SdpType) {
-        try {
-            val sessionDescriptionType = when (type) {
-                SdpType.OFFER -> SessionDescription.Type.OFFER
-                SdpType.ANSWER -> SessionDescription.Type.ANSWER
+        return suspendCoroutine { continuation ->
+            try {
+                val sessionDescriptionType = when (type) {
+                    SdpType.OFFER -> SessionDescription.Type.OFFER
+                    SdpType.ANSWER -> SessionDescription.Type.ANSWER
+                }
+
+                val sessionDescription = SessionDescription(sessionDescriptionType, sdp)
+                peerConnection?.setRemoteDescription(object : SdpObserver {
+                    override fun onSetSuccess() {
+                        log.d(tag = TAG) { "Remote description set: $type" }
+                        continuation.resume(Unit)
+                    }
+
+                    override fun onSetFailure(error: String?) {
+                        log.e(tag = TAG) { "Error setting remote description: $error" }
+                        continuation.resumeWithException(Exception("Failed to set remote description: $error"))
+                    }
+
+                    override fun onCreateSuccess(p0: SessionDescription?) {}
+                    override fun onCreateFailure(p0: String?) {}
+                }, sessionDescription)
+
+            } catch (e: Exception) {
+                log.e(tag = TAG) { "Error setting remote description: ${e.message}" }
+                continuation.resumeWithException(e)
             }
-            
-            val sessionDescription = SessionDescription(sessionDescriptionType, sdp)
-            peerConnection?.setRemoteDescription(sessionDescription)
-            
-            log.d(tag = TAG) { "Remote description set: $type" }
-            
-        } catch (e: Exception) {
-            log.e(tag = TAG) { "Error setting remote description: ${e.message}" }
-            throw e
         }
     }
-    
+
     override suspend fun addIceCandidate(candidate: String, sdpMid: String?, sdpMLineIndex: Int?) {
         try {
             val iceCandidate = IceCandidate(sdpMid, sdpMLineIndex ?: 0, candidate)
             peerConnection?.addIceCandidate(iceCandidate)
-            
+
             log.d(tag = TAG) { "ICE candidate added: $candidate" }
-            
+
         } catch (e: Exception) {
             log.e(tag = TAG) { "Error adding ICE candidate: ${e.message}" }
         }
     }
-    
+
     /**
      * Crea PeerConnection si no existe
      */
     private fun createPeerConnectionIfNeeded() {
         if (peerConnection != null) return
-        
+
         val rtcConfig = PeerConnection.RTCConfiguration(
             listOf(
                 PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer()
@@ -249,17 +343,17 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
             candidateNetworkPolicy = PeerConnection.CandidateNetworkPolicy.ALL
             continualGatheringPolicy = PeerConnection.ContinualGatheringPolicy.GATHER_CONTINUALLY
         }
-        
+
         peerConnection = peerConnectionFactory?.createPeerConnection(
             rtcConfig,
             object : PeerConnection.Observer {
                 override fun onSignalingChange(signalingState: PeerConnection.SignalingState?) {
                     log.d(tag = TAG) { "Signaling state changed: $signalingState" }
                 }
-                
+
                 override fun onIceConnectionChange(iceConnectionState: PeerConnection.IceConnectionState?) {
                     log.d(tag = TAG) { "ICE connection state changed: $iceConnectionState" }
-                    
+
                     val newState = when (iceConnectionState) {
                         PeerConnection.IceConnectionState.NEW -> WebRtcConnectionState.NEW
                         PeerConnection.IceConnectionState.CHECKING -> WebRtcConnectionState.CONNECTING
@@ -270,19 +364,19 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
                         PeerConnection.IceConnectionState.CLOSED -> WebRtcConnectionState.CLOSED
                         else -> WebRtcConnectionState.NEW
                     }
-                    
+
                     connectionState = newState
                     webRtcListener?.onConnectionStateChange(newState)
                 }
-                
+
                 override fun onIceConnectionReceivingChange(receiving: Boolean) {
                     log.d(tag = TAG) { "ICE connection receiving changed: $receiving" }
                 }
-                
+
                 override fun onIceGatheringChange(iceGatheringState: PeerConnection.IceGatheringState?) {
                     log.d(tag = TAG) { "ICE gathering state changed: $iceGatheringState" }
                 }
-                
+
                 override fun onIceCandidate(iceCandidate: IceCandidate?) {
                     iceCandidate?.let { candidate ->
                         webRtcListener?.onIceCandidate(
@@ -292,40 +386,40 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
                         )
                     }
                 }
-                
+
                 override fun onIceCandidatesRemoved(iceCandidates: Array<out IceCandidate>?) {
                     log.d(tag = TAG) { "ICE candidates removed: ${iceCandidates?.size}" }
                 }
-                
+
                 override fun onAddStream(mediaStream: MediaStream?) {
                     log.d(tag = TAG) { "Stream added: ${mediaStream?.id}" }
-                    
+
                     mediaStream?.audioTracks?.firstOrNull()?.let { audioTrack ->
                         remoteAudioTrack = audioTrack
-                        
+
                         // CRÍTICO: Configurar interceptación de audio remoto
                         setupRemoteAudioInterception(audioTrack)
-                        
+
                         webRtcListener?.onRemoteAudioTrack()
                     }
                 }
-                
+
                 override fun onRemoveStream(mediaStream: MediaStream?) {
                     log.d(tag = TAG) { "Stream removed: ${mediaStream?.id}" }
                     remoteAudioTrack = null
                 }
-                
+
                 override fun onDataChannel(dataChannel: DataChannel?) {
                     log.d(tag = TAG) { "Data channel: ${dataChannel?.label()}" }
                 }
-                
+
                 override fun onRenegotiationNeeded() {
                     log.d(tag = TAG) { "Renegotiation needed" }
                 }
-                
+
                 override fun onAddTrack(rtpReceiver: RtpReceiver?, mediaStreams: Array<out MediaStream>?) {
                     log.d(tag = TAG) { "Track added: ${rtpReceiver?.track()?.kind()}" }
-                    
+
                     if (rtpReceiver?.track()?.kind() == "audio") {
                         remoteAudioTrack = rtpReceiver.track() as? AudioTrack
                         remoteAudioTrack?.let { audioTrack ->
@@ -336,7 +430,7 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
                 }
             }
         )
-        
+
         log.d(tag = TAG) { "PeerConnection created" }
     }
     
@@ -410,7 +504,8 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
                     bitsPerSample: Int,
                     sampleRate: Int,
                     numberOfChannels: Int,
-                    numberOfFrames: Int
+                    numberOfFrames: Int,
+                    captureTimeNs: Long
                 ) {
                     audioData?.let { buffer ->
                         // Convertir ByteBuffer a ByteArray
@@ -484,7 +579,7 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
     /**
      * Obtiene gestor de transcripción
      */
-    fun getTranscriptionManager(): TranscriptionManager? = transcriptionManager
+    override fun getTranscriptionManager(): TranscriptionManager? = transcriptionManager
     
     override fun getAllAudioDevices(): Pair<List<AudioDevice>, List<AudioDevice>> {
         val inputDevices = mutableListOf<AudioDevice>()
@@ -492,7 +587,7 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
         
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                val devices = audioManager.getDevices(AudioManager.GET_DEVICES_ALL)
+                val devices = audioManager.getDevices(AudioManager.GET_DEVICES_INPUTS)
                 
                 devices.forEach { deviceInfo ->
                     val audioDevice = convertToAudioDevice(deviceInfo)
@@ -753,7 +848,7 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
     override suspend fun applyModifiedSdp(modifiedSdp: String): Boolean {
         return try {
             val sessionDescription = SessionDescription(SessionDescription.Type.OFFER, modifiedSdp)
-            peerConnection?.setLocalDescription(sessionDescription)
+            peerConnection?.setLocalDescription(sessionDescription as SdpObserver?)
             true
         } catch (e: Exception) {
             log.e(tag = TAG) { "Error applying modified SDP: ${e.message}" }
@@ -762,7 +857,90 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
     }
     
     override fun isInitialized(): Boolean = isInitialized
-    
+
+    override fun enableTranscription(
+        enabled: Boolean,
+        config: AudioTranscriptionService.TranscriptionConfig?
+    ) {
+        isTranscriptionEnabled = true
+        config?.let { transcriptionManager?.updateTranscriptionConfig(it) }
+
+    // Iniciar captura paralela si es necesario
+    if (config?.audioSource == AudioTranscriptionService.AudioSource.WEBRTC_BOTH ||
+    config?.audioSource == AudioTranscriptionService.AudioSource.WEBRTC_LOCAL) {
+        setupParallelAudioCapture()
+    }
+
+    log.d(tag = TAG) { "Audio transcription enabled with config: $config" }
+}
+    private fun setupParallelAudioCapture() {
+        if (!isTranscriptionEnabled) return
+
+        scope.launch {
+            try {
+                // Configurar AudioRecord para captura en paralelo
+                val sampleRate = 16000
+                val channelConfig = AudioFormat.CHANNEL_IN_MONO
+                val audioFormat = AudioFormat.ENCODING_PCM_16BIT
+                val bufferSize = AudioRecord.getMinBufferSize(sampleRate, channelConfig, audioFormat)
+
+                if (ActivityCompat.checkSelfPermission(
+                        application,
+                        Manifest.permission.RECORD_AUDIO
+                    ) == PackageManager.PERMISSION_GRANTED
+                ) {
+                    val audioRecord = AudioRecord(
+                        MediaRecorder.AudioSource.VOICE_COMMUNICATION, // Usar la misma fuente que WebRTC
+                        sampleRate,
+                        channelConfig,
+                        audioFormat,
+                        bufferSize
+                    )
+
+                    if (audioRecord.state == AudioRecord.STATE_INITIALIZED) {
+                        audioRecord.startRecording()
+
+                        val audioBuffer = ByteArray(bufferSize)
+
+                        while (isTranscriptionEnabled && audioRecord.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
+                            val bytesRead = audioRecord.read(audioBuffer, 0, audioBuffer.size)
+
+                            if (bytesRead > 0) {
+                                transcriptionManager?.onLocalAudioFrame(
+                                    audioBuffer.copyOf(bytesRead),
+                                    sampleRate.toLong()
+                                )
+                            }
+
+                            delay(10) // Pequeña pausa para no saturar
+                        }
+
+                        audioRecord.stop()
+                        audioRecord.release()
+                    }
+                }
+
+            } catch (e: Exception) {
+                log.e(tag = TAG) { "Error in parallel audio capture: ${e.message}" }
+            }
+        }
+    }
+    override fun startTranscriptionSession(
+        callId: String,
+        config: AudioTranscriptionService.TranscriptionConfig
+    ) {
+        if (!isTranscriptionEnabled) {
+            transcriptionManager?.stopTranscriptionSession()
+            log.d(tag = TAG) { "Transcription session stopped" }
+        }
+
+        transcriptionManager?.startTranscriptionSession(callId, config)
+        log.d(tag = TAG) { "Transcription session started for call: $callId" }    }
+
+    override fun stopTranscriptionSession() {
+        TODO("Not yet implemented")
+    }
+
     override fun sendDtmfTones(tones: String, duration: Int, gap: Int): Boolean {
         return try {
             // Implementar envío de DTMF via RTP

@@ -1,5 +1,7 @@
 package com.eddyslarez.siplibrary.data.services.transcription
 
+import android.os.Build
+import androidx.annotation.RequiresApi
 import com.eddyslarez.siplibrary.utils.log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -78,6 +80,7 @@ class GoogleCloudSpeechProvider(
     private val TAG = "GoogleCloudSpeech"
     private val baseUrl = "https://speech.googleapis.com/v1/speech"
     
+    @RequiresApi(Build.VERSION_CODES.O)
     override suspend fun transcribeAudio(
         audioData: ByteArray,
         config: AudioTranscriptionService.TranscriptionConfig
