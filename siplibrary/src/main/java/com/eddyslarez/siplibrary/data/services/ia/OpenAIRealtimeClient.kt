@@ -73,7 +73,8 @@ data class OpenAIRealtimeResponse(
     val transcript: String? = null,
     val item_id: String? = null,
     val event_id: String? = null,
-    val error: ErrorInfo? = null
+    val error: ErrorInfo? = null,
+    val session: SessionConfig? = null // para capturar actualizaciones de sesión
 )
 
 @Serializable
@@ -86,7 +87,7 @@ data class ErrorInfo(
 
 class OpenAIRealtimeClient(
     private val apiKey: String,
-    private val model: String = "gpt-4o-realtime-preview-2024-10-01"
+    private val model: String = "gpt-4o-realtime-preview-2025-06-03"
 ) {
     private val client = OkHttpClient.Builder()
         .readTimeout(30, TimeUnit.SECONDS)
@@ -97,12 +98,14 @@ class OpenAIRealtimeClient(
     internal var isConnected = false
     private val coroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
-    // Channels for audio processing
     private val audioResponseChannel = Channel<ByteArray>(Channel.UNLIMITED)
     private val transcriptionChannel = Channel<String>(Channel.UNLIMITED)
 
     private var onConnectionStateChanged: ((Boolean) -> Unit)? = null
     private var onError: ((String) -> Unit)? = null
+
+    // Json parser seguro
+    private val jsonParser = Json { ignoreUnknownKeys = true }
 
     companion object {
         private const val TAG = "OpenAIRealtimeClient"
@@ -125,10 +128,9 @@ class OpenAIRealtimeClient(
                 .addHeader("OpenAI-Beta", "realtime=v1")
                 .build()
 
-            val webSocketListener = createWebSocketListener()
-            webSocket = client.newWebSocket(request, webSocketListener)
+            webSocket = client.newWebSocket(request, createWebSocketListener())
 
-            // Wait for connection
+            // Esperamos a que se conecte
             delay(2000)
             isConnected
         } catch (e: Exception) {
@@ -138,38 +140,30 @@ class OpenAIRealtimeClient(
         }
     }
 
-    private fun createWebSocketListener(): WebSocketListener {
-        return object : WebSocketListener() {
-            override fun onOpen(webSocket: WebSocket, response: Response) {
-                log.d(TAG) { "OpenAI WebSocket connected" }
-                isConnected = true
-                onConnectionStateChanged?.invoke(true)
+    private fun createWebSocketListener(): WebSocketListener = object : WebSocketListener() {
+        override fun onOpen(webSocket: WebSocket, response: Response) {
+            log.d(TAG) { "OpenAI WebSocket connected" }
+            isConnected = true
+            onConnectionStateChanged?.invoke(true)
+            coroutineScope.launch { initializeSession() }
+        }
 
-                // Send session configuration
-                coroutineScope.launch {
-                    initializeSession()
-                }
-            }
+        @RequiresApi(Build.VERSION_CODES.O)
+        override fun onMessage(webSocket: WebSocket, text: String) {
+            coroutineScope.launch { handleMessage(text) }
+        }
 
-            @RequiresApi(Build.VERSION_CODES.O)
-            override fun onMessage(webSocket: WebSocket, text: String) {
-                coroutineScope.launch {
-                    handleMessage(text)
-                }
-            }
+        override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+            log.e(TAG) { "WebSocket failure: ${t.message}" }
+            isConnected = false
+            onConnectionStateChanged?.invoke(false)
+            onError?.invoke("WebSocket error: ${t.message}")
+        }
 
-            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                log.e(TAG) { "WebSocket failure: ${t.message}" }
-                isConnected = false
-                onConnectionStateChanged?.invoke(false)
-                onError?.invoke("WebSocket error: ${t.message}")
-            }
-
-            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                log.d(TAG) { "WebSocket closed: $code $reason" }
-                isConnected = false
-                onConnectionStateChanged?.invoke(false)
-            }
+        override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+            log.d(TAG) { "WebSocket closed: $code $reason" }
+            isConnected = false
+            onConnectionStateChanged?.invoke(false)
         }
     }
 
@@ -199,52 +193,30 @@ class OpenAIRealtimeClient(
     @RequiresApi(Build.VERSION_CODES.O)
     private suspend fun handleMessage(text: String) {
         try {
-            val response = Json.decodeFromString<OpenAIRealtimeResponse>(text)
+            val response = jsonParser.decodeFromString<OpenAIRealtimeResponse>(text)
 
             when (response.type) {
-                "response.audio.delta" -> {
-                    response.delta?.let { audioData ->
-                        val audioBytes = Base64.getDecoder().decode(audioData)
-                        audioResponseChannel.trySend(audioBytes)
-                    }
+                "response.audio.delta" -> response.delta?.let {
+                    audioResponseChannel.trySend(Base64.getDecoder().decode(it))
                 }
 
-                "response.audio_transcript.delta" -> {
-                    response.delta?.let { transcript ->
-                        transcriptionChannel.trySend(transcript)
-                    }
+                "response.audio_transcript.delta" -> response.delta?.let {
+                    transcriptionChannel.trySend(it)
                 }
 
-                "error" -> {
-                    response.error?.let { error ->
-                        log.e(TAG) { "OpenAI error: ${error.message}" }
-                        onError?.invoke("OpenAI error: ${error.message}")
-                    }
+                "error" -> response.error?.let {
+                    log.e(TAG) { "OpenAI error: ${it.message}" }
+                    onError?.invoke("OpenAI error: ${it.message}")
                 }
 
-                "session.created" -> {
-                    log.d(TAG) { "OpenAI session created successfully" }
+                "session.created", "session.updated" -> {
+                    log.d(TAG) { "Session event: ${response.type}" }
                 }
 
-                "session.updated" -> {
-                    log.d(TAG) { "OpenAI session updated successfully" }
-                }
-
-                "input_audio_buffer.speech_started" -> {
-                    log.d(TAG) { "Speech detection started" }
-                }
-
-                "input_audio_buffer.speech_stopped" -> {
-                    log.d(TAG) { "Speech detection stopped" }
-                }
-
-                "response.created" -> {
-                    log.d(TAG) { "OpenAI response created" }
-                }
-
-                "response.done" -> {
-                    log.d(TAG) { "OpenAI response completed" }
-                }
+                "input_audio_buffer.speech_started" -> log.d(TAG) { "Speech started" }
+                "input_audio_buffer.speech_stopped" -> log.d(TAG) { "Speech stopped" }
+                "response.created" -> log.d(TAG) { "Response created" }
+                "response.done" -> log.d(TAG) { "Response done" }
             }
         } catch (e: Exception) {
             log.e(TAG) { "Error parsing OpenAI message: ${e.message}" }
@@ -253,34 +225,22 @@ class OpenAIRealtimeClient(
 
     @RequiresApi(Build.VERSION_CODES.O)
     suspend fun sendAudio(audioData: ByteArray) {
-        if (!isConnected) {
-            log.w(TAG) { "Cannot send audio: not connected" }
-            return
-        }
-
-        try {
-            val base64Audio = Base64.getEncoder().encodeToString(audioData)
-            val request = OpenAIRealtimeRequest(
-                type = "input_audio_buffer.append",
-                audio = base64Audio
-            )
-
-            sendMessage(request)
-        } catch (e: Exception) {
-            log.e(TAG) { "Error sending audio to OpenAI: ${e.message}" }
-        }
+        if (!isConnected) return
+        val base64Audio = Base64.getEncoder().encodeToString(audioData)
+        val request = OpenAIRealtimeRequest(
+            type = "input_audio_buffer.append",
+            audio = base64Audio
+        )
+        sendMessage(request)
     }
 
     suspend fun commitAudio() {
         if (!isConnected) return
-
-        val request = OpenAIRealtimeRequest(type = "input_audio_buffer.commit")
-        sendMessage(request)
+        sendMessage(OpenAIRealtimeRequest(type = "input_audio_buffer.commit"))
     }
 
     suspend fun createResponse() {
         if (!isConnected) return
-
         val request = OpenAIRealtimeRequest(
             type = "response.create",
             eventId = "event_${System.currentTimeMillis()}"
@@ -290,7 +250,7 @@ class OpenAIRealtimeClient(
 
     private suspend fun sendMessage(request: OpenAIRealtimeRequest) {
         try {
-            val json = Json.encodeToString(request)
+            val json = jsonParser.encodeToString(request)
             webSocket?.send(json)
         } catch (e: Exception) {
             log.e(TAG) { "Error sending message: ${e.message}" }
