@@ -69,7 +69,7 @@ class AndroidWebRtcManager(
     }
 
     private val openAiClient = openAiApiKey?.let { OpenAIRealtimeClient(it) }
-    private var isOpenAiEnabled = false
+    private var isOpenAiEnabled = true
     private var audioBuffer = mutableListOf<ByteArray>()
     private val bufferLock = Mutex()
 
