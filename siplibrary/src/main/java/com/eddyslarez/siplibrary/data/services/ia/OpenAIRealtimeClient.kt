@@ -7,6 +7,13 @@ package com.eddyslarez.siplibrary.data.services.ia
  *
  * @author Eddys Larez
  */
+/**
+ * FIXED OpenAI Realtime Audio Integration for AndroidWebRtcManager
+ * This implementation captures remote WebRTC audio, sends it to OpenAI Realtime API,
+ * and plays back the AI response locally instead of the original remote audio.
+ *
+ * @author Eddys Larez - Fixed version
+ */
 import android.os.Build
 import androidx.annotation.RequiresApi
 import com.eddyslarez.siplibrary.utils.log
@@ -18,37 +25,43 @@ import kotlinx.coroutines.channels.*
 import java.util.Base64
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
-import com.eddyslarez.siplibrary.utils.log
-import okhttp3.*
-import kotlinx.serialization.*
-import kotlinx.serialization.json.*
-import kotlinx.coroutines.*
-import kotlinx.coroutines.channels.*
 
-
+// FIXED: Separate data classes for different message types
 @Serializable
-data class OpenAIRealtimeRequest(
-    val type: String,
-    val audio: String? = null,
+data class SessionUpdateMessage(
+    val type: String = "session.update",
     @SerialName("event_id") val eventId: String? = null,
-    val session: SessionConfig? = null,
+    // Session configuration directly at root level, not nested
+    val modalities: List<String>? = null,
+    val instructions: String? = null,
+    val voice: String? = null,
     val input_audio_format: String? = null,
-    val output_audio_format: String? = null
+    val output_audio_format: String? = null,
+    val input_audio_transcription: InputAudioTranscription? = null,
+    val turn_detection: TurnDetection? = null,
+    val tools: List<Tool>? = null,
+    val tool_choice: String? = null,
+    val temperature: Double? = null,
+    val max_response_output_tokens: String? = null
 )
 
 @Serializable
-data class SessionConfig(
-    val modalities: List<String> = listOf("text", "audio"),
-    val instructions: String = "You are a helpful AI assistant. Keep responses concise and natural.",
-    val voice: String = "alloy",
-    val input_audio_format: String = "pcm16",
-    val output_audio_format: String = "pcm16",
-    val input_audio_transcription: InputAudioTranscription? = InputAudioTranscription(),
-    val turn_detection: TurnDetection? = null,
-    val tools: List<Tool> = emptyList(),
-    val tool_choice: String = "auto",
-    val temperature: Double = 0.8,
-    val max_response_output_tokens: String = "inf"
+data class AudioAppendMessage(
+    val type: String = "input_audio_buffer.append",
+    @SerialName("event_id") val eventId: String? = null,
+    val audio: String
+)
+
+@Serializable
+data class AudioCommitMessage(
+    val type: String = "input_audio_buffer.commit",
+    @SerialName("event_id") val eventId: String? = null
+)
+
+@Serializable
+data class ResponseCreateMessage(
+    val type: String = "response.create",
+    @SerialName("event_id") val eventId: String? = null
 )
 
 @Serializable
@@ -58,13 +71,10 @@ data class InputAudioTranscription(
 
 @Serializable
 data class TurnDetection(
-    val type: String = "semantic_vad",
-    val threshold: Double? = null, // Solo para server_vad
-    val prefix_padding_ms: Int? = null, // Solo para server_vad
-    val silence_duration_ms: Int? = null, // Solo para server_vad
-    val eagerness: String = "medium", // Para semantic_vad: "low", "medium", "high", "auto"
-    val create_response: Boolean = true, // Para semantic_vad
-    val interrupt_response: Boolean = true // Para semantic_vad
+    val type: String = "server_vad", // Changed from semantic_vad to server_vad for better compatibility
+    val threshold: Double? = 0.5,
+    val prefix_padding_ms: Int? = 300,
+    val silence_duration_ms: Int? = 200
 )
 
 @Serializable
@@ -84,7 +94,7 @@ data class OpenAIRealtimeResponse(
     val item_id: String? = null,
     val event_id: String? = null,
     val error: ErrorInfo? = null,
-    val session: SessionConfig? = null,
+    val session: SessionInfo? = null,
     val response: ResponseInfo? = null,
     val item: ItemInfo? = null
 )
@@ -94,13 +104,33 @@ data class ErrorInfo(
     val type: String,
     val code: String,
     val message: String,
-    val param: String? = null
+    val param: String? = null,
+    val event_id: String? = null
+)
+
+@Serializable
+data class SessionInfo(
+    val id: String? = null,
+    val model: String? = null,
+    val expires_at: Long? = null,
+    val modalities: List<String>? = null,
+    val instructions: String? = null,
+    val voice: String? = null,
+    val input_audio_format: String? = null,
+    val output_audio_format: String? = null,
+    val input_audio_transcription: InputAudioTranscription? = null,
+    val turn_detection: TurnDetection? = null,
+    val tools: List<Tool>? = null,
+    val tool_choice: String? = null,
+    val temperature: Double? = null,
+    val max_response_output_tokens: String? = null
 )
 
 @Serializable
 data class ResponseInfo(
     val id: String? = null,
-    val status: String? = null
+    val status: String? = null,
+    val status_details: JsonObject? = null
 )
 
 @Serializable
@@ -118,29 +148,22 @@ data class ContentInfo(
     val transcript: String? = null
 )
 
-enum class SemanticVADEagerness(val value: String) {
-    LOW("low"),
-    MEDIUM("medium"),
-    HIGH("high"),
-    AUTO("auto")
-}
-
 class OpenAIRealtimeClient(
     private val apiKey: String,
-    private val model: String = "gpt-4o-realtime-preview-2025-01-21"
+    private val model: String = "gpt-4o-realtime-preview-2024-10-01" // Updated model name
 ) {
     private val client = OkHttpClient.Builder()
-        .readTimeout(0, TimeUnit.SECONDS) // Sin timeout para WebSocket permanente
+        .readTimeout(0, TimeUnit.SECONDS)
         .writeTimeout(10, TimeUnit.SECONDS)
         .connectTimeout(30, TimeUnit.SECONDS)
-        .pingInterval(30, TimeUnit.SECONDS) // Keep-alive
+        .pingInterval(30, TimeUnit.SECONDS)
         .build()
 
     private var webSocket: WebSocket? = null
     internal val isConnected = AtomicBoolean(false)
     private val coroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
-    // Canales para manejar las respuestas
+    // Channels for responses
     private val audioResponseChannel = Channel<ByteArray>(Channel.UNLIMITED)
     private val transcriptionChannel = Channel<String>(Channel.UNLIMITED)
     private val fullTranscriptChannel = Channel<String>(Channel.UNLIMITED)
@@ -153,14 +176,15 @@ class OpenAIRealtimeClient(
     private var onResponseCreated: ((String) -> Unit)? = null
     private var onResponseDone: ((String) -> Unit)? = null
 
-    // Json parser con configuración robusta
+    // Json parser with robust configuration
     private val jsonParser = Json {
         ignoreUnknownKeys = true
         isLenient = true
-        encodeDefaults = true
+        encodeDefaults = false // Don't encode null values
+        explicitNulls = false
     }
 
-    // Control de reconexión
+    // Reconnection control
     private var reconnectJob: Job? = null
     private var shouldReconnect = AtomicBoolean(true)
     private val maxReconnectAttempts = 5
@@ -171,7 +195,7 @@ class OpenAIRealtimeClient(
         private const val WEBSOCKET_URL = "wss://api.openai.com/v1/realtime"
     }
 
-    // Listeners
+    // Listeners (same as original)
     fun setConnectionStateListener(listener: (Boolean) -> Unit) {
         onConnectionStateChanged = listener
     }
@@ -219,9 +243,9 @@ class OpenAIRealtimeClient(
             log.d(TAG) { "Connecting to OpenAI WebSocket..." }
             webSocket = client.newWebSocket(request, createWebSocketListener())
 
-            // Esperamos a que se conecte con timeout
+            // Wait for connection with timeout
             var attempts = 0
-            while (!isConnected.get() && attempts < 50) { // 5 segundos máximo
+            while (!isConnected.get() && attempts < 50) {
                 delay(100)
                 attempts++
             }
@@ -240,10 +264,10 @@ class OpenAIRealtimeClient(
             reconnectAttempts = 0
             onConnectionStateChanged?.invoke(true)
 
-            // Inicializar sesión en una corrutina
+            // Initialize session in coroutine
             coroutineScope.launch {
                 try {
-                    delay(500) // Pequeña pausa para asegurar estabilidad
+                    delay(500) // Small pause for stability
                     initializeSession()
                 } catch (e: Exception) {
                     log.e(TAG) { "Error initializing session: ${e.message}" }
@@ -269,7 +293,6 @@ class OpenAIRealtimeClient(
             onConnectionStateChanged?.invoke(false)
             onError?.invoke("WebSocket error: ${t.message}")
 
-            // Intentar reconexión automática
             if (shouldReconnect.get() && reconnectAttempts < maxReconnectAttempts) {
                 scheduleReconnect()
             }
@@ -280,7 +303,6 @@ class OpenAIRealtimeClient(
             isConnected.set(false)
             onConnectionStateChanged?.invoke(false)
 
-            // Solo reconectar si no fue un cierre intencional
             if (code != 1000 && shouldReconnect.get() && reconnectAttempts < maxReconnectAttempts) {
                 scheduleReconnect()
             }
@@ -291,7 +313,7 @@ class OpenAIRealtimeClient(
         reconnectJob?.cancel()
         reconnectJob = coroutineScope.launch {
             reconnectAttempts++
-            val delay = minOf(2000L * reconnectAttempts, 30000L) // Backoff exponencial hasta 30s
+            val delay = minOf(2000L * reconnectAttempts, 30000L)
             log.d(TAG) { "Scheduling reconnect attempt $reconnectAttempts in ${delay}ms" }
             delay(delay)
 
@@ -302,10 +324,13 @@ class OpenAIRealtimeClient(
         }
     }
 
+    // FIXED: Correct session initialization format
     private suspend fun initializeSession() {
-        log.d(TAG) { "Initializing session with Semantic VAD..." }
+        log.d(TAG) { "Initializing session with server VAD..." }
 
-        val sessionConfig = SessionConfig(
+        val sessionUpdate = SessionUpdateMessage(
+            type = "session.update",
+            eventId = "session_init_${System.currentTimeMillis()}",
             modalities = listOf("text", "audio"),
             instructions = "You are a helpful AI assistant in a phone call. Keep responses brief, natural and conversational. Respond as if you're having a real-time voice conversation with a human.",
             voice = "alloy",
@@ -313,21 +338,15 @@ class OpenAIRealtimeClient(
             output_audio_format = "pcm16",
             input_audio_transcription = InputAudioTranscription(model = "whisper-1"),
             turn_detection = TurnDetection(
-                type = "semantic_vad",
-                eagerness = SemanticVADEagerness.MEDIUM.value,
-                create_response = true,
-                interrupt_response = true
+                type = "server_vad",
+                threshold = 0.5,
+                prefix_padding_ms = 300,
+                silence_duration_ms = 200
             ),
             tools = emptyList(),
             tool_choice = "auto",
             temperature = 0.8,
             max_response_output_tokens = "inf"
-        )
-
-        val sessionUpdate = OpenAIRealtimeRequest(
-            type = "session.update",
-            session = sessionConfig,
-            eventId = "session_init_${System.currentTimeMillis()}"
         )
 
         sendMessage(sessionUpdate)
@@ -417,6 +436,7 @@ class OpenAIRealtimeClient(
         }
     }
 
+    // FIXED: Use separate message classes for different types
     @RequiresApi(Build.VERSION_CODES.O)
     suspend fun sendAudio(audioData: ByteArray): Boolean {
         if (!isConnected.get()) {
@@ -426,10 +446,10 @@ class OpenAIRealtimeClient(
 
         return try {
             val base64Audio = Base64.getEncoder().encodeToString(audioData)
-            val request = OpenAIRealtimeRequest(
+            val request = AudioAppendMessage(
                 type = "input_audio_buffer.append",
-                audio = base64Audio,
-                eventId = "audio_${System.currentTimeMillis()}"
+                eventId = "audio_${System.currentTimeMillis()}",
+                audio = base64Audio
             )
             sendMessage(request)
             log.d(TAG) { "Audio sent: ${audioData.size} bytes" }
@@ -447,7 +467,7 @@ class OpenAIRealtimeClient(
         }
 
         return try {
-            val request = OpenAIRealtimeRequest(
+            val request = AudioCommitMessage(
                 type = "input_audio_buffer.commit",
                 eventId = "commit_${System.currentTimeMillis()}"
             )
@@ -467,7 +487,7 @@ class OpenAIRealtimeClient(
         }
 
         return try {
-            val request = OpenAIRealtimeRequest(
+            val request = ResponseCreateMessage(
                 type = "response.create",
                 eventId = "response_${System.currentTimeMillis()}"
             )
@@ -480,10 +500,11 @@ class OpenAIRealtimeClient(
         }
     }
 
-    suspend fun updateSemanticVADSettings(
-        eagerness: SemanticVADEagerness = SemanticVADEagerness.MEDIUM,
-        createResponse: Boolean = true,
-        interruptResponse: Boolean = true
+    // FIXED: Update VAD settings with correct format
+    suspend fun updateVADSettings(
+        threshold: Double = 0.5,
+        prefixPaddingMs: Int = 300,
+        silenceDurationMs: Int = 200
     ): Boolean {
         if (!isConnected.get()) {
             log.w(TAG) { "Cannot update VAD settings: not connected" }
@@ -491,23 +512,19 @@ class OpenAIRealtimeClient(
         }
 
         return try {
-            val sessionConfig = SessionConfig(
+            val request = SessionUpdateMessage(
+                type = "session.update",
+                eventId = "vad_update_${System.currentTimeMillis()}",
                 turn_detection = TurnDetection(
-                    type = "semantic_vad",
-                    eagerness = eagerness.value,
-                    create_response = createResponse,
-                    interrupt_response = interruptResponse
+                    type = "server_vad",
+                    threshold = threshold,
+                    prefix_padding_ms = prefixPaddingMs,
+                    silence_duration_ms = silenceDurationMs
                 )
             )
 
-            val request = OpenAIRealtimeRequest(
-                type = "session.update",
-                session = sessionConfig,
-                eventId = "vad_update_${System.currentTimeMillis()}"
-            )
-
             sendMessage(request)
-            log.d(TAG) { "Semantic VAD settings updated: eagerness=${eagerness.value}" }
+            log.d(TAG) { "VAD settings updated: threshold=$threshold" }
             true
         } catch (e: Exception) {
             log.e(TAG) { "Error updating VAD settings: ${e.message}" }
@@ -515,9 +532,10 @@ class OpenAIRealtimeClient(
         }
     }
 
-    private suspend fun sendMessage(request: OpenAIRealtimeRequest): Boolean {
+    private suspend fun sendMessage(message: Any): Boolean {
         return try {
-            val json = jsonParser.encodeToString(request)
+            val json = jsonParser.encodeToString(message)
+            log.d(TAG) { "Sending message: ${json.take(500)}..." }
             val success = webSocket?.send(json) ?: false
             if (!success) {
                 log.e(TAG) { "Failed to send message: WebSocket send returned false" }
@@ -529,12 +547,12 @@ class OpenAIRealtimeClient(
         }
     }
 
-    // Métodos para obtener los canales de respuesta
+    // Response channels
     fun getAudioResponseChannel(): ReceiveChannel<ByteArray> = audioResponseChannel
     fun getTranscriptionChannel(): ReceiveChannel<String> = transcriptionChannel
     fun getFullTranscriptChannel(): ReceiveChannel<String> = fullTranscriptChannel
 
-    // Estado de conexión
+    // Connection state
     fun isConnected(): Boolean = isConnected.get()
 
     suspend fun disconnect() {
