@@ -1536,7 +1536,7 @@ class AndroidWebRtcManager(
                     translationAudioBuffer.clear()
 
                     // Enviar a cliente de traducción
-                    translationClient?.sendAudio(combinedBuffer)
+                    translationClient?.sendAudioContinuous(combinedBuffer)
                 }
             }
         } catch (e: Exception) {
