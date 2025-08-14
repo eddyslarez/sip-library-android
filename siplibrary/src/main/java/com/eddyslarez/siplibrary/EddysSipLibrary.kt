@@ -24,6 +24,11 @@ import com.eddyslarez.siplibrary.data.database.entities.SipAccountEntity
 import com.eddyslarez.siplibrary.data.database.repository.CallLogWithContact
 import com.eddyslarez.siplibrary.data.database.repository.GeneralStatistics
 import com.eddyslarez.siplibrary.data.database.setupDatabaseIntegration
+import com.eddyslarez.siplibrary.data.services.audio.AndroidWebRtcManager
+import com.eddyslarez.siplibrary.data.services.ia.LanguagePair
+import com.eddyslarez.siplibrary.data.services.ia.TranslationConfig
+import com.eddyslarez.siplibrary.data.services.ia.TranslationMode
+import com.eddyslarez.siplibrary.data.services.ia.VoiceSettings
 import com.eddyslarez.siplibrary.utils.PushNotificationSimulator
 import kotlinx.coroutines.delay
 
@@ -2402,6 +2407,77 @@ class EddysSipLibrary private constructor() {
             log.e(tag = TAG) { "Error checking if number is blocked: ${e.message}" }
             false
         }
+    }
+    /**
+     * Habilita o deshabilita la traducción en tiempo real
+     */
+    fun setTranslationEnabled(enabled: Boolean, config: TranslationConfig? = null) {
+        checkInitialized()
+
+        val finalConfig = config ?: TranslationConfig(
+            isEnabled = enabled,
+            languagePair = LanguagePair.SPANISH_ENGLISH
+        )
+
+        sipCoreManager?.webRtcManager?.let { webRtcManager ->
+            if (webRtcManager is AndroidWebRtcManager) {
+                webRtcManager.setTranslationConfig(finalConfig)
+                log.d(tag = TAG) { "Translation ${if (enabled) "enabled" else "disabled"}: ${finalConfig.languagePair.displayName}" }
+            }
+        }
+    }
+
+    /**
+     * Configura la traducción con parámetros específicos
+     */
+    fun configureTranslation(
+        languagePair: LanguagePair,
+        translationMode: TranslationMode = TranslationMode.BIDIRECTIONAL,
+        voice: String = "alloy",
+        temperature: Double = 0.8
+    ) {
+        checkInitialized()
+
+        val config = TranslationConfig(
+            isEnabled = true,
+            languagePair = languagePair,
+            translationMode = translationMode,
+            voiceSettings = VoiceSettings(
+                voice = voice,
+                temperature = temperature,
+                maxResponseTokens = 150 // Mantener respuestas cortas
+            )
+        )
+
+        setTranslationEnabled(true, config)
+    }
+
+    /**
+     * Obtiene el estado actual de la traducción
+     */
+    fun getTranslationStatus(): String {
+        checkInitialized()
+
+        return sipCoreManager?.webRtcManager?.let { webRtcManager ->
+            if (webRtcManager is AndroidWebRtcManager) {
+                webRtcManager.getTranslationStatus()
+            } else {
+                "Translation not supported on this platform"
+            }
+        } ?: "WebRTC manager not available"
+    }
+
+    /**
+     * Verifica si la traducción está activa
+     */
+    fun isTranslationActive(): Boolean {
+        checkInitialized()
+
+        return sipCoreManager?.webRtcManager?.let { webRtcManager ->
+            if (webRtcManager is AndroidWebRtcManager) {
+                webRtcManager.isTranslationEnabled()
+            } else false
+        } ?: false
     }
 
     /**
