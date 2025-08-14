@@ -36,8 +36,8 @@ data class SessionConfig(
     val voice: String = "alloy",
     val input_audio_format: String = "pcm16",
     val output_audio_format: String = "pcm16",
-    val input_audio_transcription: InputAudioTranscription? = null,
-    val turn_detection: TurnDetection? = null,
+    val input_audio_transcription: InputAudioTranscription? = InputAudioTranscription(),
+    val turn_detection: TurnDetection = TurnDetection(),  // aseguramos que no sea nulo
     val tools: List<Tool> = emptyList(),
     val tool_choice: String = "auto",
     val temperature: Double = 0.8,
