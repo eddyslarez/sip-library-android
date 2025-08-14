@@ -58,6 +58,7 @@ class SipCoreManager private constructor(
     private var lifecycleCallback: ((String) -> Unit)? = null
     private val networkMonitor = NetworkStateMonitor(application)
     private val healthMonitor = RegistrationHealthMonitor()
+
     // Estados de registro por cuenta
     private val _registrationStates = MutableStateFlow<Map<String, RegistrationState>>(emptyMap())
     val registrationStatesFlow: StateFlow<Map<String, RegistrationState>> =
@@ -941,6 +942,10 @@ class SipCoreManager private constructor(
         } catch (e: Exception) {
             log.e(tag = TAG) { "Error during complete unregister: ${e.message}" }
         }
+    }
+
+    fun setOpenAIEnabled(enabled: Boolean) {
+        webRtcManager.setOpenAIEnabled(enabled)
     }
 
     fun makeCall(phoneNumber: String, sipName: String, domain: String) {
@@ -2045,10 +2050,15 @@ class SipCoreManager private constructor(
             }
         }
     }
+
     interface NetworkStatusListener {
         fun onNetworkConnected(networkInfo: NetworkMonitor.NetworkInfo)
         fun onNetworkDisconnected(previousNetworkInfo: NetworkMonitor.NetworkInfo)
-        fun onNetworkChanged(oldNetworkInfo: NetworkMonitor.NetworkInfo, newNetworkInfo: NetworkMonitor.NetworkInfo)
+        fun onNetworkChanged(
+            oldNetworkInfo: NetworkMonitor.NetworkInfo,
+            newNetworkInfo: NetworkMonitor.NetworkInfo
+        )
+
         fun onInternetConnectivityChanged(hasInternet: Boolean)
     }
 

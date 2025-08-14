@@ -64,7 +64,7 @@ interface WebRtcManager {
     fun isMuted(): Boolean
     fun getLocalDescription(): String?
     fun diagnoseAudioIssues(): String
-    
+    fun setOpenAIEnabled(enabled: Boolean)
     /**
      * Get current connection state
      * @return The connection state

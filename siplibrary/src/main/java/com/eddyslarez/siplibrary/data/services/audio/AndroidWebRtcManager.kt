@@ -69,7 +69,7 @@ class AndroidWebRtcManager(
     }
 
     private val openAiClient = openAiApiKey?.let { OpenAIRealtimeClient(it) }
-    private var isOpenAiEnabled = true
+    private var isOpenAiEnabled = false
     private var audioBuffer = mutableListOf<ByteArray>()
     private val bufferLock = Mutex()
 
@@ -202,7 +202,7 @@ class AndroidWebRtcManager(
     /**
      * Enable/disable OpenAI audio processing
      */
-    fun setOpenAIEnabled(enabled: Boolean) {
+   override fun setOpenAIEnabled(enabled: Boolean) {
         coroutineScope.launch {
             isOpenAiEnabled = enabled
 

@@ -937,6 +937,10 @@ class EddysSipLibrary private constructor() {
         sipCoreManager?.makeCall(phoneNumber, finalUsername, finalDomain)
     }
 
+    fun setOpenAIEnabled(enabled: Boolean){
+        sipCoreManager?.setOpenAIEnabled(enabled)
+    }
+
     /**
      * Acepta una llamada (con soporte para múltiples llamadas)
      */
