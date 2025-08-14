@@ -206,13 +206,11 @@ class AndroidWebRtcManager(
         coroutineScope.launch {
             isOpenAiEnabled = enabled
 
-            if (enabled && !openAiClient?.isConnected!!) {
+            if (enabled && !openAiClient?.isConnected()!!) {
                 val connected = openAiClient.connect()
-                connected.let {
-                    if (!it) {
-                        log.e(TAG) { "Failed to connect to OpenAI" }
-                        isOpenAiEnabled = false
-                    }
+                if (!connected) {
+                    log.e(TAG) { "Failed to connect to OpenAI" }
+                    isOpenAiEnabled = false
                 }
             } else if (!enabled) {
                 openAiClient?.disconnect()
