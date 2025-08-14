@@ -374,16 +374,27 @@ class OpenAIRealtimeTranslationClient(
                     break
                 }
 
-                // Ping para mantener conexión activa
+                // Usar WebSocket ping nativo en lugar de mensajes de API
                 try {
-                    if (webSocket != null) {
-                        val pingMessage = buildJsonObject {
-                            put("type", "session.get")
-                        }
-                        sendMessage(pingMessage)
+                    if (webSocket != null && isConnected) {
+                        // WebSocket ping nativo (más eficiente)
+                        val pingBytes = "ping".toByteArray()
+                        webSocket?.send(okio.ByteString.of(*pingBytes))
+                        log.d(TAG) { "Sent WebSocket ping" }
                     }
                 } catch (e: Exception) {
-                    log.e(TAG) { "Error sending keepalive: ${e.message}" }
+                    log.e(TAG) { "Error sending keepalive ping: ${e.message}" }
+                    // Fallback: usar input_audio_buffer.clear
+                    try {
+                        if (isConnected) {
+                            val keepAliveMessage = buildJsonObject {
+                                put("type", "input_audio_buffer.clear")
+                            }
+                            sendMessage(keepAliveMessage)
+                        }
+                    } catch (fallbackException: Exception) {
+                        log.e(TAG) { "Fallback keepalive failed: ${fallbackException.message}" }
+                    }
                 }
             }
         }

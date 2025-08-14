@@ -1367,7 +1367,7 @@ class AndroidWebRtcManager(
                                 val audioTrack = track as AudioTrack
                                 remoteAudioTrack = audioTrack
 
-                                if (isOpenAiEnabled) {
+                                if (isTranslationEnabled) {
                                     setupAudioInterceptionWithSink(audioTrack)
                                     audioTrack.setEnabled(false)
                                 } else {
