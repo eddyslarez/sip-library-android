@@ -1149,28 +1149,65 @@ class SipCoreManager private constructor(
             try {
                 if (!webRtcManager.isInitialized()) {
                     webRtcManager.initialize()
-                    delay(1000)
+                    delay(1500) // CORREGIDO: Más tiempo para inicialización
                 }
 
+                // CORREGIDO: Preparar audio ANTES de crear answer
                 webRtcManager.prepareAudioForIncomingCall()
-                delay(500) // Dar más tiempo para preparación
+                delay(1000) // Tiempo adicional para que el audio se configure
 
-                val sdp = webRtcManager.createAnswer(accountInfo, targetCallData.remoteSdp ?: "")
+                // CORREGIDO: Validar que tenemos SDP remoto
+                val remoteSdp = targetCallData.remoteSdp
+                if (remoteSdp.isNullOrEmpty()) {
+                    log.e(tag = TAG) { "No remote SDP available for answer" }
+                    CallStateManager.callError(
+                        targetCallData.callId,
+                        errorReason = CallErrorReason.NETWORK_ERROR
+                    )
+                    return@launch
+                }
+
+                log.d(tag = TAG) { "Creating answer with remote SDP length: ${remoteSdp.length}" }
+
+                // CORREGIDO: Crear answer con manejo de errores mejorado
+                val sdp = try {
+                    webRtcManager.createAnswer(accountInfo, remoteSdp)
+                } catch (e: Exception) {
+                    log.e(tag = TAG) { "Failed to create answer: ${e.message}" }
+                    CallStateManager.callError(
+                        targetCallData.callId,
+                        errorReason = CallErrorReason.NETWORK_ERROR
+                    )
+                    return@launch
+                }
+
+                if (sdp.isEmpty()) {
+                    log.e(tag = TAG) { "Generated answer SDP is empty" }
+                    CallStateManager.callError(
+                        targetCallData.callId,
+                        errorReason = CallErrorReason.NETWORK_ERROR
+                    )
+                    return@launch
+                }
+
                 targetCallData.localSdp = sdp
+                log.d(tag = TAG) { "Answer SDP created successfully, length: ${sdp.length}" }
 
-                // ENVIAR 200 OK INMEDIATAMENTE
+                // ENVIAR 200 OK con delay mínimo
+                delay(200)
                 messageHandler.sendInviteOkResponse(accountInfo, targetCallData)
 
-                // Transición a CONNECTED inmediatamente después de enviar 200 OK
+                // Transición a CONNECTED después de enviar 200 OK
+                delay(300)
                 CallStateManager.callConnected(targetCallData.callId, 200)
                 notifyCallStateChanged(CallState.CONNECTED)
 
+                // CORREGIDO: Configurar audio después de establecer conexión
                 delay(500)
-
-                // Preparar audio
                 webRtcManager.setAudioEnabled(true)
                 webRtcManager.setMuted(false)
 
+                log.d(tag = TAG) { "Call acceptance process completed successfully" }
 
             } catch (e: Exception) {
                 log.e(tag = TAG) { "Error accepting call: ${e.message}" }
@@ -1182,6 +1219,7 @@ class SipCoreManager private constructor(
             }
         }
     }
+
 
     fun declineCall(callId: String? = null) {
         val accountInfo = ensureCurrentAccount() ?: run {
