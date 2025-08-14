@@ -13,10 +13,9 @@ import java.util.Base64
 import java.util.LinkedList
 import java.util.concurrent.TimeUnit
 import kotlin.math.sqrt
-
 /**
  * Cliente mejorado de OpenAI Realtime con soporte para traducción
- * Soluciona el problema de que la IA deje de responder
+ * ARREGLADO: Acumula chunks pequeños hasta alcanzar el mínimo requerido
  */
 class OpenAIRealtimeTranslationClient(
     private val apiKey: String,
@@ -27,9 +26,10 @@ class OpenAIRealtimeTranslationClient(
         .writeTimeout(10, TimeUnit.SECONDS)
         .connectTimeout(10, TimeUnit.SECONDS)
         .build()
-    private var audioBuffer = LinkedList<ByteArray>() // Cambiar a LinkedList
+
+    private var audioBuffer = LinkedList<ByteArray>()
     private var lastProcessTime = System.currentTimeMillis()
-    private var processInterval = 3000L // Procesar cada 3 segundos
+    private var processInterval = 2000L // Reducir a 2 segundos para llamadas
     private var isProcessingChunk = false
 
     private var webSocket: WebSocket? = null
@@ -48,20 +48,18 @@ class OpenAIRealtimeTranslationClient(
     // Callbacks
     private var onConnectionStateChanged: ((Boolean) -> Unit)? = null
     private var onError: ((String) -> Unit)? = null
-    private var onTranslatedText: ((String, String) -> Unit)? = null // original, translated
-    private var onSpeechDetected: ((Boolean) -> Unit)? = null // true = started, false = stopped
-
-    // Json parser
-    private val jsonParser = Json { ignoreUnknownKeys = true }
+    private var onTranslatedText: ((String, String) -> Unit)? = null
+    private var onSpeechDetected: ((Boolean) -> Unit)? = null
 
     companion object {
         private const val TAG = "OpenAITranslationClient"
         private const val WEBSOCKET_URL = "wss://api.openai.com/v1/realtime"
-        private const val SESSION_TIMEOUT = 30000L // 30 segundos
-        private const val KEEPALIVE_INTERVAL = 15000L // 15 segundos
-        private const val CHUNK_DURATION_MS = 3000L // 3 segundos por chunk
-        private const val SILENCE_THRESHOLD = 0.01f // Umbral para detectar silencio
-        private const val MIN_AUDIO_LENGTH = 1000L // Mínimo 1 segundo de audio
+        private const val SESSION_TIMEOUT = 30000L
+        private const val KEEPALIVE_INTERVAL = 15000L
+        private const val SILENCE_THRESHOLD = 0.005f // Más sensible para llamadas
+        private const val MIN_AUDIO_BYTES = 3200 // OpenAI requiere mínimo 100ms (3200 bytes a 16kHz)
+        private const val MAX_BUFFER_SIZE = 25 // Máximo chunks antes de forzar procesamiento
+        private const val OPTIMAL_CHUNK_SIZE = 6400 // 200ms de audio (más eficiente)
     }
 
     fun setConnectionStateListener(listener: (Boolean) -> Unit) {
@@ -122,9 +120,8 @@ class OpenAIRealtimeTranslationClient(
             onConnectionStateChanged?.invoke(true)
             lastActivityTime = System.currentTimeMillis()
 
-            // Inicializar sesión inmediatamente
             coroutineScope.launch {
-                delay(100) // Pequeña pausa para estabilizar
+                delay(100)
                 initializeTranslationSession()
             }
         }
@@ -177,15 +174,16 @@ class OpenAIRealtimeTranslationClient(
                 put("voice", voiceSettings.voice)
                 put("input_audio_format", "pcm16")
                 put("output_audio_format", "pcm16")
-                put("input_audio_sample_rate", 16000)
 
                 put("input_audio_transcription", buildJsonObject {
                     put("model", "whisper-1")
                 })
 
-                // CRÍTICO: Deshabilitar VAD para llamadas
                 put("turn_detection", buildJsonObject {
-                    put("type", "server_vad") // Sin detección automática
+                    put("type", "server_vad")
+                    put("threshold", 0.5) // Más sensible para llamadas
+                    put("prefix_padding_ms", 300) // Capturar más contexto
+                    put("silence_duration_ms", 500) // Menos tiempo de silencio
                 })
 
                 put("temperature", voiceSettings.temperature)
@@ -195,8 +193,9 @@ class OpenAIRealtimeTranslationClient(
 
         sendMessage(sessionConfig)
     }
+
     /**
-     * Envía audio continuamente y procesa en chunks
+     * ARREGLADO: Envía audio continuamente acumulando hasta el tamaño mínimo
      */
     @RequiresApi(Build.VERSION_CODES.O)
     suspend fun sendAudioContinuous(audioData: ByteArray) {
@@ -208,11 +207,21 @@ class OpenAIRealtimeTranslationClient(
 
             val currentTime = System.currentTimeMillis()
             val timeSinceLastProcess = currentTime - lastProcessTime
+            val totalBufferSize = audioBuffer.sumOf { it.size }
 
-            // Procesar cada X segundos o si el buffer es muy grande
-            if (timeSinceLastProcess >= processInterval || audioBuffer.size > 50) {
+            log.d(TAG) { "Buffer: ${audioBuffer.size} chunks, ${totalBufferSize} bytes total" }
+
+            // Condiciones para procesar:
+            val shouldProcessByTime = timeSinceLastProcess >= processInterval
+            val shouldProcessBySize = totalBufferSize >= OPTIMAL_CHUNK_SIZE
+            val shouldProcessByCount = audioBuffer.size >= MAX_BUFFER_SIZE
+            val hasMinimumSize = totalBufferSize >= MIN_AUDIO_BYTES
+
+            if (hasMinimumSize && (shouldProcessByTime || shouldProcessBySize || shouldProcessByCount)) {
+                log.d(TAG) { "Processing trigger - Time: $shouldProcessByTime, Size: $shouldProcessBySize, Count: $shouldProcessByCount" }
                 processAudioBuffer()
             }
+
         } catch (e: Exception) {
             log.e(TAG) { "Error processing continuous audio: ${e.message}" }
         }
@@ -227,17 +236,22 @@ class OpenAIRealtimeTranslationClient(
         try {
             // Combinar todo el audio del buffer
             val combinedAudio = combineAudioBuffers(audioBuffer)
+            val bufferCount = audioBuffer.size
             audioBuffer.clear()
 
-            // Verificar tamaño mínimo (100ms = 3200 bytes a 16kHz)
-            if (combinedAudio.size < 3200) {
-                log.d(TAG) { "Chunk demasiado pequeño: ${combinedAudio.size} bytes" }
+            // ARREGLADO: Solo verificar el mínimo real de OpenAI
+            if (combinedAudio.size < MIN_AUDIO_BYTES) {
+                log.w(TAG) { "Chunk aún muy pequeño: ${combinedAudio.size} bytes (mínimo ${MIN_AUDIO_BYTES})" }
+                // Re-agregar al buffer para la próxima vez
+                audioBuffer.add(combinedAudio)
                 return
             }
 
-            // Verificar si hay contenido de voz (simple detección de volumen)
+            log.d(TAG) { "Processing ${bufferCount} chunks -> ${combinedAudio.size} bytes" }
+
+            // Verificar si hay contenido de voz
             if (hasVoiceContent(combinedAudio)) {
-                log.d(TAG) { "Processing audio chunk: ${combinedAudio.size} bytes" }
+                log.d(TAG) { "Voice detected - sending to OpenAI" }
 
                 // Enviar el chunk completo
                 val base64Audio = Base64.getEncoder().encodeToString(combinedAudio)
@@ -247,30 +261,13 @@ class OpenAIRealtimeTranslationClient(
                 }
                 sendMessage(appendMessage)
 
-                // Hacer commit y solicitar respuesta
-                delay(100)
-
-                val commitMessage = buildJsonObject {
-                    put("type", "input_audio_buffer.commit")
-                }
-                sendMessage(commitMessage)
-
+                // Pequeña pausa para estabilidad
                 delay(50)
 
-                val responseMessage = buildJsonObject {
-                    put("type", "response.create")
-                    put("response", buildJsonObject {
-                        put("modalities", buildJsonArray {
-                            add("text")
-                            add("audio")
-                        })
-                    })
-                }
-                sendMessage(responseMessage)
-
                 lastProcessTime = System.currentTimeMillis()
+
             } else {
-                log.d(TAG) { "Skipping chunk - no voice content detected" }
+                log.d(TAG) { "No voice content detected - skipping" }
             }
 
         } catch (e: Exception) {
@@ -294,12 +291,12 @@ class OpenAIRealtimeTranslationClient(
     }
 
     private fun hasVoiceContent(audioData: ByteArray): Boolean {
-        if (audioData.size < 1000) return false // Muy poco audio
+        if (audioData.size < 320) return false // Menos restrictivo
 
-        // Convertir a shorts y calcular RMS
         var sum = 0L
         var count = 0
 
+        // Analizar cada muestra de 16-bit
         for (i in audioData.indices step 2) {
             if (i + 1 < audioData.size) {
                 val sample = (audioData[i].toInt() and 0xFF) or
@@ -313,33 +310,74 @@ class OpenAIRealtimeTranslationClient(
         if (count == 0) return false
 
         val rms = sqrt(sum.toDouble() / count)
-        val normalizedRms = rms / 32768.0 // Normalizar para 16-bit
+        val normalizedRms = rms / 32768.0
 
-        return normalizedRms > SILENCE_THRESHOLD
+        val hasVoice = normalizedRms > SILENCE_THRESHOLD
+
+        if (hasVoice) {
+            log.d(TAG) { "Voice RMS: ${String.format("%.6f", normalizedRms)} (threshold: $SILENCE_THRESHOLD)" }
+        }
+
+        return hasVoice
     }
 
     /**
-     * Fuerza el procesamiento del buffer actual
+     * ARREGLADO: Fuerza el procesamiento incluso con chunks pequeños
      */
     @RequiresApi(Build.VERSION_CODES.O)
     suspend fun forceProcessBuffer() {
-        processAudioBuffer()
+        if (audioBuffer.isEmpty()) {
+            log.d(TAG) { "No audio buffer to process" }
+            return
+        }
+
+        val totalSize = audioBuffer.sumOf { it.size }
+        log.d(TAG) { "Force processing ${audioBuffer.size} chunks (${totalSize} bytes)" }
+
+        if (totalSize >= MIN_AUDIO_BYTES) {
+            processAudioBuffer()
+        } else {
+            log.w(TAG) { "Cannot force process - total size ${totalSize} < minimum ${MIN_AUDIO_BYTES}" }
+        }
     }
 
     /**
-     * Limpia el buffer sin procesar
+     * Commit audio buffer y solicitar respuesta
      */
+    suspend fun commitAudio() {
+        if (!isConnected) return
+
+        try {
+            log.d(TAG) { "Committing audio buffer" }
+
+            val commitMessage = buildJsonObject {
+                put("type", "input_audio_buffer.commit")
+            }
+            sendMessage(commitMessage)
+
+            delay(100)
+            createResponse()
+
+        } catch (e: Exception) {
+            log.e(TAG) { "Error committing audio: ${e.message}" }
+        }
+    }
+
     fun clearBuffer() {
+        val size = audioBuffer.size
         audioBuffer.clear()
-        log.d(TAG) { "Audio buffer cleared" }
+        log.d(TAG) { "Cleared ${size} chunks from audio buffer" }
     }
 
-    /**
-     * Configurar el intervalo de procesamiento
-     */
     fun setProcessingInterval(intervalMs: Long) {
         processInterval = intervalMs
         log.d(TAG) { "Processing interval set to ${intervalMs}ms" }
+    }
+
+    // Métodos auxiliares para debugging
+    fun getBufferInfo(): String {
+        val totalBytes = audioBuffer.sumOf { it.size }
+        return "Buffer: ${audioBuffer.size} chunks, ${totalBytes} bytes"
     }
 
     @RequiresApi(Build.VERSION_CODES.O)
@@ -348,7 +386,7 @@ class OpenAIRealtimeTranslationClient(
             val json = JsonParser.parseString(text).asJsonObject
             val type = json.get("type").asString
 
-            log.d(TAG) { "Received message type: $type" }
+            log.d(TAG) { "Received: $type" }
 
             when (type) {
                 "session.created" -> {
@@ -361,47 +399,19 @@ class OpenAIRealtimeTranslationClient(
                 }
 
                 "input_audio_buffer.speech_started" -> {
-                    log.d(TAG) { "Speech detection started" }
+                    log.d(TAG) { "Speech started" }
                     isProcessingAudio = true
                     onSpeechDetected?.invoke(true)
                 }
 
                 "input_audio_buffer.speech_stopped" -> {
-                    log.d(TAG) { "Speech detection stopped" }
+                    log.d(TAG) { "Speech stopped" }
                     isProcessingAudio = false
                     onSpeechDetected?.invoke(false)
 
-                    // CRÍTICO: Forzar la generación de respuesta
+                    // Auto-commit y crear respuesta
                     delay(100)
-                    createResponse()
-                }
-
-                "conversation.item.created" -> {
-                    val item = json.getAsJsonObject("item")
-                    val role = item.get("role").asString
-
-                    if (role == "user") {
-                        val content = item.getAsJsonArray("content")
-                        if (content.size() > 0) {
-                            val firstContent = content[0].asJsonObject
-                            if (firstContent.get("type").asString == "input_text") {
-                                val userText = firstContent.get("text").asString
-                                log.d(TAG) { "User said: $userText" }
-                            }
-                        }
-                    }
-                }
-
-                "response.created" -> {
-                    log.d(TAG) { "Response created" }
-                }
-
-                "response.output_item.added" -> {
-                    log.d(TAG) { "Response item added" }
-                }
-
-                "response.content_part.added" -> {
-                    log.d(TAG) { "Content part added" }
+                    commitAudio()
                 }
 
                 "response.audio.delta" -> {
@@ -417,13 +427,12 @@ class OpenAIRealtimeTranslationClient(
 
                 "response.audio_transcript.done" -> {
                     val transcript = json.get("transcript").asString
-                    log.d(TAG) { "AI translated: $transcript" }
-                    onTranslatedText?.invoke("", transcript) // Sin texto original en este punto
+                    log.d(TAG) { "Translation: $transcript" }
+                    onTranslatedText?.invoke("", transcript)
                 }
 
                 "response.done" -> {
-                    log.d(TAG) { "Response completed - ready for next input" }
-                    // CRÍTICO: Preparar para la próxima entrada
+                    log.d(TAG) { "Response complete - ready for next" }
                     isProcessingAudio = false
                 }
 
@@ -434,107 +443,17 @@ class OpenAIRealtimeTranslationClient(
                     log.e(TAG) { "OpenAI error [$code]: $message" }
                     onError?.invoke("Error OpenAI: $message")
 
-                    // Reintentar conexión en caso de error
                     if (code == "invalid_session" || code == "session_expired") {
                         reconnect()
                     }
                 }
 
                 else -> {
-                    log.d(TAG) { "Unhandled message type: $type" }
+                    log.d(TAG) { "Unhandled message: $type" }
                 }
             }
         } catch (e: Exception) {
             log.e(TAG) { "Error parsing message: ${e.message}" }
-        }
-    }
-//`@RequiresApi(Build.VERSION_CODES.O)
-//private suspend fun handleMessage(text: String) {
-//    try {
-//        val json = JsonParser.parseString(text).asJsonObject
-//        val type = json.get("type").asString
-//
-//        log.d(TAG) { "Received message type: $type" }
-//
-//        when (type) {
-//            "session.created" -> {
-//                sessionId = json.get("session")?.asJsonObject?.get("id")?.asString
-//                log.d(TAG) { "Session created: $sessionId" }
-//            }
-//
-//            "session.updated" -> {
-//                log.d(TAG) { "Session updated successfully" }
-//            }
-//
-//            "response.created" -> {
-//                log.d(TAG) { "Response created - processing translation" }
-//            }
-//
-//            "response.audio.delta" -> {
-//                val delta = json.get("delta").asString
-//                val audioBytes = Base64.getDecoder().decode(delta)
-//                audioResponseChannel.trySend(audioBytes)
-//            }
-//
-//            "response.audio_transcript.done" -> {
-//                val transcript = json.get("transcript").asString
-//                log.d(TAG) { "Translation completed: $transcript" }
-//                onTranslatedText?.invoke("", transcript)
-//            }
-//
-//            "response.done" -> {
-//                log.d(TAG) { "Response completed - ready for next chunk" }
-//                isProcessingChunk = false
-//            }
-//
-//            "error" -> {
-//                val error = json.getAsJsonObject("error")
-//                val message = error.get("message").asString
-//                val code = error.get("code")?.asString ?: "unknown"
-//                log.e(TAG) { "OpenAI error [$code]: $message" }
-//                onError?.invoke("Error OpenAI: $message")
-//                isProcessingChunk = false
-//            }
-//
-//            else -> {
-//                log.d(TAG) { "Unhandled message type: $type" }
-//            }
-//        }
-//    } catch (e: Exception) {
-//        log.e(TAG) { "Error parsing message: ${e.message}" }
-//        isProcessingChunk = false
-//    }
-//}
-    @RequiresApi(Build.VERSION_CODES.O)
-    suspend fun sendAudio(audioData: ByteArray) {
-        if (!isConnected || isProcessingAudio) return
-
-        try {
-            val base64Audio = Base64.getEncoder().encodeToString(audioData)
-            val request = buildJsonObject {
-                put("type", "input_audio_buffer.append")
-                put("audio", base64Audio)
-            }
-            sendMessage(request)
-        } catch (e: Exception) {
-            log.e(TAG) { "Error sending audio: ${e.message}" }
-        }
-    }
-
-    suspend fun commitAudio() {
-        if (!isConnected) return
-
-        try {
-            val commitMessage = buildJsonObject {
-                put("type", "input_audio_buffer.commit")
-            }
-            sendMessage(commitMessage)
-
-            // Esperar un momento antes de solicitar respuesta
-            delay(50)
-            createResponse()
-        } catch (e: Exception) {
-            log.e(TAG) { "Error committing audio: ${e.message}" }
         }
     }
 
@@ -561,7 +480,7 @@ class OpenAIRealtimeTranslationClient(
         try {
             val jsonString = jsonObject.toString()
             webSocket?.send(jsonString)
-            log.d(TAG) { "Sent message: ${jsonObject.get("type").toString()}" }
+            log.d(TAG) { "Sent: ${jsonObject.get("type")}" }
         } catch (e: Exception) {
             log.e(TAG) { "Error sending message: ${e.message}" }
         }
@@ -574,39 +493,25 @@ class OpenAIRealtimeTranslationClient(
 
                 val timeSinceLastActivity = System.currentTimeMillis() - lastActivityTime
                 if (timeSinceLastActivity > SESSION_TIMEOUT) {
-                    log.w(TAG) { "Session timeout detected, reconnecting..." }
+                    log.w(TAG) { "Session timeout - reconnecting" }
                     reconnect()
                     break
                 }
 
-                // Usar WebSocket ping nativo en lugar de mensajes de API
                 try {
                     if (webSocket != null && isConnected) {
-                        // WebSocket ping nativo (más eficiente)
                         val pingBytes = "ping".toByteArray()
                         webSocket?.send(okio.ByteString.of(*pingBytes))
-                        log.d(TAG) { "Sent WebSocket ping" }
                     }
                 } catch (e: Exception) {
-                    log.e(TAG) { "Error sending keepalive ping: ${e.message}" }
-                    // Fallback: usar input_audio_buffer.clear
-                    try {
-                        if (isConnected) {
-                            val keepAliveMessage = buildJsonObject {
-                                put("type", "input_audio_buffer.clear")
-                            }
-                            sendMessage(keepAliveMessage)
-                        }
-                    } catch (fallbackException: Exception) {
-                        log.e(TAG) { "Fallback keepalive failed: ${fallbackException.message}" }
-                    }
+                    log.e(TAG) { "Keepalive failed: ${e.message}" }
                 }
             }
         }
     }
 
     private suspend fun reconnect() {
-        log.d(TAG) { "Attempting to reconnect..." }
+        log.d(TAG) { "Reconnecting..." }
         disconnect()
         delay(1000)
         connect()
