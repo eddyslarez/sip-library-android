@@ -169,7 +169,7 @@ class OpenAIRealtimeClient(
 
     private suspend fun initializeSession() {
         val sessionConfig = SessionConfig(
-            modalities = listOf("audio"),
+            modalities = listOf("text", "audio"),
             instructions = "You are a helpful AI assistant in a phone call. Keep responses brief and natural. Respond as if you're having a conversation.",
             voice = "alloy",
             input_audio_format = "pcm16",
