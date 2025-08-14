@@ -44,14 +44,23 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.9.1")
     implementation("androidx.lifecycle:lifecycle-process:2.9.1")
     implementation("org.jetbrains.kotlin:kotlin-stdlib:2.1.10")
-    implementation("com.shepeliev:webrtc-kmp:0.125.9")
     implementation("org.java-websocket:Java-WebSocket:1.5.4")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.1")
     implementation("org.jetbrains.kotlinx:kotlinx-datetime:0.6.1")
     implementation("androidx.datastore:datastore-preferences:1.1.7")
     implementation("androidx.bluetooth:bluetooth:1.0.0-alpha02")
+// OkHttp for WebSocket connection to OpenAI
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("com.squareup.okhttp3:logging-interceptor:4.12.0")
+    implementation("io.getstream:stream-webrtc-android:1.3.8")
+    // Audio processing
+    implementation("androidx.media:media:1.7.0")
+    // Opcional: UI components si los necesitas
+    implementation ("io.getstream:stream-webrtc-android-ui:1.3.8")
 
+    // Opcional: Coroutines extensions
+    implementation ("io.getstream:stream-webrtc-android-ktx:1.3.8")
     // Room Database - Cambia kapt por ksp
     implementation("androidx.room:room-runtime:2.6.1")
     implementation("androidx.room:room-ktx:2.6.1")
