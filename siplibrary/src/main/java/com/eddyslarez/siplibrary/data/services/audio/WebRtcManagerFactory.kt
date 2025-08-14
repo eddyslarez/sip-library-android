@@ -4,7 +4,7 @@ import android.app.Application
 
 /**
  * Factory for creating platform-specific WebRTC manager instances
- * 
+ *
  * @author Eddys Larez
  */
 object WebRtcManagerFactory {
@@ -12,7 +12,10 @@ object WebRtcManagerFactory {
      * Create a new WebRTC manager instance
      * @return A platform-specific implementation of WebRtcManager
      */
-    fun createWebRtcManager(application: Application): WebRtcManager {
-        return AndroidWebRtcManager(application)
+    fun createWebRtcManager(
+        application: Application,
+        openAiApiKey: String? = null
+    ): WebRtcManager {
+        return AndroidWebRtcManager(application, openAiApiKey)
     }
 }

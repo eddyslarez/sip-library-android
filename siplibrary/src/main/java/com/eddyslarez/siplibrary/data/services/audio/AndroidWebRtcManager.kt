@@ -1159,6 +1159,9 @@ class AndroidWebRtcManager(
             rtcConfig.bundlePolicy = PeerConnection.BundlePolicy.MAXBUNDLE
             rtcConfig.rtcpMuxPolicy = PeerConnection.RtcpMuxPolicy.REQUIRE
 
+            // CRÍTICO: Configurar SDP Semantics para Unified Plan
+            rtcConfig.sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
+
             peerConnection = peerConnectionFactory?.createPeerConnection(
                 rtcConfig,
                 object : PeerConnection.Observer {
@@ -1168,6 +1171,21 @@ class AndroidWebRtcManager(
 
                     override fun onIceConnectionChange(iceConnectionState: PeerConnection.IceConnectionState?) {
                         log.d(TAG) { "ICE connection state changed: $iceConnectionState" }
+                        when (iceConnectionState) {
+                            PeerConnection.IceConnectionState.CONNECTED -> {
+                                webRtcEventListener?.onConnectionStateChange(WebRtcConnectionState.CONNECTED)
+                            }
+                            PeerConnection.IceConnectionState.DISCONNECTED -> {
+                                webRtcEventListener?.onConnectionStateChange(WebRtcConnectionState.DISCONNECTED)
+                            }
+                            PeerConnection.IceConnectionState.FAILED -> {
+                                webRtcEventListener?.onConnectionStateChange(WebRtcConnectionState.FAILED)
+                            }
+                            PeerConnection.IceConnectionState.CLOSED -> {
+                                webRtcEventListener?.onConnectionStateChange(WebRtcConnectionState.CLOSED)
+                            }
+                            else -> {}
+                        }
                     }
 
                     override fun onIceConnectionReceivingChange(receiving: Boolean) {
@@ -1193,21 +1211,9 @@ class AndroidWebRtcManager(
                         log.d(TAG) { "ICE candidates removed" }
                     }
 
+                    // ELIMINADO: onAddStream - No se usa con Unified Plan
                     override fun onAddStream(mediaStream: MediaStream?) {
-                        log.d(TAG) { "Remote stream added" }
-                        mediaStream?.audioTracks?.firstOrNull()?.let { audioTrack ->
-                            remoteAudioTrack = audioTrack
-
-                            if (isOpenAiEnabled) {
-                                // Set up audio interception with Stream WebRTC AudioTrackSink
-                                setupAudioInterceptionWithSink(audioTrack)
-                                audioTrack.setEnabled(false) // Disable direct playback
-                            } else {
-                                audioTrack.setEnabled(true) // Normal playback
-                            }
-
-                            webRtcEventListener?.onRemoteAudioTrack()
-                        }
+                        log.w(TAG) { "onAddStream called - this should not happen with Unified Plan" }
                     }
 
                     override fun onRemoveStream(mediaStream: MediaStream?) {
@@ -1222,8 +1228,26 @@ class AndroidWebRtcManager(
                         log.d(TAG) { "Renegotiation needed" }
                     }
 
+                    // CORREGIDO: Usar onAddTrack en lugar de onAddStream
                     override fun onAddTrack(receiver: RtpReceiver?, streams: Array<out MediaStream>?) {
                         log.d(TAG) { "Track added: ${receiver?.track()?.kind()}" }
+
+                        receiver?.track()?.let { track ->
+                            if (track.kind().equals(MediaStreamTrack.AUDIO_TRACK_KIND, ignoreCase = true)) {
+                                val audioTrack = track as AudioTrack
+                                remoteAudioTrack = audioTrack
+
+                                if (isOpenAiEnabled) {
+                                    // Set up audio interception with Stream WebRTC AudioTrackSink
+                                    setupAudioInterceptionWithSink(audioTrack)
+                                    audioTrack.setEnabled(false) // Disable direct playback
+                                } else {
+                                    audioTrack.setEnabled(true) // Normal playback
+                                }
+
+                                webRtcEventListener?.onRemoteAudioTrack()
+                            }
+                        }
                     }
                 }
             )
@@ -1238,6 +1262,99 @@ class AndroidWebRtcManager(
             isLocalAudioReady = false
         }
     }
+//    private fun initializePeerConnection() {
+//        log.d(TAG) { "Initializing PeerConnection..." }
+//        cleanupCall()
+//
+//        try {
+//            val iceServers = listOf(
+//                PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer(),
+//                PeerConnection.IceServer.builder("stun:stun1.l.google.com:19302").createIceServer()
+//            )
+//
+//            val rtcConfig = PeerConnection.RTCConfiguration(iceServers)
+//            rtcConfig.bundlePolicy = PeerConnection.BundlePolicy.MAXBUNDLE
+//            rtcConfig.rtcpMuxPolicy = PeerConnection.RtcpMuxPolicy.REQUIRE
+//
+//            peerConnection = peerConnectionFactory?.createPeerConnection(
+//                rtcConfig,
+//                object : PeerConnection.Observer {
+//                    override fun onSignalingChange(signalingState: PeerConnection.SignalingState?) {
+//                        log.d(TAG) { "Signaling state changed: $signalingState" }
+//                    }
+//
+//                    override fun onIceConnectionChange(iceConnectionState: PeerConnection.IceConnectionState?) {
+//                        log.d(TAG) { "ICE connection state changed: $iceConnectionState" }
+//                    }
+//
+//                    override fun onIceConnectionReceivingChange(receiving: Boolean) {
+//                        log.d(TAG) { "ICE connection receiving change: $receiving" }
+//                    }
+//
+//                    override fun onIceGatheringChange(iceGatheringState: PeerConnection.IceGatheringState?) {
+//                        log.d(TAG) { "ICE gathering state changed: $iceGatheringState" }
+//                    }
+//
+//                    override fun onIceCandidate(iceCandidate: IceCandidate?) {
+//                        iceCandidate?.let { candidate ->
+//                            log.d(TAG) { "New ICE Candidate: ${candidate.sdp}" }
+//                            webRtcEventListener?.onIceCandidate(
+//                                candidate.sdp,
+//                                candidate.sdpMid,
+//                                candidate.sdpMLineIndex
+//                            )
+//                        }
+//                    }
+//
+//                    override fun onIceCandidatesRemoved(iceCandidates: Array<out IceCandidate>?) {
+//                        log.d(TAG) { "ICE candidates removed" }
+//                    }
+//
+//                    override fun onAddStream(mediaStream: MediaStream?) {
+//                        log.d(TAG) { "Remote stream added" }
+//                        mediaStream?.audioTracks?.firstOrNull()?.let { audioTrack ->
+//                            remoteAudioTrack = audioTrack
+//
+//                            if (isOpenAiEnabled) {
+//                                // Set up audio interception with Stream WebRTC AudioTrackSink
+//                                setupAudioInterceptionWithSink(audioTrack)
+//                                audioTrack.setEnabled(false) // Disable direct playback
+//                            } else {
+//                                audioTrack.setEnabled(true) // Normal playback
+//                            }
+//
+//                            webRtcEventListener?.onRemoteAudioTrack()
+//                        }
+//                    }
+//
+//                    override fun onRemoveStream(mediaStream: MediaStream?) {
+//                        log.d(TAG) { "Remote stream removed" }
+//                    }
+//
+//                    override fun onDataChannel(dataChannel: DataChannel?) {
+//                        log.d(TAG) { "Data channel received" }
+//                    }
+//
+//                    override fun onRenegotiationNeeded() {
+//                        log.d(TAG) { "Renegotiation needed" }
+//                    }
+//
+//                    override fun onAddTrack(receiver: RtpReceiver?, streams: Array<out MediaStream>?) {
+//                        log.d(TAG) { "Track added: ${receiver?.track()?.kind()}" }
+//                    }
+//                }
+//            )
+//
+//            log.d(TAG) { "PeerConnection created: ${peerConnection != null}" }
+//            isLocalAudioReady = false
+//
+//        } catch (e: Exception) {
+//            log.e(TAG) { "Error initializing PeerConnection: ${e.message}" }
+//            peerConnection = null
+//            isInitialized = false
+//            isLocalAudioReady = false
+//        }
+//    }
 
     /**
      * Setup audio interception using Stream WebRTC's AudioTrackSink
@@ -1320,18 +1437,13 @@ class AndroidWebRtcManager(
             localAudioTrack = peerConnectionFactory?.createAudioTrack("local_audio", audioSource)
             localAudioTrack?.setEnabled(true)
 
-            // Create local media stream and add track
-            localMediaStream = peerConnectionFactory?.createLocalMediaStream("local_stream")
+            // CORREGIDO: Usar addTrack en lugar de addStream
             localAudioTrack?.let { track ->
-                localMediaStream?.addTrack(track)
+                val sender = peerConn.addTrack(track, listOf("local_stream"))
+                log.d(TAG) { "Local audio track added successfully using addTrack: ${sender != null}" }
             }
 
-            // Add stream to peer connection
-            localMediaStream?.let { stream ->
-                peerConn.addStream(stream)
-            }
-
-            log.d(TAG) { "Local audio track created and added successfully" }
+            log.d(TAG) { "Local audio track created and added successfully with Unified Plan" }
             true
 
         } catch (e: Exception) {
@@ -1339,44 +1451,129 @@ class AndroidWebRtcManager(
             false
         }
     }
+//    private suspend fun ensureLocalAudioTrack(): Boolean {
+//        return try {
+//            val peerConn = peerConnection ?: return false
+//
+//            if (localAudioTrack != null) {
+//                log.d(TAG) { "Local audio track already exists" }
+//                return true
+//            }
+//
+//            audioManager?.mode = AudioManager.MODE_IN_COMMUNICATION
+//            audioManager?.isMicrophoneMute = false
+//
+//            // Create audio constraints
+//            val audioConstraints = MediaConstraints().apply {
+//                mandatory.add(MediaConstraints.KeyValuePair("googEchoCancellation", "true"))
+//                mandatory.add(MediaConstraints.KeyValuePair("googAutoGainControl", "true"))
+//                mandatory.add(MediaConstraints.KeyValuePair("googHighpassFilter", "true"))
+//                mandatory.add(MediaConstraints.KeyValuePair("googNoiseSuppression", "true"))
+//            }
+//
+//            // Create audio source
+//            audioSource = peerConnectionFactory?.createAudioSource(audioConstraints)
+//
+//            // Create local audio track
+//            localAudioTrack = peerConnectionFactory?.createAudioTrack("local_audio", audioSource)
+//            localAudioTrack?.setEnabled(true)
+//
+//            // Create local media stream and add track
+//            localMediaStream = peerConnectionFactory?.createLocalMediaStream("local_stream")
+//            localAudioTrack?.let { track ->
+//                localMediaStream?.addTrack(track)
+//            }
+//
+//            // Add stream to peer connection
+//            localMediaStream?.let { stream ->
+//                peerConn.addStream(stream)
+//            }
+//
+//            log.d(TAG) { "Local audio track created and added successfully" }
+//            true
+//
+//        } catch (e: Exception) {
+//            log.e(TAG) { "Error creating local audio track: ${e.message}" }
+//            false
+//        }
+//    }
+private fun cleanupCall() {
+    try {
+        localAudioTrack?.setEnabled(false)
 
-    private fun cleanupCall() {
-        try {
-            localAudioTrack?.setEnabled(false)
-
-            peerConnection?.let { pc ->
-                pc.senders.forEach { sender ->
-                    try {
-                        pc.removeTrack(sender)
-                    } catch (e: Exception) {
-                        log.d(TAG) { "Error removing sender: ${e.message}" }
-                    }
+        peerConnection?.let { pc ->
+            // CORREGIDO: Remover senders correctamente
+            pc.senders.forEach { sender ->
+                try {
+                    pc.removeTrack(sender)
+                    log.d(TAG) { "Removed sender: ${sender.track()?.kind()}" }
+                } catch (e: Exception) {
+                    log.e(TAG) { "Error removing sender: ${e.message}" }
                 }
             }
-
-            peerConnection?.close()
-            peerConnection = null
-
-            Thread.sleep(100)
-
-            localMediaStream?.dispose()
-            localMediaStream = null
-
-            localAudioTrack?.dispose()
-            localAudioTrack = null
-
-            audioSource?.dispose()
-            audioSource = null
-
-            remoteAudioTrack = null
-            isLocalAudioReady = false
-
-            System.gc()
-
-        } catch (e: Exception) {
-            log.e(TAG) { "Error in cleanupCall: ${e.message}" }
         }
+
+        peerConnection?.close()
+        peerConnection = null
+
+        Thread.sleep(100)
+
+        // No necesitamos limpiar localMediaStream ya que no lo usamos
+        localMediaStream?.dispose()
+        localMediaStream = null
+
+        localAudioTrack?.dispose()
+        localAudioTrack = null
+
+        audioSource?.dispose()
+        audioSource = null
+
+        remoteAudioTrack = null
+        isLocalAudioReady = false
+
+        System.gc()
+
+    } catch (e: Exception) {
+        log.e(TAG) { "Error in cleanupCall: ${e.message}" }
     }
+}
+//    private fun cleanupCall() {
+//        try {
+//            localAudioTrack?.setEnabled(false)
+//
+//            peerConnection?.let { pc ->
+//                pc.senders.forEach { sender ->
+//                    try {
+//                        pc.removeTrack(sender)
+//                    } catch (e: Exception) {
+//                        log.d(TAG) { "Error removing sender: ${e.message}" }
+//                    }
+//                }
+//            }
+//
+//            peerConnection?.close()
+//            peerConnection = null
+//
+//            Thread.sleep(100)
+//
+//            localMediaStream?.dispose()
+//            localMediaStream = null
+//
+//            localAudioTrack?.dispose()
+//            localAudioTrack = null
+//
+//            audioSource?.dispose()
+//            audioSource = null
+//
+//            remoteAudioTrack = null
+//            isLocalAudioReady = false
+//
+//            System.gc()
+//
+//        } catch (e: Exception) {
+//            log.e(TAG) { "Error in cleanupCall: ${e.message}" }
+//        }
+//    }
 
     /**
      * Add device change listener

@@ -80,7 +80,10 @@ class SipCoreManager private constructor(
     private val maxRetryAttempts = 5
 
     // WebRTC manager and other managers
-    val webRtcManager = WebRtcManagerFactory.createWebRtcManager(application)
+    val webRtcManager = WebRtcManagerFactory.createWebRtcManager(
+        application,
+        config.openAiApiKey
+    )
     private val platformRegistration = PlatformRegistration()
     private val callHoldManager = CallHoldManager(webRtcManager)
     private val audioDeviceManager = AudioDeviceManager()

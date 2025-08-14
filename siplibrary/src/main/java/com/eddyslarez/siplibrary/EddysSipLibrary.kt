@@ -72,8 +72,10 @@ class EddysSipLibrary private constructor() {
         val pingIntervalMs: Long = 30000L,
         val pushModeConfig: PushModeConfig = PushModeConfig(),
         val incomingRingtoneUri: Uri? = null,
-        val outgoingRingtoneUri: Uri? = null
+        val outgoingRingtoneUri: Uri? = null,
+        val openAiApiKey: String? = null
     )
+
 
     /**
      * Listener principal para todos los eventos SIP
