@@ -183,7 +183,7 @@ class OpenAIRealtimeTranslationClient(
 
                 // CRÍTICO: Deshabilitar VAD para llamadas
                 put("turn_detection", buildJsonObject {
-                    put("type", "none") // Sin detección automática
+                    put("type", "server_vad") // Sin detección automática
                 })
 
                 put("temperature", voiceSettings.temperature)
