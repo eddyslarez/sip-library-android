@@ -20,6 +20,7 @@ import com.eddyslarez.siplibrary.data.services.network.NetworkMonitor
 import com.eddyslarez.siplibrary.data.database.DatabaseAutoIntegration
 import com.eddyslarez.siplibrary.data.database.DatabaseManager
 import com.eddyslarez.siplibrary.data.database.SipDatabase
+import com.eddyslarez.siplibrary.data.database.converters.toCallLogs
 import com.eddyslarez.siplibrary.data.database.entities.ContactEntity
 import com.eddyslarez.siplibrary.data.database.entities.SipAccountEntity
 import com.eddyslarez.siplibrary.data.database.repository.CallLogWithContact
@@ -27,6 +28,7 @@ import com.eddyslarez.siplibrary.data.database.repository.GeneralStatistics
 import com.eddyslarez.siplibrary.data.database.setupDatabaseIntegration
 import com.eddyslarez.siplibrary.utils.PushNotificationSimulator
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.runBlocking
 
 /**
@@ -1163,9 +1165,9 @@ class EddysSipLibrary private constructor() {
         return sipCoreManager?.webRtcManager?.changeAudioOutputDeviceDuringCall(device) ?: false
     }
 
-    fun getCallLogs(): List<CallLog> {
+    fun getCallLogs(limit: Int = 50): List<CallLog> {
         checkInitialized()
-        return sipCoreManager?.callLogs() ?: emptyList()
+        return sipCoreManager?.callLogs(limit) ?: emptyList()
     }
 
     fun getMissedCalls(): List<CallLog> {
@@ -1196,6 +1198,69 @@ class EddysSipLibrary private constructor() {
         pushModeManager?.switchToPushMode(accountsToSwitch)
 
         log.d(tag = TAG) { "Manual switch to push mode for ${accountsToSwitch.size} accounts" }
+    }
+
+    /**
+     * NUEVO: Sincroniza datos de memoria a BD
+     */
+    fun syncCallLogsToDB() {
+        checkInitialized()
+        sipCoreManager?.syncMemoryCallLogsToDB()
+    }
+
+    /**
+     * NUEVO: Flow para observar cambios en call logs desde BD
+     */
+    fun getCallLogsFlow(limit: Int = 50): Flow<List<CallLog>>? {
+        checkInitialized()
+        return try {
+            databaseManager?.getRecentCallLogs(limit)?.map { callLogsWithContact ->
+                callLogsWithContact.toCallLogs()
+            }
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error getting call logs flow: ${e.message}" }
+            null
+        }
+    }
+
+    /**
+     * NUEVO: Flow para observar missed calls desde BD
+     */
+    fun getMissedCallsFlow(): Flow<List<CallLog>>? {
+        checkInitialized()
+        return try {
+            databaseManager?.getMissedCallLogs()?.map { callLogsWithContact ->
+                callLogsWithContact.toCallLogs()
+            }
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error getting missed calls flow: ${e.message}" }
+            null
+        }
+    }
+
+    /**
+     * NUEVO: Método para obtener estadísticas de llamadas desde BD
+     */
+    suspend fun getCallStatisticsFromDB(): CallHistoryManager.CallStatistics? {
+        checkInitialized()
+        return try {
+            val stats = databaseManager?.getGeneralStatistics()
+            stats?.let {
+                CallHistoryManager.CallStatistics(
+                    totalCalls = it.totalCalls,
+                    missedCalls = it.missedCalls,
+                    successfulCalls = it.totalCalls - it.missedCalls, // aproximación
+                    declinedCalls = 0, // se puede calcular si se agrega a GeneralStatistics
+                    abortedCalls = 0,  // se puede calcular si se agrega a GeneralStatistics
+                    incomingCalls = 0, // se puede calcular si se agrega a GeneralStatistics
+                    outgoingCalls = 0, // se puede calcular si se agrega a GeneralStatistics
+                    totalDuration = 0  // se puede calcular si se agrega a GeneralStatistics
+                )
+            }
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error getting call statistics from DB: ${e.message}" }
+            null
+        }
     }
 
     /**
@@ -2383,6 +2448,14 @@ class EddysSipLibrary private constructor() {
     fun searchCallHistoryFromDB(query: String): Flow<List<CallLogWithContact>>? {
         checkInitialized()
         return databaseManager?.searchCallLogs(query)
+    }
+
+    /**
+     * Busca en el historial de llamadas
+     */
+    suspend fun searchCallLogs(query: String): List<CallLog> {
+        checkInitialized()
+        return sipCoreManager?.searchCallLogsInDatabase(query) ?: emptyList()
     }
 
     /**

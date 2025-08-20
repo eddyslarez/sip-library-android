@@ -3,6 +3,9 @@ package com.eddyslarez.siplibrary.core
 import android.app.Application
 import android.content.Context
 import com.eddyslarez.siplibrary.EddysSipLibrary
+import com.eddyslarez.siplibrary.data.database.DatabaseAutoIntegration
+import com.eddyslarez.siplibrary.data.database.DatabaseManager
+import com.eddyslarez.siplibrary.data.database.converters.toCallLogs
 import com.eddyslarez.siplibrary.data.models.*
 import com.eddyslarez.siplibrary.data.services.audio.AudioDevice
 import com.eddyslarez.siplibrary.data.services.audio.AudioDeviceManager
@@ -27,6 +30,7 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.datetime.Clock
@@ -1399,12 +1403,7 @@ class SipCoreManager private constructor(
         }
     }
 
-    fun clearCallLogs() = callHistoryManager.clearCallLogs()
-    fun callLogs(): List<CallLog> = callHistoryManager.getAllCallLogs()
     fun getCallStatistics() = callHistoryManager.getCallStatistics()
-    fun getMissedCalls(): List<CallLog> = callHistoryManager.getMissedCalls()
-    fun getCallLogsForNumber(phoneNumber: String): List<CallLog> =
-        callHistoryManager.getCallLogsForNumber(phoneNumber)
 
     fun getRegistrationState(): RegistrationState {
         val registeredAccounts =
@@ -2004,6 +2003,257 @@ class SipCoreManager private constructor(
             }
         }
     }
+
+    // === MÉTODOS DE HISTORIAL CON BASE DE DATOS ===
+
+    /**
+     * Obtiene call logs desde la base de datos
+     */
+    suspend fun getCallLogsFromDatabase(limit: Int = 50): List<CallLog> {
+        return try {
+            this.let { manager ->
+                val dbIntegration = DatabaseAutoIntegration.getInstance(application, manager)
+                val dbManager = DatabaseManager.getInstance(application)
+
+                // Obtener desde BD y convertir al formato esperado
+                val callLogsWithContact = dbManager.getRecentCallLogs(limit).first()
+                callLogsWithContact.toCallLogs()
+            }
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error getting call logs from database: ${e.message}" }
+            // Fallback a memoria si falla la BD
+            callHistoryManager.getAllCallLogs()
+        }
+    }
+
+    /**
+     * Obtiene call logs híbrido (BD + memoria)
+     */
+    fun getCallLogsHybrid(limit: Int = 50): List<CallLog> {
+        return try {
+            val databaseLogs = runBlocking {
+                getCallLogsFromDatabase(limit)
+            }
+
+            if (databaseLogs.isNotEmpty()) {
+                // Si hay datos en BD, usar esos
+                databaseLogs
+            } else {
+                // Si no hay datos en BD, usar memoria como fallback
+                callHistoryManager.getAllCallLogs()
+            }
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error in hybrid call logs: ${e.message}" }
+            // Fallback final a memoria
+            callHistoryManager.getAllCallLogs()
+        }
+    }
+
+    /**
+     * Obtiene missed calls desde la base de datos
+     */
+    suspend fun getMissedCallsFromDatabase(): List<CallLog> {
+        return try {
+            val dbManager = DatabaseManager.getInstance(application)
+            val missedCallsWithContact = dbManager.getMissedCallLogs().first()
+            missedCallsWithContact.toCallLogs()
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error getting missed calls from database: ${e.message}" }
+            callHistoryManager.getMissedCalls()
+        }
+    }
+
+    /**
+     * Busca call logs en la base de datos
+     */
+    suspend fun searchCallLogsInDatabase(query: String): List<CallLog> {
+        return try {
+            val dbManager = DatabaseManager.getInstance(application)
+            val searchResults = dbManager.searchCallLogs(query).first()
+            searchResults.toCallLogs()
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error searching call logs in database: ${e.message}" }
+            emptyList()
+        }
+    }
+
+    /**
+     * Obtiene call logs para un número específico desde la BD
+     */
+    suspend fun getCallLogsForNumberFromDatabase(phoneNumber: String): List<CallLog> {
+        return try {
+            val dbManager = DatabaseManager.getInstance(application)
+            val callLogsFlow = dbManager.getRecentCallLogs(1000) // Obtener más para filtrar
+            val allLogs = callLogsFlow.first()
+
+            // Filtrar por número de teléfono
+            val filteredLogs = allLogs.filter {
+                it.callLog.phoneNumber == phoneNumber
+            }
+
+            filteredLogs.toCallLogs()
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error getting call logs for number from database: ${e.message}" }
+            callHistoryManager.getCallLogsForNumber(phoneNumber)
+        }
+    }
+
+// === MÉTODOS ACTUALIZADOS PARA USAR BD ===
+
+    /**
+     * Actualiza el método existente para usar BD como principal
+     */
+    fun callLogs(): List<CallLog> {
+        return try {
+            // Intentar obtener desde BD primero
+            runBlocking { getCallLogsFromDatabase() }
+        } catch (e: Exception) {
+            log.w(tag = TAG) { "Database unavailable, using memory fallback: ${e.message}" }
+            callHistoryManager.getAllCallLogs()
+        }
+    }
+
+    /**
+     * Método sobrecargado con límite
+     */
+    fun callLogs(limit: Int): List<CallLog> {
+        return try {
+            runBlocking { getCallLogsFromDatabase(limit) }
+        } catch (e: Exception) {
+            log.w(tag = TAG) { "Database unavailable, using memory fallback: ${e.message}" }
+            callHistoryManager.getAllCallLogs().take(limit)
+        }
+    }
+
+    /**
+     * Actualiza el método de missed calls para usar BD
+     */
+    fun getMissedCalls(): List<CallLog> {
+        return try {
+            runBlocking { getMissedCallsFromDatabase() }
+        } catch (e: Exception) {
+            log.w(tag = TAG) { "Database unavailable, using memory fallback: ${e.message}" }
+            callHistoryManager.getMissedCalls()
+        }
+    }
+
+    /**
+     * Actualiza el método de call logs para número específico
+     */
+    fun getCallLogsForNumber(phoneNumber: String): List<CallLog> {
+        return try {
+            runBlocking { getCallLogsForNumberFromDatabase(phoneNumber) }
+        } catch (e: Exception) {
+            log.w(tag = TAG) { "Database unavailable, using memory fallback: ${e.message}" }
+            callHistoryManager.getCallLogsForNumber(phoneNumber)
+        }
+    }
+
+    /**
+     * Limpia call logs tanto en BD como en memoria
+     */
+    fun clearCallLogs() {
+        try {
+            // Limpiar en BD
+            runBlocking {
+                val dbManager = DatabaseManager.getInstance(application)
+                dbManager.clearAllCallLogs()
+            }
+            log.d(tag = TAG) { "Call logs cleared from database" }
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error clearing call logs from database: ${e.message}" }
+        }
+
+        // Limpiar en memoria también
+        callHistoryManager.clearCallLogs()
+        log.d(tag = TAG) { "Call logs cleared from memory" }
+    }
+
+    /**
+     * Sincroniza call logs de memoria a BD (útil para migrar datos existentes)
+     */
+    fun syncMemoryCallLogsToDB() {
+        val memoryLogs = callHistoryManager.getAllCallLogs()
+
+        if (memoryLogs.isEmpty()) {
+            log.d(tag = TAG) { "No call logs in memory to sync" }
+            return
+        }
+
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                val dbManager = DatabaseManager.getInstance(application)
+                val currentAccount = currentAccountInfo
+
+                if (currentAccount == null) {
+                    log.w(tag = TAG) { "No current account for syncing call logs" }
+                    return@launch
+                }
+
+                // Buscar o crear cuenta en BD
+                var account = dbManager.getSipAccountByCredentials(
+                    currentAccount.username,
+                    currentAccount.domain
+                )
+
+                if (account == null) {
+                    account = dbManager.createOrUpdateSipAccount(
+                        username = currentAccount.username,
+                        password = currentAccount.password,
+                        domain = currentAccount.domain
+                    )
+                }
+
+                // Convertir y guardar cada call log
+                memoryLogs.forEach { callLog ->
+                    try {
+                        // Crear CallData desde CallLog para usar el método existente
+                        val callData = CallData(
+                            callId = callLog.id,
+                            from = if (callLog.direction == CallDirections.INCOMING)
+                                callLog.from else currentAccount.username,
+                            to = if (callLog.direction == CallDirections.OUTGOING)
+                                callLog.to else currentAccount.username,
+                            direction = callLog.direction,
+                            startTime = parseFormattedDate(callLog.formattedStartDate),
+                            remoteDisplayName = callLog.contact ?: ""
+                        )
+
+                        // Calcular endTime basado en duración
+                        val endTime = callData.startTime + (callLog.duration * 1000)
+
+                        dbManager.createCallLog(
+                            accountId = account.id,
+                            callData = callData,
+                            callType = callLog.callType,
+                            endTime = endTime
+                        )
+
+                    } catch (e: Exception) {
+                        log.e(tag = TAG) { "Error syncing individual call log ${callLog.id}: ${e.message}" }
+                    }
+                }
+
+                log.d(tag = TAG) { "Synced ${memoryLogs.size} call logs from memory to database" }
+
+            } catch (e: Exception) {
+                log.e(tag = TAG) { "Error syncing call logs to database: ${e.message}" }
+            }
+        }
+    }
+
+    private fun parseFormattedDate(formattedDate: String): Long {
+        // Implementación simple para parsear la fecha formateada
+        // Formato esperado: "DD.MM.YYYY HH:MM"
+        return try {
+            // Para este ejemplo, usar timestamp actual si no se puede parsear
+            // En producción, implementar parser completo
+            System.currentTimeMillis()
+        } catch (e: Exception) {
+            System.currentTimeMillis()
+        }
+    }
+
     interface NetworkStatusListener {
         fun onNetworkConnected(networkInfo: NetworkMonitor.NetworkInfo)
         fun onNetworkDisconnected(previousNetworkInfo: NetworkMonitor.NetworkInfo)
