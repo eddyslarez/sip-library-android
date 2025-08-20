@@ -19,6 +19,7 @@ import android.net.Uri
 import com.eddyslarez.siplibrary.data.services.network.NetworkMonitor
 import com.eddyslarez.siplibrary.data.database.DatabaseAutoIntegration
 import com.eddyslarez.siplibrary.data.database.DatabaseManager
+import com.eddyslarez.siplibrary.data.database.SipDatabase
 import com.eddyslarez.siplibrary.data.database.entities.ContactEntity
 import com.eddyslarez.siplibrary.data.database.entities.SipAccountEntity
 import com.eddyslarez.siplibrary.data.database.repository.CallLogWithContact
@@ -26,6 +27,7 @@ import com.eddyslarez.siplibrary.data.database.repository.GeneralStatistics
 import com.eddyslarez.siplibrary.data.database.setupDatabaseIntegration
 import com.eddyslarez.siplibrary.utils.PushNotificationSimulator
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.runBlocking
 
 /**
  * EddysSipLibrary - Biblioteca SIP/VoIP para Android (Versión Optimizada)
@@ -1382,23 +1384,30 @@ class EddysSipLibrary private constructor() {
     fun dispose() {
         if (isInitialized) {
             log.d(tag = TAG) { "Disposing EddysSipLibrary" }
+
+            // Limpiar integración de base de datos primero
+            databaseIntegration?.dispose()
+            databaseIntegration = null
+
+            // Cerrar base de datos de forma segura
+            databaseManager?.closeDatabase()
+            databaseManager = null
+
+            // Resto del cleanup
             sipCoreManager?.dispose()
             sipCoreManager = null
             pushModeManager?.dispose()
             pushModeManager = null
             listeners.clear()
-//            // Limpiar integración de base de datos
-//            databaseIntegration?.dispose()
-//            databaseIntegration = null
-//
-//            // Cerrar base de datos si es necesario
-//            databaseManager?.closeDatabase()
-//            databaseManager = null
+
             registrationListener = null
             callListener = null
             incomingCallListener = null
+            networkStatusListener = null
+            autoReconnectionListener = null
+
             isInitialized = false
-            log.d(tag = TAG) { "EddysSipLibrary disposed" }
+            log.d(tag = TAG) { "EddysSipLibrary disposed completely" }
         }
     }
 
@@ -2284,17 +2293,72 @@ class EddysSipLibrary private constructor() {
 
     private fun setupDatabaseIntegration(application: Application) {
         try {
+            log.d(tag = TAG) { "Setting up database integration" }
+
+            // Verificar si la base de datos está disponible
+            if (!SipDatabase.isDatabaseAvailable(application)) {
+                log.d(tag = TAG) { "Database not found, will be created" }
+            }
+
             databaseManager = DatabaseManager.getInstance(application)
+
             sipCoreManager?.let { coreManager ->
-                databaseIntegration = coreManager.setupDatabaseIntegration(application)
+                databaseIntegration = DatabaseAutoIntegration.getInstance(application, coreManager).apply {
+                    initialize()
+                }
                 log.d(tag = TAG) { "Database integration initialized successfully" }
             }
+
         } catch (e: Exception) {
             log.e(tag = TAG) { "Error setting up database integration: ${e.message}" }
             // Continuar sin base de datos si falla
+            databaseManager = null
+            databaseIntegration = null
         }
     }
 
+    fun verifyAndRestoreDatabase(  application: Application): String {
+        return try {
+            checkInitialized()
+                val dbAvailable = SipDatabase.isDatabaseAvailable(application)
+                val managerExists = DatabaseManager.hasInstance()
+
+                buildString {
+                    appendLine("=== DATABASE VERIFICATION ===")
+                    appendLine("Database file exists: $dbAvailable")
+                    appendLine("Manager instance exists: $managerExists")
+
+                    if (!managerExists && dbAvailable) {
+                        appendLine("Attempting to restore database manager...")
+                        try {
+                            setupDatabaseIntegration(application)
+                            appendLine("✅ Database manager restored successfully")
+                        } catch (e: Exception) {
+                            appendLine("❌ Failed to restore database manager: ${e.message}")
+                        }
+                    }
+
+                    databaseManager?.let { manager ->
+                        appendLine("\n--- Database Statistics ---")
+                        runBlocking {
+                            try {
+                                val stats = manager.getGeneralStatistics()
+                                appendLine("Total Accounts: ${stats.totalAccounts}")
+                                appendLine("Total Calls: ${stats.totalCalls}")
+                                appendLine("Total Contacts: ${stats.totalContacts}")
+                                appendLine("Active Calls: ${stats.activeCalls}")
+                                appendLine("✅ Database is functional")
+                            } catch (e: Exception) {
+                                appendLine("❌ Database error: ${e.message}")
+                            }
+                        }
+                    } ?: appendLine("Database manager not available")
+                }
+
+        } catch (e: Exception) {
+            "Error verifying database: ${e.message}"
+        }
+    }
     // === NUEVOS MÉTODOS PÚBLICOS PARA BD ===
 
     /**

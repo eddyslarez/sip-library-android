@@ -4,12 +4,13 @@ import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.TypeConverters
-import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import android.content.Context
 import com.eddyslarez.siplibrary.data.database.entities.*
 import com.eddyslarez.siplibrary.data.database.dao.*
 import com.eddyslarez.siplibrary.data.database.converters.DatabaseConverters
+import com.eddyslarez.siplibrary.utils.log
+import java.util.concurrent.Executors
 
 /**
  * Base de datos principal de la librería SIP
@@ -25,73 +26,94 @@ import com.eddyslarez.siplibrary.data.database.converters.DatabaseConverters
         CallStateHistoryEntity::class
     ],
     version = 1,
-    exportSchema = true
+    exportSchema = false
 )
 @TypeConverters(DatabaseConverters::class)
 abstract class SipDatabase : RoomDatabase() {
-    
-    // === DAOs ===
+
     abstract fun sipAccountDao(): SipAccountDao
     abstract fun callLogDao(): CallLogDao
     abstract fun callDataDao(): CallDataDao
     abstract fun contactDao(): ContactDao
-    abstract fun callStateHistoryDao(): CallStateHistoryDao
-    
+    abstract fun callStateDao(): CallHistoryDao
+
     companion object {
-        private const val DATABASE_NAME = "sip_database"
-        
         @Volatile
         private var INSTANCE: SipDatabase? = null
-        
-        /**
-         * Obtiene la instancia singleton de la base de datos
-         */
+        private val LOCK = Any()
+
         fun getDatabase(context: Context): SipDatabase {
-            return INSTANCE ?: synchronized(this) {
-                val instance = Room.databaseBuilder(
-                    context.applicationContext,
-                    SipDatabase::class.java,
-                    DATABASE_NAME
-                )
-                    .addMigrations(
-                        // Aquí se pueden agregar migraciones futuras
-                    )
-                    .fallbackToDestructiveMigration() // Solo para desarrollo
-                    .build()
-                
-                INSTANCE = instance
-                instance
+            return INSTANCE ?: synchronized(LOCK) {
+                INSTANCE ?: buildDatabase(context).also { INSTANCE = it }
             }
         }
-        
+
+        private fun buildDatabase(context: Context): SipDatabase {
+            return Room.databaseBuilder(
+                context.applicationContext,
+                SipDatabase::class.java,
+                "sip_database"
+            )
+                .fallbackToDestructiveMigration() // TEMPORAL: para desarrollo
+                .enableMultiInstanceInvalidation() // NUEVO: Para múltiples instancias
+                .setJournalMode(RoomDatabase.JournalMode.WRITE_AHEAD_LOGGING)
+                .setQueryCallback(object : RoomDatabase.QueryCallback {
+                    override fun onQuery(sqlQuery: String, bindArgs: List<Any?>) {
+                        // Log para debugging (opcional)
+                        log.d { "Query: $sqlQuery" }
+                    }
+                }, Executors.newSingleThreadExecutor())
+                .addCallback(object : RoomDatabase.Callback() {
+                    override fun onCreate(db: SupportSQLiteDatabase) {
+                        super.onCreate(db)
+                        log.d { "Database created successfully" }
+                    }
+
+                    override fun onOpen(db: SupportSQLiteDatabase) {
+                        super.onOpen(db)
+                        log.d { "Database opened successfully" }
+
+                        // NUEVO: Verificar integridad al abrir
+                        try {
+                            db.execSQL("PRAGMA integrity_check;")
+                            log.d { "Database integrity check passed" }
+                        } catch (e: Exception) {
+                            log.e { "Database integrity check failed: ${e.message}" }
+                        }
+                    }
+                })
+                .build()
+        }
+
         /**
-         * Cierra la base de datos (útil para testing)
+         * NUEVO: Método para cerrar la base de datos de forma segura
          */
         fun closeDatabase() {
-            INSTANCE?.close()
-            INSTANCE = null
+            synchronized(LOCK) {
+                INSTANCE?.let { instance ->
+                    if (instance.isOpen) {
+                        try {
+                            instance.close()
+                            log.d { "Database instance closed" }
+                        } catch (e: Exception) {
+                            log.e { "Error closing database instance: ${e.message}" }
+                        }
+                    }
+                }
+                INSTANCE = null
+            }
         }
-    }
-}
 
-/**
- * Migraciones de base de datos (para versiones futuras)
- */
-object DatabaseMigrations {
-    
-    // Ejemplo de migración de versión 1 a 2
-    val MIGRATION_1_2 = object : Migration(1, 2) {
-        override fun migrate(database: SupportSQLiteDatabase) {
-            // Ejemplo: Agregar nueva columna
-            // database.execSQL("ALTER TABLE sip_accounts ADD COLUMN newColumn TEXT")
-        }
-    }
-    
-    // Ejemplo de migración de versión 2 a 3
-    val MIGRATION_2_3 = object : Migration(2, 3) {
-        override fun migrate(database: SupportSQLiteDatabase) {
-            // Ejemplo: Crear nueva tabla
-            // database.execSQL("CREATE TABLE IF NOT EXISTS new_table (...)")
+        /**
+         * NUEVO: Verificar si la base de datos existe y está disponible
+         */
+        fun isDatabaseAvailable(context: Context): Boolean {
+            return try {
+                val dbFile = context.getDatabasePath("sip_database")
+                dbFile.exists() && dbFile.canRead()
+            } catch (e: Exception) {
+                false
+            }
         }
     }
 }

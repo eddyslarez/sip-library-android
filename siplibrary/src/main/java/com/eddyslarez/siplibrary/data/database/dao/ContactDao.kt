@@ -37,7 +37,9 @@ interface ContactDao {
     
     @Query("DELETE FROM contacts WHERE id = :contactId")
     suspend fun deleteContactById(contactId: String)
-    
+
+    @Query("SELECT COUNT(*) FROM contacts")
+    suspend fun getContactCount(): Int
     // === BÚSQUEDA ===
     
     @Query("SELECT * FROM contacts WHERE displayName LIKE '%' || :query || '%' OR phoneNumber LIKE '%' || :query || '%' OR firstName LIKE '%' || :query || '%' OR lastName LIKE '%' || :query || '%' ORDER BY displayName ASC")

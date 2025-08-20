@@ -125,7 +125,9 @@ interface CallDataDao {
     
     @Query("SELECT * FROM call_data WHERE fromNumber = :phoneNumber OR toNumber = :phoneNumber ORDER BY startTime DESC")
     fun getCallDataForNumber(phoneNumber: String): Flow<List<CallDataEntity>>
-    
+
+    @Query("SELECT COUNT(*) FROM call_logs")
+    suspend fun getCallLogCount(): Int
     // === ESTADÍSTICAS ===
     
     @Query("SELECT COUNT(*) FROM call_data WHERE isActive = 1")

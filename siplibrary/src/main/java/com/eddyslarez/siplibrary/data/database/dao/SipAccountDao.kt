@@ -97,7 +97,10 @@ interface SipAccountDao {
         clearDefaultAccount()
         setDefaultAccount(accountId)
     }
-    
+
+    @Query("SELECT COUNT(*) FROM sip_accounts")
+    suspend fun getAccountCount(): Int
+
     @Query("UPDATE sip_accounts SET isActive = :isActive, updatedAt = :timestamp WHERE id = :accountId")
     suspend fun setAccountActive(accountId: String, isActive: Boolean, timestamp: Long = System.currentTimeMillis())
     

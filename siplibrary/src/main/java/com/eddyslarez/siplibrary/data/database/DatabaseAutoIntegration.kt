@@ -66,7 +66,7 @@ class DatabaseAutoIntegration private constructor(
         setupRegistrationSync()
         setupCallStateSync()
         setupContactSync()
-        startPeriodicMaintenance()
+//        startPeriodicMaintenance()
 
         log.d(tag = TAG) { "Database integration initialized successfully" }
     }

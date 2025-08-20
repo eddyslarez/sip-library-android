@@ -1,6 +1,7 @@
 package com.eddyslarez.siplibrary.core
 
 import android.app.Application
+import android.content.Context
 import com.eddyslarez.siplibrary.EddysSipLibrary
 import com.eddyslarez.siplibrary.data.models.*
 import com.eddyslarez.siplibrary.data.services.audio.AudioDevice
@@ -133,7 +134,6 @@ class SipCoreManager private constructor(
         }
         return currentAccountInfo
     }
-
 
     fun getCurrentUsername(): String? = currentAccountInfo?.username
 

@@ -150,7 +150,9 @@ interface CallLogDao {
     // Mantener solo los N registros más recientes
     @Query("DELETE FROM call_logs WHERE id NOT IN (SELECT id FROM call_logs ORDER BY startTime DESC LIMIT :limit)")
     suspend fun keepOnlyRecentCallLogs(limit: Int)
-    
+
+    @Query("SELECT COUNT(*) FROM call_logs")
+    suspend fun getCallLogCount(): Int
     // === CONSULTAS AVANZADAS ===
     
     @Query("""

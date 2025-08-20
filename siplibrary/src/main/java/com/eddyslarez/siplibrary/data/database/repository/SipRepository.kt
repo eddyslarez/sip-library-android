@@ -21,7 +21,7 @@ class SipRepository(private val database: SipDatabase) {
     private val callLogDao = database.callLogDao()
     private val callDataDao = database.callDataDao()
     private val contactDao = database.contactDao()
-    private val callStateHistoryDao = database.callStateHistoryDao()
+    private val callStateHistoryDao = database.callStateDao()
     
     private val TAG = "SipRepository"
     
