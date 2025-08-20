@@ -20,7 +20,8 @@ import com.eddyslarez.siplibrary.data.services.network.NetworkMonitor
 import com.eddyslarez.siplibrary.data.database.DatabaseAutoIntegration
 import com.eddyslarez.siplibrary.data.database.DatabaseManager
 import com.eddyslarez.siplibrary.data.database.SipDatabase
-import com.eddyslarez.siplibrary.data.database.converters.toCallLogs
+import com.eddyslarez.siplibrary.data.database.converters.toCallLogsFromEntity
+import com.eddyslarez.siplibrary.data.database.converters.toCallLogsWithContact
 import com.eddyslarez.siplibrary.data.database.entities.ContactEntity
 import com.eddyslarez.siplibrary.data.database.entities.SipAccountEntity
 import com.eddyslarez.siplibrary.data.database.repository.CallLogWithContact
@@ -1215,7 +1216,7 @@ class EddysSipLibrary private constructor() {
         checkInitialized()
         return try {
             databaseManager?.getRecentCallLogs(limit)?.map { callLogsWithContact ->
-                callLogsWithContact.toCallLogs()
+                callLogsWithContact.toCallLogsWithContact()
             }
         } catch (e: Exception) {
             log.e(tag = TAG) { "Error getting call logs flow: ${e.message}" }
@@ -1230,7 +1231,7 @@ class EddysSipLibrary private constructor() {
         checkInitialized()
         return try {
             databaseManager?.getMissedCallLogs()?.map { callLogsWithContact ->
-                callLogsWithContact.toCallLogs()
+                callLogsWithContact.toCallLogsWithContact()
             }
         } catch (e: Exception) {
             log.e(tag = TAG) { "Error getting missed calls flow: ${e.message}" }

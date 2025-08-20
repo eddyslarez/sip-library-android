@@ -5,7 +5,7 @@ import android.content.Context
 import com.eddyslarez.siplibrary.EddysSipLibrary
 import com.eddyslarez.siplibrary.data.database.DatabaseAutoIntegration
 import com.eddyslarez.siplibrary.data.database.DatabaseManager
-import com.eddyslarez.siplibrary.data.database.converters.toCallLogs
+import com.eddyslarez.siplibrary.data.database.converters.toCallLogsWithContact
 import com.eddyslarez.siplibrary.data.models.*
 import com.eddyslarez.siplibrary.data.services.audio.AudioDevice
 import com.eddyslarez.siplibrary.data.services.audio.AudioDeviceManager
@@ -2017,7 +2017,7 @@ class SipCoreManager private constructor(
 
                 // Obtener desde BD y convertir al formato esperado
                 val callLogsWithContact = dbManager.getRecentCallLogs(limit).first()
-                callLogsWithContact.toCallLogs()
+                callLogsWithContact.toCallLogsWithContact()
             }
         } catch (e: Exception) {
             log.e(tag = TAG) { "Error getting call logs from database: ${e.message}" }
@@ -2056,7 +2056,7 @@ class SipCoreManager private constructor(
         return try {
             val dbManager = DatabaseManager.getInstance(application)
             val missedCallsWithContact = dbManager.getMissedCallLogs().first()
-            missedCallsWithContact.toCallLogs()
+            missedCallsWithContact.toCallLogsWithContact()
         } catch (e: Exception) {
             log.e(tag = TAG) { "Error getting missed calls from database: ${e.message}" }
             callHistoryManager.getMissedCalls()
@@ -2070,7 +2070,7 @@ class SipCoreManager private constructor(
         return try {
             val dbManager = DatabaseManager.getInstance(application)
             val searchResults = dbManager.searchCallLogs(query).first()
-            searchResults.toCallLogs()
+            searchResults.toCallLogsWithContact()
         } catch (e: Exception) {
             log.e(tag = TAG) { "Error searching call logs in database: ${e.message}" }
             emptyList()
@@ -2091,7 +2091,7 @@ class SipCoreManager private constructor(
                 it.callLog.phoneNumber == phoneNumber
             }
 
-            filteredLogs.toCallLogs()
+            filteredLogs.toCallLogsWithContact()
         } catch (e: Exception) {
             log.e(tag = TAG) { "Error getting call logs for number from database: ${e.message}" }
             callHistoryManager.getCallLogsForNumber(phoneNumber)
