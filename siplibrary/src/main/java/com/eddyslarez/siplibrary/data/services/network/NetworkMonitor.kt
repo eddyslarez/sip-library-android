@@ -10,6 +10,7 @@ import android.os.Build
 import com.eddyslarez.siplibrary.utils.log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -17,7 +18,13 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.datetime.Clock
+import kotlin.coroutines.cancellation.CancellationException
 
+/**
+ * Monitor de red avanzado para detectar cambios de conectividad
+ *
+ * @author Eddys Larez
+ */
 /**
  * Monitor de red avanzado para detectar cambios de conectividad
  *
@@ -49,6 +56,10 @@ class NetworkMonitor(private val application: Application) {
     private var lastConnectionTime = 0L
     private var reconnectionAttempts = 0
     private var isMonitoring = false
+
+    // CORREGIDO: Variable para controlar reconexión
+    private var reconnectionJob: Job? = null
+    private var wasConnectedBefore = false
 
     // Configuración
     private val maxReconnectionAttempts = 10
@@ -107,6 +118,8 @@ class NetworkMonitor(private val application: Application) {
 
         // Verificar estado inicial
         updateCurrentNetworkInfo()
+        val initialInfo = _networkInfoFlow.value
+        wasConnectedBefore = initialInfo.isConnected
 
         // Configurar callback de red
         setupNetworkCallback()
@@ -123,6 +136,9 @@ class NetworkMonitor(private val application: Application) {
 
         log.d(tag = TAG) { "Stopping network monitoring..." }
 
+        // CORREGIDO: Cancelar reconexión antes de parar
+        stopReconnectionProcess()
+
         networkCallback?.let { callback ->
             try {
                 connectivityManager.unregisterNetworkCallback(callback)
@@ -135,6 +151,16 @@ class NetworkMonitor(private val application: Application) {
         isMonitoring = false
 
         log.d(tag = TAG) { "Network monitoring stopped" }
+    }
+
+    /**
+     * CORREGIDO: Detiene el proceso de reconexión
+     */
+    private fun stopReconnectionProcess() {
+        reconnectionJob?.cancel()
+        reconnectionJob = null
+        reconnectionAttempts = 0
+        log.d(tag = TAG) { "Reconnection process stopped" }
     }
 
     /**
@@ -201,11 +227,14 @@ class NetworkMonitor(private val application: Application) {
 
         val currentNetworkInfo = _networkInfoFlow.value
 
+        // CORREGIDO: Detener reconexión si se conecta la red
         if (!wasConnected && currentNetworkInfo.isConnected) {
-            // Nueva conexión
+            // Nueva conexión - detener cualquier proceso de reconexión
+            stopReconnectionProcess()
+
             _networkStateFlow.value = NetworkState.CONNECTED
             lastConnectionTime = Clock.System.now().toEpochMilliseconds()
-            reconnectionAttempts = 0
+            wasConnectedBefore = true
 
             log.d(tag = TAG) { "Network connected: ${currentNetworkInfo.networkType}" }
 
@@ -269,8 +298,10 @@ class NetworkMonitor(private val application: Application) {
 
             currentNetwork = null
 
-            // Intentar reconectar después de un delay
-            scheduleReconnectionAttempt()
+            // CORREGIDO: Solo iniciar reconexión si había conexión antes
+            if (wasConnectedBefore) {
+                scheduleReconnectionAttempt()
+            }
         }
     }
 
@@ -288,6 +319,11 @@ class NetworkMonitor(private val application: Application) {
 
             if (hadInternet != hasInternet) {
                 log.d(tag = TAG) { "Internet connectivity changed: $hasInternet" }
+
+                // CORREGIDO: Si se recupera internet, detener reconexión
+                if (hasInternet && !hadInternet) {
+                    stopReconnectionProcess()
+                }
 
                 networkChangeListeners.forEach { listener ->
                     try {
@@ -327,7 +363,11 @@ class NetworkMonitor(private val application: Application) {
         }
 
         currentNetwork = null
-        scheduleReconnectionAttempt()
+
+        // CORREGIDO: Solo iniciar reconexión si había conexión antes
+        if (wasConnectedBefore) {
+            scheduleReconnectionAttempt()
+        }
     }
 
     /**
@@ -481,9 +521,12 @@ class NetworkMonitor(private val application: Application) {
     }
 
     /**
-     * Programa un intento de reconexión
+     * CORREGIDO: Programa un intento de reconexión con lógica mejorada
      */
     private fun scheduleReconnectionAttempt() {
+        // Cancelar cualquier reconexión anterior
+        reconnectionJob?.cancel()
+
         if (reconnectionAttempts >= maxReconnectionAttempts) {
             log.w(tag = TAG) { "Max reconnection attempts reached: $maxReconnectionAttempts" }
             return
@@ -494,19 +537,39 @@ class NetworkMonitor(private val application: Application) {
 
         log.d(tag = TAG) { "Scheduling reconnection attempt $reconnectionAttempts in ${delay}ms" }
 
-        scope.launch {
-            delay(delay)
+        reconnectionJob = scope.launch {
+            try {
+                delay(delay)
 
-            // Verificar si ya hay conexión
-            updateCurrentNetworkInfo()
-            val currentInfo = _networkInfoFlow.value
+                // CRÍTICO: Verificar si ya hay conexión antes de continuar
+                updateCurrentNetworkInfo()
+                val currentInfo = _networkInfoFlow.value
 
-            if (!currentInfo.isConnected) {
-                log.d(tag = TAG) { "Reconnection attempt $reconnectionAttempts - still no connection" }
-                scheduleReconnectionAttempt()
-            } else {
-                log.d(tag = TAG) { "Reconnection successful on attempt $reconnectionAttempts" }
-                reconnectionAttempts = 0
+                if (currentInfo.isConnected && currentInfo.hasInternet) {
+                    log.d(tag = TAG) { "Network already recovered - stopping reconnection attempts" }
+                    reconnectionAttempts = 0
+                    return@launch
+                }
+
+                if (!currentInfo.isConnected) {
+                    log.d(tag = TAG) { "Reconnection attempt $reconnectionAttempts - still no connection" }
+
+                    // Verificar si hemos alcanzado el máximo antes de programar otro intento
+                    if (reconnectionAttempts < maxReconnectionAttempts) {
+                        scheduleReconnectionAttempt()
+                    } else {
+                        log.w(tag = TAG) { "Maximum reconnection attempts reached, stopping" }
+                    }
+                } else {
+                    log.d(tag = TAG) { "Network connection recovered on attempt $reconnectionAttempts" }
+                    reconnectionAttempts = 0
+                }
+            } catch (e: Exception) {
+                if (e is CancellationException) {
+                    log.d(tag = TAG) { "Reconnection attempt cancelled" }
+                } else {
+                    log.e(tag = TAG) { "Error in reconnection attempt: ${e.message}" }
+                }
             }
         }
     }
@@ -552,6 +615,9 @@ class NetworkMonitor(private val application: Application) {
 
             val networkInfo = _networkInfoFlow.value
             if (networkInfo.isConnected) {
+                // CORREGIDO: Si hay conexión, detener reconexión
+                stopReconnectionProcess()
+
                 currentNetwork?.let { network ->
                     verifyInternetConnectivity(network)
                 }
@@ -563,7 +629,7 @@ class NetworkMonitor(private val application: Application) {
      * Resetea los intentos de reconexión
      */
     fun resetReconnectionAttempts() {
-        reconnectionAttempts = 0
+        stopReconnectionProcess()
         log.d(tag = TAG) { "Reconnection attempts reset" }
     }
 
@@ -592,6 +658,8 @@ class NetworkMonitor(private val application: Application) {
             appendLine("Max Reconnection Attempts: $maxReconnectionAttempts")
             appendLine("Listeners Count: ${networkChangeListeners.size}")
             appendLine("Timestamp: ${networkInfo.timestamp}")
+            appendLine("Was Connected Before: $wasConnectedBefore")
+            appendLine("Reconnection Job Active: ${reconnectionJob?.isActive == true}")
         }
     }
 
@@ -599,6 +667,7 @@ class NetworkMonitor(private val application: Application) {
      * Limpieza de recursos
      */
     fun dispose() {
+        stopReconnectionProcess()
         stopMonitoring()
         networkChangeListeners.clear()
         log.d(tag = TAG) { "NetworkMonitor disposed" }

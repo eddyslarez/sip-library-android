@@ -53,14 +53,16 @@ fun CallLogWithContact.toCallLog(): CallLog {
 /**
  * Convierte lista de CallLogWithContact a lista de CallLog
  */
-fun List<CallLogWithContact>.toCallLogsWithContact(): List<CallLog> {
+@JvmName("toCallLogsFromCallLogWithContact")
+fun List<CallLogWithContact>.toCallLogs(): List<CallLog> {
     return this.map { it.toCallLog() }
 }
 
 /**
  * Convierte lista de CallLogEntity a lista de CallLog
  */
-fun List<CallLogEntity>.toCallLogsFromEntity(): List<CallLog> {
+@JvmName("toCallLogsFromCallLogEntity")
+fun List<CallLogEntity>.toCallLogs(): List<CallLog> {
     return this.map { it.toCallLog() }
 }
 
