@@ -36,6 +36,7 @@ android {
 
     kotlinOptions {
         jvmTarget = "11"
+        languageVersion = "2.0" // or "2.1" if available
     }
 }
 

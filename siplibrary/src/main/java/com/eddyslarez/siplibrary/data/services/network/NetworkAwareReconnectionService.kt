@@ -7,6 +7,7 @@ import com.eddyslarez.siplibrary.utils.RegistrationStateManager
 import com.eddyslarez.siplibrary.utils.log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
@@ -16,9 +17,10 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.datetime.Clock
 import java.util.concurrent.ConcurrentHashMap
+import kotlin.coroutines.cancellation.CancellationException
 
 /**
- * Servicio que combina monitoreo de red con reconexión automática - CORREGIDO
+ * Servicio que combina monitoreo de red con reconexión automática - COMPLETAMENTE CORREGIDO
  *
  * @author Eddys Larez
  */
@@ -42,8 +44,16 @@ class NetworkAwareReconnectionService(private val application: Application) {
     private var onReconnectionRequiredCallback: ((AccountInfo, ReconnectionManager.ReconnectionReason) -> Unit)? = null
     private var onNetworkStatusChangedCallback: ((NetworkMonitor.NetworkInfo) -> Unit)? = null
 
-    // Variables de control
+    // CORREGIDO: Variables de control mejorado
     private var isDisposing = false
+    private var lastNetworkState: NetworkMonitor.NetworkInfo? = null
+
+    // NUEVO: Control de transiciones de red para evitar múltiples handlers
+    private var networkTransitionHandler: Job? = null
+
+    // Configuración de temporización
+    private val networkStabilizationDelay = 4000L // 4 segundos
+    private val reconnectionDebounceDelay = 2000L // 2 segundos
 
     enum class ServiceState {
         STOPPED,
@@ -66,14 +76,17 @@ class NetworkAwareReconnectionService(private val application: Application) {
         _serviceStateFlow.value = ServiceState.STARTING
 
         try {
+            // CRÍTICO: Configurar la referencia del monitor de red en el gestor de reconexión
+            reconnectionManager.setNetworkMonitor(networkMonitor)
+
             // Configurar callbacks
             setupCallbacks()
 
-            // Iniciar monitoreo de red
-            networkMonitor.startMonitoring()
-
             // Configurar gestor de reconexión
             setupReconnectionManager()
+
+            // Iniciar monitoreo de red
+            networkMonitor.startMonitoring()
 
             _serviceStateFlow.value = ServiceState.RUNNING
             log.d(tag = TAG) { "NetworkAwareReconnectionService started successfully" }
@@ -98,14 +111,19 @@ class NetworkAwareReconnectionService(private val application: Application) {
         isDisposing = true
 
         try {
-            // Detener reconexiones PRIMERO
+            // CRÍTICO: Cancelar handler de transición de red primero
+            networkTransitionHandler?.cancel()
+            networkTransitionHandler = null
+
+            // Detener reconexiones ANTES que el monitor de red
             reconnectionManager.stopAllReconnections()
 
             // Detener monitoreo de red
             networkMonitor.stopMonitoring()
 
-            // Limpiar cuentas
+            // Limpiar cuentas y estado
             registeredAccounts.clear()
+            lastNetworkState = null
 
             _serviceStateFlow.value = ServiceState.STOPPED
             log.d(tag = TAG) { "NetworkAwareReconnectionService stopped successfully" }
@@ -117,7 +135,7 @@ class NetworkAwareReconnectionService(private val application: Application) {
     }
 
     /**
-     * Configura los callbacks del monitor de red
+     * CORREGIDO: Configura los callbacks del monitor de red con manejo mejorado
      */
     private fun setupCallbacks() {
         networkMonitor.addNetworkChangeListener(object : NetworkMonitor.NetworkChangeListener {
@@ -125,16 +143,21 @@ class NetworkAwareReconnectionService(private val application: Application) {
             override fun onNetworkConnected(networkInfo: NetworkMonitor.NetworkInfo) {
                 if (isDisposing) return
 
-                log.d(tag = TAG) { "Network connected: ${networkInfo.networkType}" }
+                log.d(tag = TAG) { "Network connected: ${networkInfo.networkType}, hasInternet: ${networkInfo.hasInternet}" }
 
-                scope.launch {
+                // CRÍTICO: Solo un handler activo a la vez
+                networkTransitionHandler?.cancel()
+                networkTransitionHandler = scope.launch {
                     try {
                         handleNetworkConnected(networkInfo)
                     } catch (e: Exception) {
-                        log.e(tag = TAG) { "Error handling network connected: ${e.message}" }
+                        if (e !is CancellationException) {
+                            log.e(tag = TAG) { "Error handling network connected: ${e.message}" }
+                        }
                     }
                 }
 
+                // Notificar callback inmediatamente
                 onNetworkStatusChangedCallback?.invoke(networkInfo)
             }
 
@@ -143,11 +166,14 @@ class NetworkAwareReconnectionService(private val application: Application) {
 
                 log.d(tag = TAG) { "Network disconnected: ${previousNetworkInfo.networkType}" }
 
-                scope.launch {
+                networkTransitionHandler?.cancel()
+                networkTransitionHandler = scope.launch {
                     try {
                         handleNetworkDisconnected(previousNetworkInfo)
                     } catch (e: Exception) {
-                        log.e(tag = TAG) { "Error handling network disconnected: ${e.message}" }
+                        if (e !is CancellationException) {
+                            log.e(tag = TAG) { "Error handling network disconnected: ${e.message}" }
+                        }
                     }
                 }
 
@@ -166,11 +192,14 @@ class NetworkAwareReconnectionService(private val application: Application) {
                     "Network changed: ${oldNetworkInfo.networkType} -> ${newNetworkInfo.networkType}"
                 }
 
-                scope.launch {
+                networkTransitionHandler?.cancel()
+                networkTransitionHandler = scope.launch {
                     try {
                         handleNetworkChanged(oldNetworkInfo, newNetworkInfo)
                     } catch (e: Exception) {
-                        log.e(tag = TAG) { "Error handling network changed: ${e.message}" }
+                        if (e !is CancellationException) {
+                            log.e(tag = TAG) { "Error handling network changed: ${e.message}" }
+                        }
                     }
                 }
 
@@ -182,11 +211,14 @@ class NetworkAwareReconnectionService(private val application: Application) {
 
                 log.d(tag = TAG) { "Network lost: ${networkInfo.networkType}" }
 
-                scope.launch {
+                networkTransitionHandler?.cancel()
+                networkTransitionHandler = scope.launch {
                     try {
                         handleNetworkLost(networkInfo)
                     } catch (e: Exception) {
-                        log.e(tag = TAG) { "Error handling network lost: ${e.message}" }
+                        if (e !is CancellationException) {
+                            log.e(tag = TAG) { "Error handling network lost: ${e.message}" }
+                        }
                     }
                 }
 
@@ -203,17 +235,19 @@ class NetworkAwareReconnectionService(private val application: Application) {
 
                 log.d(tag = TAG) { "Internet connectivity changed: $hasInternet" }
 
-                scope.launch {
+                networkTransitionHandler?.cancel()
+                networkTransitionHandler = scope.launch {
                     try {
                         handleInternetConnectivityChanged(hasInternet)
                     } catch (e: Exception) {
-                        log.e(tag = TAG) { "Error handling internet connectivity changed: ${e.message}" }
+                        if (e !is CancellationException) {
+                            log.e(tag = TAG) { "Error handling internet connectivity changed: ${e.message}" }
+                        }
                     }
                 }
             }
         })
     }
-
     /**
      * Configura el gestor de reconexión
      */
@@ -238,45 +272,57 @@ class NetworkAwareReconnectionService(private val application: Application) {
     }
 
     /**
-     * CORREGIDO: Maneja conexión de red
+     * CORREGIDO: Maneja conexión de red con verificación completa
      */
     private suspend fun handleNetworkConnected(networkInfo: NetworkMonitor.NetworkInfo) {
         if (isDisposing) return
 
         log.d(tag = TAG) { "Handling network connected event with ${registeredAccounts.size} registered accounts" }
 
-        if (registeredAccounts.isNotEmpty()) {
-            // CRÍTICO: Esperar que la red se estabilice antes de iniciar reconexiones
-            delay(2000)
-
-            if (!networkInfo.hasInternet) {
-                log.d(tag = TAG) { "Network connected but no internet, waiting..." }
-                return
-            }
-
-            val accounts = registeredAccounts.values.toList()
-
-            // Verificar qué cuentas necesitan reconexión
-            val accountsNeedingReconnection = accounts.filter { account ->
-                val accountKey = account.getAccountIdentity()
-                val registrationState = RegistrationStateManager.getAccountState(accountKey)
-
-                val needsReconnection = registrationState != RegistrationState.OK
-                log.d(tag = TAG) { "Account $accountKey: state=$registrationState, needsReconnection=$needsReconnection" }
-
-                needsReconnection
-            }
-
-            if (accountsNeedingReconnection.isNotEmpty()) {
-                log.d(tag = TAG) { "Network recovered - reconnecting ${accountsNeedingReconnection.size} accounts" }
-                reconnectionManager.onNetworkRecovered(accountsNeedingReconnection)
-            } else {
-                log.d(tag = TAG) { "All accounts properly registered, no reconnection needed" }
-
-                // NUEVO: Actualizar estados de registro para las cuentas ya conectadas
-                updateRegistrationStatesAfterConnection(accounts)
-            }
+        // CRÍTICO: Solo proceder si hay internet completo
+        if (!networkInfo.hasInternet) {
+            log.d(tag = TAG) { "Network connected but no internet access, waiting..." }
+            return
         }
+
+        // Esperar que la red se estabilice
+        delay(networkStabilizationDelay)
+        if (isDisposing) return
+
+        val accounts = registeredAccounts.values.toList()
+        if (accounts.isEmpty()) {
+            log.d(tag = TAG) { "No registered accounts to reconnect" }
+            return
+        }
+
+        // CORREGIDO: Verificar y filtrar cuentas que realmente necesitan reconexión
+        val accountsNeedingReconnection = accounts.filter { account ->
+            val accountKey = account.getAccountIdentity()
+            val registrationState = RegistrationStateManager.getAccountState(accountKey)
+
+            val needsReconnection = registrationState != RegistrationState.OK
+            log.d(tag = TAG) { "Account $accountKey: state=$registrationState, needsReconnection=$needsReconnection" }
+
+            needsReconnection
+        }
+
+        if (accountsNeedingReconnection.isNotEmpty()) {
+            log.d(tag = TAG) { "Network recovered - reconnecting ${accountsNeedingReconnection.size} accounts" }
+
+            // CORREGIDO: Esperar un poco más antes de iniciar reconexiones
+            delay(reconnectionDebounceDelay)
+            if (isDisposing) return
+
+            reconnectionManager.onNetworkRecovered(accountsNeedingReconnection)
+        } else {
+            log.d(tag = TAG) { "All accounts properly registered, no reconnection needed" }
+
+            // MEJORADO: Actualizar estados de registro para las cuentas ya conectadas
+            updateRegistrationStatesAfterConnection(accounts)
+        }
+
+        // Actualizar estado de red
+        lastNetworkState = networkInfo
     }
 
     /**
@@ -291,10 +337,10 @@ class NetworkAwareReconnectionService(private val application: Application) {
                 val currentState = RegistrationStateManager.getAccountState(accountKey)
 
                 if (currentState == RegistrationState.OK) {
-                    // Forzar actualización del estado para notificar a listeners
-                    log.d(tag = TAG) { "Refreshing registration state for $accountKey" }
+                    // CORREGIDO: Solo refrescar si realmente es necesario
+                    log.d(tag = TAG) { "Account $accountKey already properly registered" }
 
-                    // Esto debería disparar las notificaciones correspondientes
+                    // Opcional: Forzar actualización del estado para notificar a listeners
                     onReconnectionRequiredCallback?.invoke(account, ReconnectionManager.ReconnectionReason.NETWORK_CHANGED)
                 }
             } catch (e: Exception) {
@@ -304,21 +350,34 @@ class NetworkAwareReconnectionService(private val application: Application) {
     }
 
     /**
-     * Maneja desconexión de red
+     * CORREGIDO: Maneja desconexión de red
      */
     private suspend fun handleNetworkDisconnected(previousNetworkInfo: NetworkMonitor.NetworkInfo) {
         if (isDisposing) return
 
         log.d(tag = TAG) { "Handling network disconnected event with ${registeredAccounts.size} registered accounts" }
 
-        if (registeredAccounts.isNotEmpty()) {
-            val accounts = registeredAccounts.values.toList()
+        val accounts = registeredAccounts.values.toList()
+        if (accounts.isNotEmpty()) {
+            // CORREGIDO: Dar tiempo para verificar si es una desconexión temporal
+            delay(2000)
+            if (isDisposing) return
+
+            // Verificar si la red se recuperó rápidamente
+            val currentNetworkInfo = networkMonitor.getCurrentNetworkInfo()
+            if (currentNetworkInfo.isConnected && currentNetworkInfo.hasInternet) {
+                log.d(tag = TAG) { "Network recovered quickly, skipping disconnection handling" }
+                return
+            }
+
             reconnectionManager.onNetworkLost(accounts)
         }
+
+        lastNetworkState = previousNetworkInfo.copy(isConnected = false, hasInternet = false)
     }
 
     /**
-     * CORREGIDO: Maneja cambio de red
+     * CORREGIDO: Maneja cambio de red con verificación mejorada
      */
     private suspend fun handleNetworkChanged(
         oldNetworkInfo: NetworkMonitor.NetworkInfo,
@@ -331,51 +390,89 @@ class NetworkAwareReconnectionService(private val application: Application) {
         // Verificar si es un cambio significativo
         val isSignificantChange = isSignificantNetworkChange(oldNetworkInfo, newNetworkInfo)
 
-        if (isSignificantChange && registeredAccounts.isNotEmpty()) {
-            log.d(tag = TAG) { "Significant network change detected, evaluating reconnection needs" }
-
-            // Esperar que el nuevo network se estabilice
-            delay(3000)
-
-            if (!newNetworkInfo.hasInternet) {
-                log.d(tag = TAG) { "New network has no internet, skipping reconnection" }
-                return
-            }
-
-            val accounts = registeredAccounts.values.toList()
-
-            // Verificar qué cuentas necesitan reconexión después del cambio de red
-            val accountsNeedingReconnection = accounts.filter { account ->
-                val accountKey = account.getAccountIdentity()
-                val registrationState = RegistrationStateManager.getAccountState(accountKey)
-                registrationState != RegistrationState.OK
-            }
-
-            if (accountsNeedingReconnection.isNotEmpty()) {
-                log.d(tag = TAG) { "Triggering reconnection for ${accountsNeedingReconnection.size} accounts after network change" }
-                reconnectionManager.onNetworkChanged(accountsNeedingReconnection)
-            } else {
-                log.d(tag = TAG) { "All accounts properly registered after network change" }
-            }
+        if (!isSignificantChange) {
+            log.d(tag = TAG) { "Network change not significant, ignoring" }
+            return
         }
+
+        if (registeredAccounts.isEmpty()) {
+            log.d(tag = TAG) { "No registered accounts for network change handling" }
+            return
+        }
+
+        // CRÍTICO: Solo proceder si la nueva red tiene internet
+        if (!newNetworkInfo.hasInternet) {
+            log.d(tag = TAG) { "New network has no internet, waiting..." }
+            return
+        }
+
+        // Esperar que el nuevo network se estabilice
+        delay(networkStabilizationDelay + 2000) // Más tiempo para cambios de red
+        if (isDisposing) return
+
+        // Verificar nuevamente el estado de la red después del delay
+        val currentNetworkInfo = networkMonitor.getCurrentNetworkInfo()
+        if (!currentNetworkInfo.hasInternet) {
+            log.d(tag = TAG) { "Network lost internet during stabilization, skipping reconnection" }
+            return
+        }
+
+        val accounts = registeredAccounts.values.toList()
+
+        // CORREGIDO: Verificar qué cuentas necesitan reconexión después del cambio de red
+        val accountsNeedingReconnection = accounts.filter { account ->
+            val accountKey = account.getAccountIdentity()
+            val registrationState = RegistrationStateManager.getAccountState(accountKey)
+            val needsReconnection = registrationState != RegistrationState.OK
+
+            log.d(tag = TAG) { "Network change - Account $accountKey: state=$registrationState, needs reconnection=$needsReconnection" }
+            needsReconnection
+        }
+
+        if (accountsNeedingReconnection.isNotEmpty()) {
+            log.d(tag = TAG) { "Triggering reconnection for ${accountsNeedingReconnection.size} accounts after network change" }
+
+            // Debounce adicional
+            delay(reconnectionDebounceDelay)
+            if (!isDisposing) {
+                reconnectionManager.onNetworkChanged(accountsNeedingReconnection)
+            }
+        } else {
+            log.d(tag = TAG) { "All accounts properly registered after network change" }
+        }
+
+        lastNetworkState = newNetworkInfo
     }
 
     /**
-     * Maneja pérdida de red
+     * CORREGIDO: Maneja pérdida de red
      */
     private suspend fun handleNetworkLost(networkInfo: NetworkMonitor.NetworkInfo) {
         if (isDisposing) return
 
         log.d(tag = TAG) { "Handling network lost event with ${registeredAccounts.size} registered accounts" }
 
-        if (registeredAccounts.isNotEmpty()) {
-            val accounts = registeredAccounts.values.toList()
+        val accounts = registeredAccounts.values.toList()
+        if (accounts.isNotEmpty()) {
+            // Esperar un poco para verificar si es pérdida temporal
+            delay(1500)
+            if (isDisposing) return
+
+            // Verificar si la red se recuperó
+            val currentNetworkInfo = networkMonitor.getCurrentNetworkInfo()
+            if (currentNetworkInfo.isConnected && currentNetworkInfo.hasInternet) {
+                log.d(tag = TAG) { "Network recovered during loss handling, skipping" }
+                return
+            }
+
             reconnectionManager.onNetworkLost(accounts)
         }
+
+        lastNetworkState = networkInfo.copy(isConnected = false, hasInternet = false)
     }
 
     /**
-     * CORREGIDO: Maneja cambio de conectividad a internet
+     * CORREGIDO: Maneja cambio de conectividad a internet con lógica mejorada
      */
     private suspend fun handleInternetConnectivityChanged(hasInternet: Boolean) {
         if (isDisposing) return
@@ -384,9 +481,17 @@ class NetworkAwareReconnectionService(private val application: Application) {
 
         if (hasInternet && registeredAccounts.isNotEmpty()) {
             // Internet recuperado, esperar estabilización
-            delay(1500)
+            delay(networkStabilizationDelay)
+            if (isDisposing) return
 
             val accounts = registeredAccounts.values.toList()
+
+            // CORREGIDO: Verificar estado de conexión de red también
+            val networkInfo = networkMonitor.getCurrentNetworkInfo()
+            if (!networkInfo.isConnected) {
+                log.d(tag = TAG) { "Internet recovered but network not connected, waiting..." }
+                return
+            }
 
             // Verificar qué cuentas necesitan reconexión
             val accountsNeedingReconnection = accounts.filter { account ->
@@ -401,11 +506,16 @@ class NetworkAwareReconnectionService(private val application: Application) {
 
             if (accountsNeedingReconnection.isNotEmpty()) {
                 log.d(tag = TAG) { "Internet recovered - reconnecting ${accountsNeedingReconnection.size} accounts" }
-                reconnectionManager.onNetworkRecovered(accountsNeedingReconnection)
+
+                // Debounce para evitar reconexiones múltiples
+                delay(reconnectionDebounceDelay)
+                if (!isDisposing) {
+                    reconnectionManager.onNetworkRecovered(accountsNeedingReconnection)
+                }
             } else {
                 log.d(tag = TAG) { "Internet recovered - all accounts properly registered" }
 
-                // NUEVO: Actualizar estados para cuentas ya registradas
+                // Actualizar estados para cuentas ya registradas
                 updateRegistrationStatesAfterConnection(accounts)
             }
         }
@@ -427,21 +537,27 @@ class NetworkAwareReconnectionService(private val application: Application) {
     // === MÉTODOS PÚBLICOS ===
 
     /**
-     * CORREGIDO: Registra una cuenta para monitoreo
+     * CORREGIDO: Registra una cuenta para monitoreo con validación
      */
     fun registerAccount(accountInfo: AccountInfo) {
         val accountKey = accountInfo.getAccountIdentity()
+
+        if (registeredAccounts.containsKey(accountKey)) {
+            log.d(tag = TAG) { "Account $accountKey already registered, updating" }
+        }
+
         registeredAccounts[accountKey] = accountInfo
 
         log.d(tag = TAG) { "Account registered for monitoring: $accountKey (total: ${registeredAccounts.size})" }
     }
 
     /**
-     * CORREGIDO: Desregistra una cuenta del monitoreo
+     * CORREGIDO: Desregistra una cuenta del monitoreo con limpieza completa
      */
     fun unregisterAccount(accountKey: String) {
         val removed = registeredAccounts.remove(accountKey)
         if (removed != null) {
+            // Detener cualquier reconexión activa
             reconnectionManager.stopReconnection(accountKey)
             log.d(tag = TAG) { "Account unregistered from monitoring: $accountKey (remaining: ${registeredAccounts.size})" }
         } else {
@@ -473,7 +589,7 @@ class NetworkAwareReconnectionService(private val application: Application) {
     }
 
     /**
-     * CORREGIDO: Notifica fallo de registro
+     * CORREGIDO: Notifica fallo de registro con validación
      */
     fun notifyRegistrationFailed(accountKey: String, error: String?) {
         val accountInfo = registeredAccounts[accountKey]
@@ -486,7 +602,7 @@ class NetworkAwareReconnectionService(private val application: Application) {
     }
 
     /**
-     * CORREGIDO: Notifica desconexión de WebSocket
+     * CORREGIDO: Notifica desconexión de WebSocket con validación
      */
     fun notifyWebSocketDisconnected(accountKey: String) {
         val accountInfo = registeredAccounts[accountKey]
@@ -558,6 +674,8 @@ class NetworkAwareReconnectionService(private val application: Application) {
             appendLine("Network Connected: ${isNetworkConnected()}")
             appendLine("Has Internet: ${hasInternet()}")
             appendLine("Network Type: ${getNetworkInfo().networkType}")
+            appendLine("Network Transition Job Active: ${networkTransitionHandler?.isActive == true}")
+            appendLine("Last Network State: $lastNetworkState")
 
             if (registeredAccounts.isNotEmpty()) {
                 appendLine("\n--- Registered Accounts ---")
@@ -579,7 +697,7 @@ class NetworkAwareReconnectionService(private val application: Application) {
     }
 
     /**
-     * CORREGIDO: Limpieza de recursos
+     * CORREGIDO: Limpieza de recursos completa y segura
      */
     fun dispose() {
         if (isDisposing) {
@@ -592,11 +710,22 @@ class NetworkAwareReconnectionService(private val application: Application) {
         isDisposing = true
 
         try {
+            // CRÍTICO: Cancelar job de transición primero
+            networkTransitionHandler?.cancel()
+            networkTransitionHandler = null
+
+            // Detener servicio
             stop()
 
-            // Dispose de componentes
-            networkMonitor.dispose()
+            // Dispose de componentes en orden correcto
             reconnectionManager.dispose()
+            networkMonitor.dispose()
+
+            // Limpiar referencias
+            registeredAccounts.clear()
+            lastNetworkState = null
+            onReconnectionRequiredCallback = null
+            onNetworkStatusChangedCallback = null
 
             // Cancelar scope
             scope.cancel()
