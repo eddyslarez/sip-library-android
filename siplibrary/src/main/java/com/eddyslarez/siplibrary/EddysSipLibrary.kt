@@ -55,6 +55,7 @@ class EddysSipLibrary private constructor() {
     private var pushModeManager: PushModeManager? = null
     private var networkStatusListener: NetworkStatusListener? = null
     private var autoReconnectionListener: AutoReconnectionListener? = null
+
     companion object {
         @Volatile
         private var INSTANCE: EddysSipLibrary? = null
@@ -407,6 +408,7 @@ class EddysSipLibrary private constructor() {
                                 // Notificar al Push Mode Manager que la llamada terminó
                                 val registeredAccounts =
                                     sipCoreManager?.getAllRegisteredAccountKeys() ?: emptySet()
+
                                 pushModeManager?.onCallEnded(registeredAccounts)
                             }
 
@@ -474,19 +476,90 @@ class EddysSipLibrary private constructor() {
         username: String,
         domain: String
     ) {
-        log.d(tag = TAG) { "Notifying registration state change: $state for $username@$domain to ${listeners.size} listeners" }
+        val accountKey = "$username@$domain"
 
-        listeners.forEach { listener ->
-            try {
-                listener.onRegistrationStateChanged(state, username, domain)
-            } catch (e: Exception) {
-                log.e(tag = TAG) { "Error in listener onRegistrationStateChanged: ${e.message}" }
-            }
+        log.d(tag = TAG) { "Notifying registration state change: $state for $accountKey to ${listeners.size} listeners" }
+
+        // NUEVO: Verificar que el estado realmente cambió en el SipCoreManager
+        val actualState = sipCoreManager?.getRegistrationState(accountKey) ?: RegistrationState.NONE
+        if (actualState != state) {
+            log.w(tag = TAG) { "State mismatch for $accountKey: notified=$state, actual=$actualState. Using actual state." }
+            // Usar el estado actual del core manager
+            notifyWithActualState(actualState, username, domain, accountKey)
+            return
         }
 
-        registrationListener?.let { listener ->
+        // Ejecutar notificaciones en el hilo principal
+        CoroutineScope(Dispatchers.Main).launch {
             try {
-                when (state) {
+                // Notificar listeners generales
+                listeners.forEach { listener ->
+                    try {
+                        listener.onRegistrationStateChanged(state, username, domain)
+                    } catch (e: Exception) {
+                        log.e(tag = TAG) { "Error in listener onRegistrationStateChanged: ${e.message}" }
+                    }
+                }
+
+                // Notificar listener específico
+                registrationListener?.let { listener ->
+                    try {
+                        when (state) {
+                            RegistrationState.OK -> {
+                                listener.onRegistrationSuccessful(username, domain)
+                                log.d(tag = TAG) { "Notified registration successful for $accountKey" }
+                            }
+
+                            RegistrationState.FAILED -> {
+                                listener.onRegistrationFailed(
+                                    username,
+                                    domain,
+                                    "Registration failed"
+                                )
+                                log.d(tag = TAG) { "Notified registration failed for $accountKey" }
+                            }
+
+                            RegistrationState.NONE, RegistrationState.CLEARED -> {
+                                listener.onUnregistered(username, domain)
+                                log.d(tag = TAG) { "Notified unregistered for $accountKey" }
+                            }
+
+                            else -> {
+                                log.d(tag = TAG) { "No specific notification for state $state for $accountKey" }
+                            }
+                        }
+                    } catch (e: Exception) {
+                        log.e(tag = TAG) { "Error in RegistrationListener: ${e.message}" }
+                    }
+                }
+
+                log.d(tag = TAG) { "Successfully notified all listeners for $accountKey state change to $state" }
+
+            } catch (e: Exception) {
+                log.e(tag = TAG) { "Critical error in registration state notification: ${e.message}" }
+            }
+        }
+    }
+
+    private fun notifyWithActualState(
+        actualState: RegistrationState,
+        username: String,
+        domain: String,
+        accountKey: String
+    ) {
+        log.d(tag = TAG) { "Using actual state $actualState for notifications for $accountKey" }
+
+        CoroutineScope(Dispatchers.Main).launch {
+            listeners.forEach { listener ->
+                try {
+                    listener.onRegistrationStateChanged(actualState, username, domain)
+                } catch (e: Exception) {
+                    log.e(tag = TAG) { "Error in listener with actual state: ${e.message}" }
+                }
+            }
+
+            registrationListener?.let { listener ->
+                when (actualState) {
                     RegistrationState.OK -> listener.onRegistrationSuccessful(username, domain)
                     RegistrationState.FAILED -> listener.onRegistrationFailed(
                         username,
@@ -501,10 +574,88 @@ class EddysSipLibrary private constructor() {
 
                     else -> {}
                 }
-            } catch (e: Exception) {
-                log.e(tag = TAG) { "Error in RegistrationListener: ${e.message}" }
             }
         }
+    }
+
+
+    /**
+     * NUEVO: Verifica y corrige inconsistencias de estado de registro
+     */
+    fun verifyAndCorrectRegistrationStates(): String {
+        checkInitialized()
+
+        val diagnosticInfo = mutableListOf<String>()
+        diagnosticInfo.add("=== REGISTRATION STATE VERIFICATION ===")
+
+        val coreStates = sipCoreManager?.getAllRegistrationStates() ?: emptyMap()
+        val coreAccounts = sipCoreManager?.activeAccounts ?: emptyMap()
+
+        diagnosticInfo.add("Active accounts: ${coreAccounts.size}")
+        diagnosticInfo.add("Tracked states: ${coreStates.size}")
+
+        coreAccounts.forEach { (accountKey, accountInfo) ->
+            val coreState = coreStates[accountKey] ?: RegistrationState.NONE
+            val internalFlag = accountInfo.isRegistered
+            val webSocketConnected = accountInfo.webSocketClient?.isConnected() == true
+
+            diagnosticInfo.add("\nAccount: $accountKey")
+            diagnosticInfo.add("  Core State: $coreState")
+            diagnosticInfo.add("  Internal Flag: $internalFlag")
+            diagnosticInfo.add("  WebSocket Connected: $webSocketConnected")
+
+            // Detectar inconsistencias
+            var needsCorrection = false
+            var correctedState = coreState
+
+            when {
+                coreState == RegistrationState.OK && !internalFlag -> {
+                    diagnosticInfo.add("  ⚠️ INCONSISTENCY: Core says OK but internal flag is false")
+                    accountInfo.isRegistered = true
+                    needsCorrection = true
+                }
+
+                coreState != RegistrationState.OK && internalFlag -> {
+                    diagnosticInfo.add("  ⚠️ INCONSISTENCY: Internal flag true but core state is $coreState")
+                    accountInfo.isRegistered = false
+                    needsCorrection = true
+                }
+
+                !webSocketConnected && (coreState == RegistrationState.OK || internalFlag) -> {
+                    diagnosticInfo.add("  ⚠️ INCONSISTENCY: Not connected but marked as registered")
+                    accountInfo.isRegistered = false
+                    correctedState = RegistrationState.NONE
+                    sipCoreManager?.updateRegistrationState(accountKey, RegistrationState.NONE)
+                    needsCorrection = true
+                }
+
+                webSocketConnected && coreState == RegistrationState.NONE && !internalFlag -> {
+                    diagnosticInfo.add("  ℹ️ Connected but not registered - this is normal during connection")
+                }
+
+                else -> {
+                    diagnosticInfo.add("  ✅ States are consistent")
+                }
+            }
+
+            if (needsCorrection) {
+                diagnosticInfo.add("  🔧 CORRECTED inconsistencies")
+
+                // Forzar notificación del estado correcto
+                try {
+                    sipCoreManager?.sipCallbacks?.onAccountRegistrationStateChanged(
+                        accountInfo.username,
+                        accountInfo.domain,
+                        correctedState
+                    )
+                    diagnosticInfo.add("  ✅ Forced state notification sent")
+                } catch (e: Exception) {
+                    diagnosticInfo.add("  ❌ Error sending forced notification: ${e.message}")
+                }
+            }
+        }
+
+        return diagnosticInfo.joinToString("\n")
     }
 
     /**
@@ -1751,7 +1902,8 @@ class EddysSipLibrary private constructor() {
 
                                     !state.isReconnecting && state.attempts > 0 -> {
                                         // Reconexión terminó
-                                        val registrationState = getRegistrationState(username, domain)
+                                        val registrationState =
+                                            getRegistrationState(username, domain)
 
                                         if (registrationState == RegistrationState.OK) {
                                             autoReconnectionListener?.onReconnectionSuccess(
@@ -1781,6 +1933,7 @@ class EddysSipLibrary private constructor() {
             }
         }
     }
+
     /**
      * Notifica que la red se recuperó
      */
@@ -1810,6 +1963,7 @@ class EddysSipLibrary private constructor() {
         // Los listeners ya serán notificados por el NetworkStatusListener
         // Aquí podríamos sepuede hacer preparativos adicionales si es necesario
     }
+
     /**
      * Método setupNetworkStatusListener()
      */
@@ -1949,6 +2103,7 @@ class EddysSipLibrary private constructor() {
             }
         })
     }
+
     /**
      * NUEVO: Configura listener para cambios de estado de red
      */
@@ -2026,6 +2181,7 @@ class EddysSipLibrary private constructor() {
         log.d(tag = TAG) { "Force reconnection for all accounts" }
         sipCoreManager?.forceReconnectionAllAccounts()
     }
+
     /**
      * NUEVO: Notifica manualmente que se necesita verificar reconexiones
      */
@@ -2064,9 +2220,11 @@ class EddysSipLibrary private constructor() {
                                 needReconnection.add(Pair(username, domain))
                                 log.d(tag = TAG) { "Account $accountKey needs reconnection (state: $state)" }
                             }
+
                             RegistrationState.IN_PROGRESS -> {
                                 log.d(tag = TAG) { "Account $accountKey already reconnecting" }
                             }
+
                             RegistrationState.OK -> {
                                 log.d(tag = TAG) { "Account $accountKey is properly registered" }
                             }
@@ -2099,6 +2257,7 @@ class EddysSipLibrary private constructor() {
             }
         }
     }
+
     /**
      * NUEVO: Diagnóstico completo de reconexión
      */
@@ -2122,8 +2281,10 @@ class EddysSipLibrary private constructor() {
             appendLine("\n--- Account States ---")
             val accountStates = getAllRegistrationStates()
             accountStates.forEach { (accountKey, state) ->
-                val reconnectAttempts = getReconnectionAttempts(accountKey.split("@")[0], accountKey.split("@")[1])
-                val isReconnecting = isAccountReconnecting(accountKey.split("@")[0], accountKey.split("@")[1])
+                val reconnectAttempts =
+                    getReconnectionAttempts(accountKey.split("@")[0], accountKey.split("@")[1])
+                val isReconnecting =
+                    isAccountReconnecting(accountKey.split("@")[0], accountKey.split("@")[1])
 
                 appendLine("$accountKey:")
                 appendLine("  State: $state")
@@ -2306,7 +2467,9 @@ class EddysSipLibrary private constructor() {
             }
 
             appendLine("\n--- Core System ---")
-            appendLine(sipCoreManager?.getCompleteDiagnosticInfo() ?: "SipCoreManager not available")
+            appendLine(
+                sipCoreManager?.getCompleteDiagnosticInfo() ?: "SipCoreManager not available"
+            )
 
             appendLine("\n--- Listeners ---")
             appendLine("Network Status Listener: ${networkStatusListener != null}")
@@ -2324,7 +2487,8 @@ class EddysSipLibrary private constructor() {
         val reconnectionStates = getAllReconnectionStates()
         val networkInfo = getCurrentNetworkInfo()
         val totalAccounts = getAllRegistrationStates().size
-        val registeredAccounts = getAllRegistrationStates().count { it.value == RegistrationState.OK }
+        val registeredAccounts =
+            getAllRegistrationStates().count { it.value == RegistrationState.OK }
         val reconnectingAccounts = reconnectionStates.count { it.value.isReconnecting }
         val totalReconnectionAttempts = reconnectionStates.values.sumOf { it.attempts }
 
@@ -2368,9 +2532,10 @@ class EddysSipLibrary private constructor() {
             databaseManager = DatabaseManager.getInstance(application)
 
             sipCoreManager?.let { coreManager ->
-                databaseIntegration = DatabaseAutoIntegration.getInstance(application, coreManager).apply {
-                    initialize()
-                }
+                databaseIntegration =
+                    DatabaseAutoIntegration.getInstance(application, coreManager).apply {
+                        initialize()
+                    }
                 log.d(tag = TAG) { "Database integration initialized successfully" }
             }
 
@@ -2382,43 +2547,43 @@ class EddysSipLibrary private constructor() {
         }
     }
 
-    fun verifyAndRestoreDatabase(  application: Application): String {
+    fun verifyAndRestoreDatabase(application: Application): String {
         return try {
             checkInitialized()
-                val dbAvailable = SipDatabase.isDatabaseAvailable(application)
-                val managerExists = DatabaseManager.hasInstance()
+            val dbAvailable = SipDatabase.isDatabaseAvailable(application)
+            val managerExists = DatabaseManager.hasInstance()
 
-                buildString {
-                    appendLine("=== DATABASE VERIFICATION ===")
-                    appendLine("Database file exists: $dbAvailable")
-                    appendLine("Manager instance exists: $managerExists")
+            buildString {
+                appendLine("=== DATABASE VERIFICATION ===")
+                appendLine("Database file exists: $dbAvailable")
+                appendLine("Manager instance exists: $managerExists")
 
-                    if (!managerExists && dbAvailable) {
-                        appendLine("Attempting to restore database manager...")
+                if (!managerExists && dbAvailable) {
+                    appendLine("Attempting to restore database manager...")
+                    try {
+                        setupDatabaseIntegration(application)
+                        appendLine("✅ Database manager restored successfully")
+                    } catch (e: Exception) {
+                        appendLine("❌ Failed to restore database manager: ${e.message}")
+                    }
+                }
+
+                databaseManager?.let { manager ->
+                    appendLine("\n--- Database Statistics ---")
+                    runBlocking {
                         try {
-                            setupDatabaseIntegration(application)
-                            appendLine("✅ Database manager restored successfully")
+                            val stats = manager.getGeneralStatistics()
+                            appendLine("Total Accounts: ${stats.totalAccounts}")
+                            appendLine("Total Calls: ${stats.totalCalls}")
+                            appendLine("Total Contacts: ${stats.totalContacts}")
+                            appendLine("Active Calls: ${stats.activeCalls}")
+                            appendLine("✅ Database is functional")
                         } catch (e: Exception) {
-                            appendLine("❌ Failed to restore database manager: ${e.message}")
+                            appendLine("❌ Database error: ${e.message}")
                         }
                     }
-
-                    databaseManager?.let { manager ->
-                        appendLine("\n--- Database Statistics ---")
-                        runBlocking {
-                            try {
-                                val stats = manager.getGeneralStatistics()
-                                appendLine("Total Accounts: ${stats.totalAccounts}")
-                                appendLine("Total Calls: ${stats.totalCalls}")
-                                appendLine("Total Contacts: ${stats.totalContacts}")
-                                appendLine("Active Calls: ${stats.activeCalls}")
-                                appendLine("✅ Database is functional")
-                            } catch (e: Exception) {
-                                appendLine("❌ Database error: ${e.message}")
-                            }
-                        }
-                    } ?: appendLine("Database manager not available")
-                }
+                } ?: appendLine("Database manager not available")
+            }
 
         } catch (e: Exception) {
             "Error verifying database: ${e.message}"

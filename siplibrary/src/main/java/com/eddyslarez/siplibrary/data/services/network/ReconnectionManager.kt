@@ -104,9 +104,9 @@ class ReconnectionManager {
      * CORREGIDO: Inicia reconexión con verificaciones estrictas
      */
     fun startReconnection(
-        accountInfo: AccountInfo,
-        reason: ReconnectionReason,
-        isNetworkAvailable: Boolean = true
+    accountInfo: AccountInfo,
+    reason: ReconnectionReason,
+    isNetworkAvailable: Boolean = true
     ) {
         if (isDisposing) {
             log.d(tag = TAG) { "Ignoring reconnection start - manager is disposing" }
@@ -115,17 +115,32 @@ class ReconnectionManager {
 
         val accountKey = accountInfo.getAccountIdentity()
 
-        // CRÍTICO: Verificar si ya está conectado correctamente ANTES de iniciar reconexión
-        val registrationState = RegistrationStateManager.getAccountState(accountKey)
-        if (registrationState == RegistrationState.OK) {
-            log.d(tag = TAG) { "Account $accountKey already properly registered - SKIPPING reconnection" }
+        // CRÍTICO: Verificar cache de éxito reciente primero
+        val lastSuccessTime = connectionSuccessCache[accountKey]
+        if (lastSuccessTime != null) {
+            val timeSinceSuccess = Clock.System.now().toEpochMilliseconds() - lastSuccessTime
+            if (timeSinceSuccess < 30000) { // 30 segundos
+                log.d(tag = TAG) { "Account $accountKey was recently connected (${timeSinceSuccess}ms ago) - SKIPPING reconnection" }
+                return
+            }
+        }
 
-            // Actualizar cache de éxito
-            connectionSuccessCache[accountKey] = Clock.System.now().toEpochMilliseconds()
+        // CRÍTICO: Verificar múltiples veces el estado antes de iniciar reconexión
+        repeat(2) { attempt ->
+            val registrationState = RegistrationStateManager.getAccountState(accountKey)
+            if (registrationState == RegistrationState.OK) {
+                log.d(tag = TAG) { "Account $accountKey already properly registered (check ${attempt + 1}) - SKIPPING reconnection" }
 
-            // Limpiar cualquier estado de reconexión previo
-            clearReconnectionState(accountKey)
-            return
+                // Actualizar cache de éxito y limpiar estado
+                connectionSuccessCache[accountKey] = Clock.System.now().toEpochMilliseconds()
+                clearReconnectionState(accountKey)
+                return
+            }
+
+            if (attempt == 0) {
+                // Esperar un poco antes de la segunda verificación
+                Thread.sleep(1000)
+            }
         }
 
         log.d(tag = TAG) {
@@ -142,11 +157,12 @@ class ReconnectionManager {
             log.d(tag = TAG) { "Network not available for $accountKey - creating pending state" }
             val pendingState = ReconnectionState(
                 accountKey = accountKey,
-                isReconnecting = true,
+                isReconnecting = false, // NO reconectar sin red
                 attempts = 0,
                 reason = reason,
                 isNetworkAvailable = false,
-                backoffDelay = baseReconnectionDelay
+                backoffDelay = baseReconnectionDelay,
+                shouldStop = true // CRÍTICO: Detener hasta que haya red
             )
             updateReconnectionState(accountKey, pendingState)
             return
@@ -172,12 +188,7 @@ class ReconnectionManager {
         reconnectionJobs[accountKey] = reconnectionJob
     }
 
-    /**
-     * CORREGIDO: Ejecuta el bucle de reconexión con control estricto y puntos de salida claros
-     */
-    /**
-     * CORREGIDO: Ejecuta el bucle de reconexión con control estricto y puntos de salida claros
-     */
+
     private suspend fun executeReconnectionLoop(
         accountInfo: AccountInfo,
         reason: ReconnectionReason,
@@ -206,6 +217,43 @@ class ReconnectionManager {
                     return
                 }
 
+                // CRÍTICO: Verificar que hay internet real ANTES de intentar
+                val hasRealInternet = networkMonitor?.hasInternet() ?: false
+
+                if (!hasRealInternet) {
+                    log.d(tag = TAG) { "No internet available for $accountKey - STOPPING reconnection attempts" }
+
+                    // Actualizar estado para indicar espera por internet
+                    currentState = currentState.copy(
+                        isReconnecting = false, // DETENER reconexión sin internet
+                        isNetworkAvailable = false,
+                        shouldStop = true, // CRÍTICO: No continuar sin internet
+                        lastError = "Internet connection lost - reconnection stopped",
+                        timestamp = Clock.System.now().toEpochMilliseconds()
+                    )
+                    updateReconnectionState(accountKey, currentState)
+
+                    log.d(tag = TAG) { "Reconnection stopped for $accountKey due to no internet" }
+                    return // SALIR del bucle completamente
+                }
+
+                // CRÍTICO: También verificar conectividad de red
+                val networkAvailable = networkMonitor?.isNetworkAvailable() ?: false
+
+                if (!networkAvailable) {
+                    log.d(tag = TAG) { "Network not available for $accountKey - STOPPING reconnection" }
+
+                    currentState = currentState.copy(
+                        isReconnecting = false,
+                        isNetworkAvailable = false,
+                        shouldStop = true,
+                        lastError = "Network connection lost - reconnection stopped",
+                        timestamp = Clock.System.now().toEpochMilliseconds()
+                    )
+                    updateReconnectionState(accountKey, currentState)
+                    return
+                }
+
                 // Verificar estado actual de reconexión
                 currentState = getReconnectionState(accountKey) ?: break
                 if (!currentState.isReconnecting || currentState.shouldStop) {
@@ -213,47 +261,7 @@ class ReconnectionManager {
                     break
                 }
 
-                // CRÍTICO: Verificar estado de red con NetworkMonitor
-                val networkAvailable = networkMonitor?.isNetworkAvailable() ?: false
-
-                if (!networkAvailable) {
-                    log.d(tag = TAG) { "Network not available for $accountKey, waiting..." }
-
-                    // Actualizar estado para indicar espera por red
-                    currentState = currentState.copy(
-                        isNetworkAvailable = false,
-                        timestamp = Clock.System.now().toEpochMilliseconds()
-                    )
-                    updateReconnectionState(accountKey, currentState)
-
-                    // Esperar con verificaciones periódicas (30 segundos total)
-                    var waitCount = 0
-                    while (waitCount < 6 && coroutineContext.isActive) {
-                        delay(5000)
-                        waitCount++
-
-                        if (isDisposing || !reconnectionJobs.containsKey(accountKey)) break
-
-                        // Verificar si la cuenta se conectó durante la espera
-                        val currentRegState = RegistrationStateManager.getAccountState(accountKey)
-                        if (currentRegState == RegistrationState.OK) {
-                            log.d(tag = TAG) { "Account $accountKey registered while waiting for network - SUCCESS" }
-                            markReconnectionSuccessful(accountKey, currentState.attempts)
-                            return
-                        }
-
-                        val networkNowAvailable = networkMonitor?.isNetworkAvailable() ?: false
-                        if (networkNowAvailable) {
-                            log.d(tag = TAG) { "Network became available for $accountKey during wait" }
-                            break
-                        }
-                    }
-
-                    // Continuar al siguiente ciclo para re-verificar
-                    continue
-                }
-
-                // Red disponible, proceder con intento de reconexión
+                // Proceder con el intento de reconexión
                 val attemptNumber = currentState.attempts + 1
                 val delay = calculateBackoffDelay(attemptNumber)
 
@@ -261,12 +269,26 @@ class ReconnectionManager {
                     "Reconnection attempt $attemptNumber/$maxReconnectionAttempts for $accountKey in ${delay}ms"
                 }
 
-                // CRÍTICO: Esperar con verificaciones cada segundo
+                // CRÍTICO: Esperar con verificaciones frecuentes de internet
                 val delaySeconds = (delay / 1000).toInt()
                 var delayCount = 0
                 while (delayCount < delaySeconds && coroutineContext.isActive) {
                     delay(1000)
                     delayCount++
+
+                    // CRÍTICO: Verificar internet cada segundo durante la espera
+                    if (!networkMonitor?.hasInternet()!! == true) {
+                        log.d(tag = TAG) { "Internet lost during reconnection delay for $accountKey - STOPPING" }
+
+                        val stoppedState = currentState.copy(
+                            isReconnecting = false,
+                            shouldStop = true,
+                            lastError = "Internet lost during reconnection delay",
+                            timestamp = Clock.System.now().toEpochMilliseconds()
+                        )
+                        updateReconnectionState(accountKey, stoppedState)
+                        return
+                    }
 
                     // Verificar si fue cancelado durante la espera
                     if (isDisposing || !reconnectionJobs.containsKey(accountKey)) {
@@ -274,7 +296,7 @@ class ReconnectionManager {
                         return
                     }
 
-                    // CRÍTICO: Verificar si la conexión se recuperó durante la espera
+                    // Verificar si la conexión se recuperó durante la espera
                     val regState = RegistrationStateManager.getAccountState(accountKey)
                     if (regState == RegistrationState.OK) {
                         log.d(tag = TAG) { "Connection recovered during delay for $accountKey - SUCCESS" }
@@ -284,16 +306,17 @@ class ReconnectionManager {
                 }
 
                 // Verificar una vez más antes del intento
-                val latestState = getReconnectionState(accountKey)
-                if (latestState == null || !latestState.isReconnecting || latestState.shouldStop) {
-                    log.d(tag = TAG) { "Reconnection cancelled after delay for $accountKey" }
-                    break
-                }
+                if (!networkMonitor?.hasInternet()!! == true) {
+                    log.d(tag = TAG) { "No internet after delay for $accountKey - STOPPING" }
 
-                // CRÍTICO: Verificar red nuevamente después del delay
-                if (networkMonitor?.isNetworkAvailable() != true) {
-                    log.d(tag = TAG) { "Network lost during reconnection delay for $accountKey" }
-                    continue
+                    val noInternetState = currentState.copy(
+                        isReconnecting = false,
+                        shouldStop = true,
+                        lastError = "No internet connection available",
+                        timestamp = Clock.System.now().toEpochMilliseconds()
+                    )
+                    updateReconnectionState(accountKey, noInternetState)
+                    return
                 }
 
                 // Actualizar estado antes del intento
@@ -313,11 +336,8 @@ class ReconnectionManager {
                     log.d(tag = TAG) { "Reconnection successful for $accountKey on attempt $attemptNumber" }
                     markReconnectionSuccessful(accountKey, attemptNumber)
                     return
-
                 } else {
                     log.d(tag = TAG) { "Reconnection attempt $attemptNumber failed for $accountKey" }
-
-                    // Actualizar estado con error
                     currentState = currentState.copy(
                         lastError = "Reconnection attempt $attemptNumber failed",
                         timestamp = Clock.System.now().toEpochMilliseconds()
@@ -354,6 +374,182 @@ class ReconnectionManager {
             log.d(tag = TAG) { "Reconnection loop finished for $accountKey" }
         }
     }
+//    private suspend fun executeReconnectionLoop(
+//        accountInfo: AccountInfo,
+//        reason: ReconnectionReason,
+//        initialNetworkAvailable: Boolean
+//    ) {
+//        val accountKey = accountInfo.getAccountIdentity()
+//        var currentState = getReconnectionState(accountKey) ?: return
+//
+//        log.d(tag = TAG) { "Starting reconnection loop for $accountKey" }
+//
+//        try {
+//            while (currentState.attempts < maxReconnectionAttempts &&
+//                currentState.isReconnecting &&
+//                !currentState.shouldStop &&
+//                !isDisposing &&
+//                reconnectionJobs.containsKey(accountKey)) {
+//
+//                // CRÍTICO: Verificar si la corrutina fue cancelada
+//                if (!coroutineContext.isActive) return
+//
+//                // CRÍTICO: Verificar estado de registro ANTES de cada intento
+//                val registrationState = RegistrationStateManager.getAccountState(accountKey)
+//                if (registrationState == RegistrationState.OK) {
+//                    log.d(tag = TAG) { "Account $accountKey is now registered - STOPPING reconnection immediately" }
+//                    markReconnectionSuccessful(accountKey, currentState.attempts)
+//                    return
+//                }
+//
+//                // Verificar estado actual de reconexión
+//                currentState = getReconnectionState(accountKey) ?: break
+//                if (!currentState.isReconnecting || currentState.shouldStop) {
+//                    log.d(tag = TAG) { "Reconnection stopped externally for $accountKey" }
+//                    break
+//                }
+//
+//                // CRÍTICO: Verificar estado de red con NetworkMonitor
+//                val networkAvailable = networkMonitor?.isNetworkAvailable() ?: false
+//
+//                if (!networkAvailable) {
+//                    log.d(tag = TAG) { "Network not available for $accountKey, waiting..." }
+//
+//                    // Actualizar estado para indicar espera por red
+//                    currentState = currentState.copy(
+//                        isNetworkAvailable = false,
+//                        timestamp = Clock.System.now().toEpochMilliseconds()
+//                    )
+//                    updateReconnectionState(accountKey, currentState)
+//
+//                    // Esperar con verificaciones periódicas (30 segundos total)
+//                    var waitCount = 0
+//                    while (waitCount < 6 && coroutineContext.isActive) {
+//                        delay(5000)
+//                        waitCount++
+//
+//                        if (isDisposing || !reconnectionJobs.containsKey(accountKey)) break
+//
+//                        // Verificar si la cuenta se conectó durante la espera
+//                        val currentRegState = RegistrationStateManager.getAccountState(accountKey)
+//                        if (currentRegState == RegistrationState.OK) {
+//                            log.d(tag = TAG) { "Account $accountKey registered while waiting for network - SUCCESS" }
+//                            markReconnectionSuccessful(accountKey, currentState.attempts)
+//                            return
+//                        }
+//
+//                        val networkNowAvailable = networkMonitor?.isNetworkAvailable() ?: false
+//                        if (networkNowAvailable) {
+//                            log.d(tag = TAG) { "Network became available for $accountKey during wait" }
+//                            break
+//                        }
+//                    }
+//
+//                    // Continuar al siguiente ciclo para re-verificar
+//                    continue
+//                }
+//
+//                // Red disponible, proceder con intento de reconexión
+//                val attemptNumber = currentState.attempts + 1
+//                val delay = calculateBackoffDelay(attemptNumber)
+//
+//                log.d(tag = TAG) {
+//                    "Reconnection attempt $attemptNumber/$maxReconnectionAttempts for $accountKey in ${delay}ms"
+//                }
+//
+//                // CRÍTICO: Esperar con verificaciones cada segundo
+//                val delaySeconds = (delay / 1000).toInt()
+//                var delayCount = 0
+//                while (delayCount < delaySeconds && coroutineContext.isActive) {
+//                    delay(1000)
+//                    delayCount++
+//
+//                    // Verificar si fue cancelado durante la espera
+//                    if (isDisposing || !reconnectionJobs.containsKey(accountKey)) {
+//                        log.d(tag = TAG) { "Reconnection cancelled during delay for $accountKey" }
+//                        return
+//                    }
+//
+//                    // CRÍTICO: Verificar si la conexión se recuperó durante la espera
+//                    val regState = RegistrationStateManager.getAccountState(accountKey)
+//                    if (regState == RegistrationState.OK) {
+//                        log.d(tag = TAG) { "Connection recovered during delay for $accountKey - SUCCESS" }
+//                        markReconnectionSuccessful(accountKey, attemptNumber)
+//                        return
+//                    }
+//                }
+//
+//                // Verificar una vez más antes del intento
+//                val latestState = getReconnectionState(accountKey)
+//                if (latestState == null || !latestState.isReconnecting || latestState.shouldStop) {
+//                    log.d(tag = TAG) { "Reconnection cancelled after delay for $accountKey" }
+//                    break
+//                }
+//
+//                // CRÍTICO: Verificar red nuevamente después del delay
+//                if (networkMonitor?.isNetworkAvailable() != true) {
+//                    log.d(tag = TAG) { "Network lost during reconnection delay for $accountKey" }
+//                    continue
+//                }
+//
+//                // Actualizar estado antes del intento
+//                currentState = currentState.copy(
+//                    attempts = attemptNumber,
+//                    lastAttemptTime = Clock.System.now().toEpochMilliseconds(),
+//                    backoffDelay = delay,
+//                    isNetworkAvailable = true,
+//                    timestamp = Clock.System.now().toEpochMilliseconds()
+//                )
+//                updateReconnectionState(accountKey, currentState)
+//
+//                // Ejecutar intento de reconexión
+//                val success = executeReconnectionAttempt(accountInfo, reason)
+//
+//                if (success) {
+//                    log.d(tag = TAG) { "Reconnection successful for $accountKey on attempt $attemptNumber" }
+//                    markReconnectionSuccessful(accountKey, attemptNumber)
+//                    return
+//
+//                } else {
+//                    log.d(tag = TAG) { "Reconnection attempt $attemptNumber failed for $accountKey" }
+//
+//                    // Actualizar estado con error
+//                    currentState = currentState.copy(
+//                        lastError = "Reconnection attempt $attemptNumber failed",
+//                        timestamp = Clock.System.now().toEpochMilliseconds()
+//                    )
+//                    updateReconnectionState(accountKey, currentState)
+//                }
+//
+//                // Actualizar estado actual para la siguiente iteración
+//                currentState = getReconnectionState(accountKey) ?: break
+//            }
+//
+//            // Verificar por qué terminó el bucle
+//            val finalState = getReconnectionState(accountKey)
+//            if (finalState?.isReconnecting == true && !finalState.shouldStop) {
+//                if (finalState.attempts >= maxReconnectionAttempts) {
+//                    log.w(tag = TAG) { "Max reconnection attempts reached for $accountKey" }
+//                    markReconnectionFailed(accountKey, "Max reconnection attempts (${maxReconnectionAttempts}) reached")
+//                } else {
+//                    log.d(tag = TAG) { "Reconnection loop ended for other reason for $accountKey" }
+//                    markReconnectionFailed(accountKey, "Reconnection loop ended unexpectedly")
+//                }
+//            }
+//
+//        } catch (e: Exception) {
+//            if (e is CancellationException) {
+//                log.d(tag = TAG) { "Reconnection loop cancelled for $accountKey" }
+//            } else {
+//                log.e(tag = TAG) { "Error in reconnection loop for $accountKey: ${e.message}" }
+//                markReconnectionFailed(accountKey, "Exception: ${e.message}")
+//            }
+//        } finally {
+//            // Limpiar job
+//            reconnectionJobs.remove(accountKey)
+//            log.d(tag = TAG) { "Reconnection loop finished for $accountKey" }
+//        }
+//    }
 
     /**
      * CORREGIDO: Ejecuta un intento de reconexión con verificación final
@@ -377,27 +573,48 @@ class ReconnectionManager {
             // Llamar al callback de reconexión
             onReconnectionRequiredCallback?.invoke(accountInfo, reason)
 
-            // Esperar tiempo para que se procese la reconexión
-            delay(3000) // Reducido a 3 segundos
+            // CORREGIDO: Aumentar tiempo inicial de espera para registro SIP
+            delay(5000) // Aumentado a 5 segundos para dar tiempo al registro SIP
 
-            // CRÍTICO: Verificar múltiples veces el estado de registro
-            repeat(3) { attempt ->
+            // CRÍTICO: Verificar múltiples veces con intervalos más largos
+            repeat(5) { attempt ->
+                // Verificar si fue cancelado durante la verificación
+                if (!coroutineContext.isActive || isDisposing) {
+                    return false
+                }
+
                 val registrationState = RegistrationStateManager.getAccountState(accountKey)
+                log.d(tag = TAG) { "Registration check ${attempt + 1}/5 for $accountKey: state=$registrationState" }
 
                 if (registrationState == RegistrationState.OK) {
                     log.d(tag = TAG) { "Reconnection successful for $accountKey after ${attempt + 1} checks" }
 
-                    // Actualizar cache de éxito
+                    // CRÍTICO: Actualizar cache de éxito inmediatamente
                     connectionSuccessCache[accountKey] = Clock.System.now().toEpochMilliseconds()
+
+                    // CRÍTICO: Notificar explícitamente que la cuenta está conectada
+                    markAccountConnected(accountKey)
+
                     return true
                 }
 
-                if (attempt < 2) {
-                    delay(2000) // Esperar un poco más entre verificaciones
+                // Esperar más tiempo entre verificaciones para registros SIP lentos
+                if (attempt < 4) {
+                    delay(3000) // 3 segundos entre verificaciones
                 }
             }
 
-            log.d(tag = TAG) { "Reconnection attempt failed for $accountKey - final state: ${RegistrationStateManager.getAccountState(accountKey)}" }
+            // ÚLTIMO INTENTO: Verificar una vez más después de todas las verificaciones
+            val finalState = RegistrationStateManager.getAccountState(accountKey)
+            log.d(tag = TAG) { "Final reconnection check for $accountKey - state: $finalState" }
+
+            if (finalState == RegistrationState.OK) {
+                connectionSuccessCache[accountKey] = Clock.System.now().toEpochMilliseconds()
+                markAccountConnected(accountKey)
+                return true
+            }
+
+            log.d(tag = TAG) { "Reconnection attempt failed for $accountKey - final state: $finalState" }
             false
 
         } catch (e: Exception) {
@@ -410,23 +627,30 @@ class ReconnectionManager {
      * CORREGIDO: Marca una reconexión como exitosa con limpieza
      */
     private suspend fun markReconnectionSuccessful(accountKey: String, attempts: Int) {
-        val currentState = getReconnectionState(accountKey)
-        if (currentState != null) {
-            val successState = currentState.copy(
-                isReconnecting = false,
-                shouldStop = true,
-                lastError = null,
-                timestamp = Clock.System.now().toEpochMilliseconds()
-            )
-            updateReconnectionState(accountKey, successState)
+        log.d(tag = TAG) { "Marking reconnection as successful for $accountKey after $attempts attempts" }
 
-            // Actualizar cache de éxito
-            connectionSuccessCache[accountKey] = Clock.System.now().toEpochMilliseconds()
+        // CRÍTICO: Detener inmediatamente cualquier job activo
+        val job = reconnectionJobs.remove(accountKey)
+        job?.cancel()
 
-            // Limpiar estado después de un tiempo
-            delay(10000) // 10 segundos
-            clearReconnectionState(accountKey)
-        }
+        // Actualizar cache de éxito inmediatamente
+        connectionSuccessCache[accountKey] = Clock.System.now().toEpochMilliseconds()
+
+        // Crear estado de éxito y limpiar inmediatamente
+        val successState = ReconnectionState(
+            accountKey = accountKey,
+            isReconnecting = false,
+            shouldStop = true,
+            attempts = attempts,
+            lastError = null,
+            timestamp = Clock.System.now().toEpochMilliseconds()
+        )
+        updateReconnectionState(accountKey, successState)
+
+        // CRÍTICO: Limpiar estado inmediatamente, no esperar
+        clearReconnectionState(accountKey)
+
+        log.d(tag = TAG) { "Successfully marked and cleaned reconnection state for $accountKey" }
     }
 
     /**
@@ -641,6 +865,47 @@ class ReconnectionManager {
         val accountKey = accountInfo.getAccountIdentity()
         log.d(tag = TAG) { "Registration failed for $accountKey: $error" }
 
+        // CRÍTICO: Si el error indica problema de red, no iniciar reconexión inmediata
+        val networkRelatedErrors = listOf(
+            "Unable to resolve host",
+            "No address associated with hostname",
+            "Network is unreachable",
+            "Connection timed out",
+            "Connection refused"
+        )
+
+        val isNetworkError = error?.let { errorMsg ->
+            networkRelatedErrors.any { networkError ->
+                errorMsg.contains(networkError, ignoreCase = true)
+            }
+        } ?: false
+
+        if (isNetworkError) {
+            log.d(tag = TAG) { "Registration failed due to network error for $accountKey - checking network availability" }
+
+            // Verificar si realmente hay red disponible
+            val networkAvailable = networkMonitor?.isNetworkAvailable() ?: false
+
+            if (!networkAvailable) {
+                log.d(tag = TAG) { "Network not available for $accountKey - creating pending state instead of reconnecting" }
+
+                // Crear estado de espera por red, NO reconexión activa
+                val waitingState = ReconnectionState(
+                    accountKey = accountKey,
+                    isReconnecting = false, // NO reconectar sin red
+                    attempts = 0,
+                    reason = ReconnectionReason.REGISTRATION_FAILED,
+                    isNetworkAvailable = false,
+                    shouldStop = true,
+                    lastError = error,
+                    backoffDelay = baseReconnectionDelay
+                )
+                updateReconnectionState(accountKey, waitingState)
+                return
+            }
+        }
+
+        // Si no es error de red, proceder con reconexión normal
         startReconnection(
             accountInfo = accountInfo,
             reason = ReconnectionReason.REGISTRATION_FAILED,
@@ -804,6 +1069,114 @@ class ReconnectionManager {
                 appendLine("\n--- Active Jobs ---")
                 reconnectionJobs.forEach { (accountKey, job) ->
                     appendLine("$accountKey: Active=${job.isActive}, Completed=${job.isCompleted}, Cancelled=${job.isCancelled}")
+                }
+            }
+        }
+    }
+    /**
+     * NUEVO: Maneja pérdida específica de internet (diferente a pérdida de red)
+     */
+    fun onInternetLost(accounts: List<AccountInfo>) {
+        if (isDisposing) return
+
+        log.d(tag = TAG) { "Internet lost, stopping active reconnections and marking accounts for recovery" }
+
+        accounts.forEach { accountInfo ->
+            val accountKey = accountInfo.getAccountIdentity()
+
+            // CRÍTICO: Detener inmediatamente cualquier reconexión activa que no tenga internet
+            stopReconnection(accountKey)
+
+            // Crear estado de espera específico para pérdida de internet
+            val waitingForInternetState = ReconnectionState(
+                accountKey = accountKey,
+                isReconnecting = false, // NO reconectar sin internet
+                attempts = 0,
+                reason = ReconnectionReason.NETWORK_LOST,
+                isNetworkAvailable = false,
+                backoffDelay = baseReconnectionDelay,
+                lastError = "Internet connection lost - waiting for recovery",
+                shouldStop = true // Detener hasta que regrese internet
+            )
+
+            updateReconnectionState(accountKey, waitingForInternetState)
+            log.d(tag = TAG) { "Account $accountKey marked as waiting for internet recovery" }
+        }
+    }
+
+    /**
+     * NUEVO: Maneja recuperación específica de internet
+     */
+    /**
+     * NUEVO: Maneja recuperación específica de internet
+     */
+    fun onInternetRecovered(accounts: List<AccountInfo>) {
+        if (isDisposing) return
+
+        log.d(tag = TAG) { "Internet recovered, starting reconnection for ${accounts.size} accounts" }
+
+        scope.launch {
+            // Esperar que la conexión de internet se estabilice completamente
+            delay(6000) // 6 segundos para asegurar estabilidad real
+            if (isDisposing) return@launch
+
+            // CRÍTICO: Verificar que realmente hay internet disponible
+            if (networkMonitor?.hasInternet() != true) {
+                log.d(tag = TAG) { "Internet not actually available after recovery signal, retrying in 10s" }
+                delay(10000)
+                if (networkMonitor?.hasInternet() != true) {
+                    log.d(tag = TAG) { "Internet still not available, skipping reconnection" }
+                    return@launch
+                }
+            }
+
+            log.d(tag = TAG) { "Internet confirmed available, proceeding with reconnections" }
+
+            // Verificar TODAS las cuentas una vez más
+            val accountsStillNeedingReconnection = accounts.filter { accountInfo ->
+                val accountKey = accountInfo.getAccountIdentity()
+                val registrationState = RegistrationStateManager.getAccountState(accountKey)
+                val needsReconnection = registrationState != RegistrationState.OK
+
+                log.d(tag = TAG) { "Internet recovery - Account $accountKey: state=$registrationState, needs reconnection=$needsReconnection" }
+                needsReconnection
+            }
+
+            if (accountsStillNeedingReconnection.isNotEmpty()) {
+                log.d(tag = TAG) { "Starting reconnection for ${accountsStillNeedingReconnection.size} accounts after internet recovery" }
+
+                // CORREGIDO: Usar for loop en lugar de forEach para permitir break
+                for (index in accountsStillNeedingReconnection.indices) {
+                    val accountInfo = accountsStillNeedingReconnection[index]
+                    val accountKey = accountInfo.getAccountIdentity()
+
+                    log.d(tag = TAG) { "Reconnecting account ${index + 1}/${accountsStillNeedingReconnection.size}: $accountKey" }
+
+                    // Limpiar cualquier estado previo
+                    stopReconnection(accountKey)
+
+                    // Delay escalonado entre cuentas
+                    delay(2000L * (index + 1))
+
+                    if (!isDisposing && networkMonitor?.hasInternet() == true) {
+                        startReconnection(
+                            accountInfo = accountInfo,
+                            reason = ReconnectionReason.NETWORK_CHANGED,
+                            isNetworkAvailable = true
+                        )
+
+                        log.d(tag = TAG) { "Reconnection started for $accountKey" }
+                    } else {
+                        log.d(tag = TAG) { "Skipping remaining reconnections - internet lost during process" }
+                        break // Ahora funciona porque estamos en un for loop
+                    }
+                }
+            } else {
+                log.d(tag = TAG) { "All accounts properly registered after internet recovery" }
+
+                // Limpiar estados de reconexión para cuentas ya conectadas
+                accounts.forEach { accountInfo ->
+                    clearReconnectionState(accountInfo.getAccountIdentity())
                 }
             }
         }

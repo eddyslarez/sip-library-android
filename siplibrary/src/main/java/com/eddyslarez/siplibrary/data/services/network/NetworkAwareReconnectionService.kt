@@ -274,6 +274,7 @@ class NetworkAwareReconnectionService(private val application: Application) {
     /**
      * CORREGIDO: Maneja conexión de red con verificación completa
      */
+
     private suspend fun handleNetworkConnected(networkInfo: NetworkMonitor.NetworkInfo) {
         if (isDisposing) return
 
@@ -289,25 +290,27 @@ class NetworkAwareReconnectionService(private val application: Application) {
         delay(networkStabilizationDelay)
         if (isDisposing) return
 
+        // CRÍTICO: Verificar TODAS las cuentas registradas
         val accounts = registeredAccounts.values.toList()
         if (accounts.isEmpty()) {
             log.d(tag = TAG) { "No registered accounts to reconnect" }
             return
         }
 
-        // CORREGIDO: Verificar y filtrar cuentas que realmente necesitan reconexión
+        log.d(tag = TAG) { "Network connected with internet - checking ALL ${accounts.size} registered accounts" }
+
+        // CORREGIDO: Verificar y filtrar TODAS las cuentas registradas
         val accountsNeedingReconnection = accounts.filter { account ->
             val accountKey = account.getAccountIdentity()
             val registrationState = RegistrationStateManager.getAccountState(accountKey)
-
             val needsReconnection = registrationState != RegistrationState.OK
-            log.d(tag = TAG) { "Account $accountKey: state=$registrationState, needsReconnection=$needsReconnection" }
 
+            log.d(tag = TAG) { "Account $accountKey: state=$registrationState, needsReconnection=$needsReconnection" }
             needsReconnection
         }
 
         if (accountsNeedingReconnection.isNotEmpty()) {
-            log.d(tag = TAG) { "Network recovered - reconnecting ${accountsNeedingReconnection.size} accounts" }
+            log.d(tag = TAG) { "Network recovered - reconnecting ${accountsNeedingReconnection.size} of ${accounts.size} total accounts" }
 
             // CORREGIDO: Esperar un poco más antes de iniciar reconexiones
             delay(reconnectionDebounceDelay)
@@ -315,15 +318,64 @@ class NetworkAwareReconnectionService(private val application: Application) {
 
             reconnectionManager.onNetworkRecovered(accountsNeedingReconnection)
         } else {
-            log.d(tag = TAG) { "All accounts properly registered, no reconnection needed" }
-
-            // MEJORADO: Actualizar estados de registro para las cuentas ya conectadas
+            log.d(tag = TAG) { "All ${accounts.size} accounts properly registered, no reconnection needed" }
             updateRegistrationStatesAfterConnection(accounts)
         }
 
         // Actualizar estado de red
         lastNetworkState = networkInfo
     }
+
+//    private suspend fun handleNetworkConnected(networkInfo: NetworkMonitor.NetworkInfo) {
+//        if (isDisposing) return
+//
+//        log.d(tag = TAG) { "Handling network connected event with ${registeredAccounts.size} registered accounts" }
+//
+//        // CRÍTICO: Solo proceder si hay internet completo
+//        if (!networkInfo.hasInternet) {
+//            log.d(tag = TAG) { "Network connected but no internet access, waiting..." }
+//            return
+//        }
+//
+//        // Esperar que la red se estabilice
+//        delay(networkStabilizationDelay)
+//        if (isDisposing) return
+//
+//        val accounts = registeredAccounts.values.toList()
+//        if (accounts.isEmpty()) {
+//            log.d(tag = TAG) { "No registered accounts to reconnect" }
+//            return
+//        }
+//
+//        // CORREGIDO: Verificar y filtrar cuentas que realmente necesitan reconexión
+//        val accountsNeedingReconnection = accounts.filter { account ->
+//            val accountKey = account.getAccountIdentity()
+//            val registrationState = RegistrationStateManager.getAccountState(accountKey)
+//
+//            val needsReconnection = registrationState != RegistrationState.OK
+//            log.d(tag = TAG) { "Account $accountKey: state=$registrationState, needsReconnection=$needsReconnection" }
+//
+//            needsReconnection
+//        }
+//
+//        if (accountsNeedingReconnection.isNotEmpty()) {
+//            log.d(tag = TAG) { "Network recovered - reconnecting ${accountsNeedingReconnection.size} accounts" }
+//
+//            // CORREGIDO: Esperar un poco más antes de iniciar reconexiones
+//            delay(reconnectionDebounceDelay)
+//            if (isDisposing) return
+//
+//            reconnectionManager.onNetworkRecovered(accountsNeedingReconnection)
+//        } else {
+//            log.d(tag = TAG) { "All accounts properly registered, no reconnection needed" }
+//
+//            // MEJORADO: Actualizar estados de registro para las cuentas ya conectadas
+//            updateRegistrationStatesAfterConnection(accounts)
+//        }
+//
+//        // Actualizar estado de red
+//        lastNetworkState = networkInfo
+//    }
 
     /**
      * NUEVO: Actualiza los estados de registro después de recuperar la conexión
@@ -474,17 +526,71 @@ class NetworkAwareReconnectionService(private val application: Application) {
     /**
      * CORREGIDO: Maneja cambio de conectividad a internet con lógica mejorada
      */
+//    private suspend fun handleInternetConnectivityChanged(hasInternet: Boolean) {
+//        if (isDisposing) return
+//
+//        log.d(tag = TAG) { "Handling internet connectivity changed: $hasInternet with ${registeredAccounts.size} registered accounts" }
+//
+//        if (hasInternet && registeredAccounts.isNotEmpty()) {
+//            // Internet recuperado, esperar estabilización
+//            delay(networkStabilizationDelay)
+//            if (isDisposing) return
+//
+//            val accounts = registeredAccounts.values.toList()
+//
+//            // CORREGIDO: Verificar estado de conexión de red también
+//            val networkInfo = networkMonitor.getCurrentNetworkInfo()
+//            if (!networkInfo.isConnected) {
+//                log.d(tag = TAG) { "Internet recovered but network not connected, waiting..." }
+//                return
+//            }
+//
+//            // Verificar qué cuentas necesitan reconexión
+//            val accountsNeedingReconnection = accounts.filter { account ->
+//                val accountKey = account.getAccountIdentity()
+//                val registrationState = RegistrationStateManager.getAccountState(accountKey)
+//
+//                val needsReconnection = registrationState != RegistrationState.OK
+//                log.d(tag = TAG) { "Internet recovered - Account $accountKey: state=$registrationState, needs reconnection=$needsReconnection" }
+//
+//                needsReconnection
+//            }
+//
+//            if (accountsNeedingReconnection.isNotEmpty()) {
+//                log.d(tag = TAG) { "Internet recovered - reconnecting ${accountsNeedingReconnection.size} accounts" }
+//
+//                // Debounce para evitar reconexiones múltiples
+//                delay(reconnectionDebounceDelay)
+//                if (!isDisposing) {
+//                    reconnectionManager.onNetworkRecovered(accountsNeedingReconnection)
+//                }
+//            } else {
+//                log.d(tag = TAG) { "Internet recovered - all accounts properly registered" }
+//
+//                // Actualizar estados para cuentas ya registradas
+//                updateRegistrationStatesAfterConnection(accounts)
+//            }
+//        }
+//    }
     private suspend fun handleInternetConnectivityChanged(hasInternet: Boolean) {
         if (isDisposing) return
 
         log.d(tag = TAG) { "Handling internet connectivity changed: $hasInternet with ${registeredAccounts.size} registered accounts" }
 
-        if (hasInternet && registeredAccounts.isNotEmpty()) {
-            // Internet recuperado, esperar estabilización
+        if (hasInternet) {
+            // Internet recuperado - CRÍTICO: reconectar TODAS las cuentas registradas
+            val accounts = registeredAccounts.values.toList()
+
+            if (accounts.isEmpty()) {
+                log.d(tag = TAG) { "No registered accounts to reconnect after internet recovery" }
+                return
+            }
+
+            log.d(tag = TAG) { "Internet recovered - checking ALL ${accounts.size} registered accounts" }
+
+            // Esperar estabilización
             delay(networkStabilizationDelay)
             if (isDisposing) return
-
-            val accounts = registeredAccounts.values.toList()
 
             // CORREGIDO: Verificar estado de conexión de red también
             val networkInfo = networkMonitor.getCurrentNetworkInfo()
@@ -493,30 +599,38 @@ class NetworkAwareReconnectionService(private val application: Application) {
                 return
             }
 
-            // Verificar qué cuentas necesitan reconexión
+            // CRÍTICO: Verificar TODAS las cuentas registradas, no solo las que estaban en reconexión
             val accountsNeedingReconnection = accounts.filter { account ->
                 val accountKey = account.getAccountIdentity()
                 val registrationState = RegistrationStateManager.getAccountState(accountKey)
-
                 val needsReconnection = registrationState != RegistrationState.OK
-                log.d(tag = TAG) { "Internet recovered - Account $accountKey: state=$registrationState, needs reconnection=$needsReconnection" }
 
+                log.d(tag = TAG) { "Internet recovered - Account $accountKey: state=$registrationState, needs reconnection=$needsReconnection" }
                 needsReconnection
             }
 
             if (accountsNeedingReconnection.isNotEmpty()) {
-                log.d(tag = TAG) { "Internet recovered - reconnecting ${accountsNeedingReconnection.size} accounts" }
+                log.d(tag = TAG) { "Internet recovered - reconnecting ${accountsNeedingReconnection.size} of ${accounts.size} total accounts" }
 
                 // Debounce para evitar reconexiones múltiples
                 delay(reconnectionDebounceDelay)
                 if (!isDisposing) {
-                    reconnectionManager.onNetworkRecovered(accountsNeedingReconnection)
+                    // CRÍTICO: Usar método específico para recuperación de internet
+                    reconnectionManager.onInternetRecovered(accountsNeedingReconnection)
                 }
             } else {
-                log.d(tag = TAG) { "Internet recovered - all accounts properly registered" }
-
+                log.d(tag = TAG) { "Internet recovered - all ${accounts.size} accounts properly registered" }
                 // Actualizar estados para cuentas ya registradas
                 updateRegistrationStatesAfterConnection(accounts)
+            }
+
+        } else {
+            // Internet perdido - marcar todas las cuentas como necesitando reconexión cuando regrese
+            val accounts = registeredAccounts.values.toList()
+
+            if (accounts.isNotEmpty()) {
+                log.d(tag = TAG) { "Internet lost - marking ${accounts.size} accounts for reconnection when internet returns" }
+                reconnectionManager.onInternetLost(accounts)
             }
         }
     }
@@ -595,6 +709,14 @@ class NetworkAwareReconnectionService(private val application: Application) {
         val accountInfo = registeredAccounts[accountKey]
         if (accountInfo != null) {
             log.d(tag = TAG) { "Registration failed notification for $accountKey: $error" }
+
+            // CRÍTICO: Si ya está registrado, ignorar el error
+            val currentState = RegistrationStateManager.getAccountState(accountKey)
+            if (currentState == RegistrationState.OK) {
+                log.d(tag = TAG) { "Ignoring registration failed for $accountKey - account is actually registered" }
+                return
+            }
+
             reconnectionManager.onRegistrationFailed(accountInfo, error)
         } else {
             log.w(tag = TAG) { "Registration failed notification for non-registered account: $accountKey" }

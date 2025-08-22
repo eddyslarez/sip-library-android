@@ -1,19 +1,61 @@
+//plugins {
+//    id("com.android.library")
+//    id("org.jetbrains.kotlin.android")
+//    id("com.google.devtools.ksp") version "2.1.10-1.0.29" // Reemplaza kotlin-kapt
+//    id("kotlin-parcelize")
+//    id("maven-publish")
+//    id("org.jetbrains.kotlin.plugin.serialization")
+//}
+//
+//android {
+//    namespace = "com.eddyslarez.siplibrary"
+//    compileSdk = 34
+//
+//    defaultConfig {
+//        minSdk = 24
+//        targetSdk = 34
+//
+//        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+//        consumerProguardFiles("consumer-rules.pro")
+//    }
+//
+//    buildTypes {
+//        release {
+//            isMinifyEnabled = false
+//            proguardFiles(
+//                getDefaultProguardFile("proguard-android-optimize.txt"),
+//                "proguard-rules.pro"
+//            )
+//        }
+//    }
+//
+//    compileOptions {
+//        sourceCompatibility = JavaVersion.VERSION_11
+//        targetCompatibility = JavaVersion.VERSION_11
+//    }
+//
+//    kotlinOptions {
+//        jvmTarget = "11"
+//        languageVersion = "2.0" // or "2.1" if available
+//    }
+//}
 plugins {
     id("com.android.library")
     id("org.jetbrains.kotlin.android")
-    id("com.google.devtools.ksp") version "2.1.10-1.0.29" // Reemplaza kotlin-kapt
+    id("com.google.devtools.ksp") version "2.0.21-1.0.27" // Actualizar KSP para que sea compatible con Kotlin 2.0.21
     id("kotlin-parcelize")
     id("maven-publish")
     id("org.jetbrains.kotlin.plugin.serialization")
 }
-
+group = "com.eddyslarez"
+version = "1.0.0"
 android {
     namespace = "com.eddyslarez.siplibrary"
-    compileSdk = 34
+    compileSdk = 35
 
     defaultConfig {
         minSdk = 24
-        targetSdk = 34
+        targetSdk = 35
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         consumerProguardFiles("consumer-rules.pro")
@@ -36,10 +78,8 @@ android {
 
     kotlinOptions {
         jvmTarget = "11"
-        languageVersion = "2.0" // or "2.1" if available
     }
 }
-
 dependencies {
     implementation("androidx.core:core-ktx:1.16.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.9.1")

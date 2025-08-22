@@ -157,17 +157,17 @@ class PushModeManager(
     /**
      * Notifica que una llamada terminó
      */
+    // Y modifica el método onCallEnded:
     fun onCallEnded(registeredAccounts: Set<String>) {
         log.d(tag = TAG) { "Call ended, was in push before call: $wasInPushBeforeCall" }
 
         isCallActive = false
 
-        // Si estábamos en modo push antes de la llamada y está configurado para volver
         if (wasInPushBeforeCall && config.returnToPushAfterCallEnd) {
             scheduleReturnToPushAfterCall(registeredAccounts)
         }
 
-        // Reset del flag
+        // Resetear el flag solo aquí, después de programar el retorno
         wasInPushBeforeCall = false
     }
 
@@ -247,17 +247,15 @@ class PushModeManager(
      * Notifica que una llamada terminó para una cuenta específica
      */
     fun onCallEndedForAccount(accountKey: String, allRegisteredAccounts: Set<String>) {
-        log.d(tag = TAG) { "Call ended for specific account: $accountKey, was in push before call: $wasInPushBeforeCall" }
+        log.d(tag = TAG) { "Call ended for specific account: $accountKey" }
 
         isCallActive = false
 
-        // Si estábamos en modo push antes de la llamada y está configurado para volver
+        // Solo manejar el retorno a push si estábamos en push antes de la llamada
         if (wasInPushBeforeCall && config.returnToPushAfterCallEnd) {
             scheduleReturnToPushForSpecificAccount(accountKey)
         }
-
-        // Reset del flag
-        wasInPushBeforeCall = false
+        // NO resetear el flag aquí - solo se debe resetear en onCallEnded
     }
 
     /**
