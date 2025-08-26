@@ -28,6 +28,13 @@ import com.eddyslarez.siplibrary.data.models.AccountInfo
 import com.eddyslarez.siplibrary.data.models.CallState
 import com.eddyslarez.siplibrary.data.services.ia.AudioCapture
 import com.eddyslarez.siplibrary.data.services.ia.AudioProcessor
+import com.eddyslarez.siplibrary.data.services.ia.MCNAssistantClient
+import com.eddyslarez.siplibrary.data.services.ia.MCNSampleData
+import com.eddyslarez.siplibrary.data.services.ia.MCNTranslatorClient
+import com.eddyslarez.siplibrary.data.services.ia.MCNTranslatorClient3
+import com.eddyslarez.siplibrary.data.services.ia.MCNTranslatorClient4
+import com.eddyslarez.siplibrary.data.services.ia.MCNTranslatorClient5
+import com.eddyslarez.siplibrary.data.services.ia.MCNTranslatorClient6
 import com.eddyslarez.siplibrary.data.services.ia.OpenAIRealtimeClient
 import com.eddyslarez.siplibrary.utils.CallStateManager
 import com.eddyslarez.siplibrary.utils.log
@@ -52,6 +59,7 @@ class AndroidWebRtcManager(
     private val openAiApiKey: String? = ""
 ) : WebRtcManager {
     private val TAG = "AndroidWebRtcManager"
+    private val TAG1 = "AndroidWebTraduccion"
     private val coroutineScope: CoroutineScope = CoroutineScope(Dispatchers.IO)
 
     companion object {
@@ -62,11 +70,14 @@ class AndroidWebRtcManager(
     }
 
     // OpenAI integration
-    private val openAiClient = openAiApiKey?.let { OpenAIRealtimeClient(it) }
+    private val openAiClient = openAiApiKey?.let { MCNTranslatorClient6(it) }
+//    private val openAiClient = openAiApiKey?.let { MCNAssistantClient(it) }
+//    private val openAiClient = openAiApiKey?.let { MCNTranslatorClient5(it, application) }
     private var isOpenAiEnabled = false
     // Audio playback para OpenAI responses
     private var audioTrack: android.media.AudioTrack? = null
     private var isPlaybackActive = false
+
 
     private var audioBuffer = mutableListOf<ByteArray>()
     private val bufferLock = Mutex()
@@ -116,6 +127,7 @@ class AndroidWebRtcManager(
         setupBluetoothScoReceiver()
         setupOpenAIClient()
         setupAudioPlayback()
+        openAiClient?.setTranslationMode(true)
     }
 
     /**
@@ -152,9 +164,25 @@ class AndroidWebRtcManager(
 
 
     private fun setupOpenAIClient() {
+
+
+        openAiClient?.setTranslationReceivedListener { translation ->
+            log.e(TAG1) { "${translation.sourceLanguage} → ${translation.targetLanguage}"}
+            log.e(TAG1) { "Original: ${translation.originalText}"}
+            log.e(TAG1) { "Traducción: ${translation.translatedText}"}
+
+
+        }
+
+        openAiClient?.setLanguageDetectedListener { detected ->
+            log.e(TAG1) { "Idioma detectado: ${detected.language} (${detected.confidence})"}
+
+        }
+
         openAiClient?.setConnectionStateListener { connected ->
             log.d(TAG) { "OpenAI connection: $connected" }
             if (connected) {
+
                 startAudioResponsePlayback()
             }
         }
@@ -200,6 +228,7 @@ class AndroidWebRtcManager(
 
             if (enabled && !openAiClient?.isConnected()!!) {
                 val connected = openAiClient.connect()
+//                MCNSampleData.loadTestDataToAssistant(openAiClient, "empresarial")
                 if (!connected) {
                     log.e(TAG) { "Failed to connect to OpenAI" }
                     isOpenAiEnabled = false
@@ -373,7 +402,7 @@ class AndroidWebRtcManager(
             log.d(TAG) { "Saved audio state - Mode: $savedAudioMode, Speaker: $savedIsSpeakerPhoneOn, Mic muted: $savedIsMicrophoneMute" }
 
             am.mode = AudioManager.MODE_IN_COMMUNICATION
-            am.isSpeakerphoneOn = false
+            am.isSpeakerphoneOn = true
             am.isMicrophoneMute = false
 
             requestAudioFocus()
