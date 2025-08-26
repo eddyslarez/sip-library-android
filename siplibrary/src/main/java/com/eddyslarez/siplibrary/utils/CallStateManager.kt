@@ -318,12 +318,31 @@ object CallStateManager {
      * Limpieza completa de una llamada
      */
     private fun cleanupCall(callId: String) {
+        log.d(tag = "CallStateManager") { "Cleaning up call: $callId" }
+
+        // Remover del MultiCallManager
         MultiCallManager.removeCall(callId)
 
-        // Si es la llamada actual, resetear a IDLE
-        if (currentCallId == callId) {
+        // CRÍTICO: Solo resetear a IDLE si no hay más llamadas activas
+        val remainingCalls = MultiCallManager.getActiveCalls()
+        if (remainingCalls.isEmpty()) {
+            log.d(tag = "CallStateManager") { "No more active calls, resetting to IDLE" }
             forceResetToIdle()
+        } else {
+            log.d(tag = "CallStateManager") { "Still have ${remainingCalls.size} active calls, keeping current state" }
         }
+    }
+
+    /**
+     * NUEVO: Método para limpiar llamada específica sin resetear estado general
+     */
+    fun cleanupSpecificCall(callId: String) {
+        log.d(tag = "CallStateManager") { "Cleaning up specific call: $callId" }
+        MultiCallManager.removeCall(callId)
+
+        // No resetear a IDLE aquí, dejar que el sistema maneje múltiples llamadas
+        val remainingCalls = MultiCallManager.getActiveCalls()
+        log.d(tag = "CallStateManager") { "After cleanup, remaining calls: ${remainingCalls.size}" }
     }
 
     /**

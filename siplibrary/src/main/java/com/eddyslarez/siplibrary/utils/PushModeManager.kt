@@ -34,7 +34,8 @@ class PushModeManager(
         )
     )
     val pushModeStateFlow: StateFlow<PushModeState> = _pushModeStateFlow.asStateFlow()
-
+    private var wasInPushBeforeCall = false
+    private var activeCallIds = mutableSetOf<String>() // NUEVO: rastrear llamadas activas
     // Jobs para transiciones automáticas
     private var transitionJob: Job? = null
     private var callEndTransitionJob: Job? = null
@@ -45,7 +46,6 @@ class PushModeManager(
 
     // Estado interno
     private var isCallActive = false
-    private var wasInPushBeforeCall = false
 
     /**
      * Configura callbacks para notificaciones de cambios
@@ -132,15 +132,19 @@ class PushModeManager(
     /**
      * Notifica que se recibió una llamada entrante
      */
-    fun onIncomingCallReceived(registeredAccounts: Set<String>) {
-        log.d(tag = TAG) { "Incoming call received, current mode: ${getCurrentMode()}" }
+    fun onIncomingCallReceived(registeredAccounts: Set<String>, callId: String? = null) {
+        log.d(tag = TAG) { "Incoming call received, current mode: ${getCurrentMode()}, callId: $callId" }
 
         val currentState = _pushModeStateFlow.value
-        
-        // Recordar si estábamos en modo push antes de la llamada
-        if (currentState.currentMode == PushMode.PUSH) {
+
+        // CRÍTICO: Solo marcar si es la PRIMERA llamada activa
+        if (activeCallIds.isEmpty() && currentState.currentMode == PushMode.PUSH) {
             wasInPushBeforeCall = true
+            log.d(tag = TAG) { "Marked wasInPushBeforeCall=true for first call" }
         }
+
+        // NUEVO: Agregar callId si se proporciona
+        callId?.let { activeCallIds.add(it) }
 
         isCallActive = true
 
@@ -158,19 +162,50 @@ class PushModeManager(
      * Notifica que una llamada terminó
      */
     // Y modifica el método onCallEnded:
-    fun onCallEnded(registeredAccounts: Set<String>) {
-        log.d(tag = TAG) { "Call ended, was in push before call: $wasInPushBeforeCall" }
+    fun onCallEnded(registeredAccounts: Set<String>, callId: String? = null) {
+        log.d(tag = TAG) { "Call ended, callId: $callId, activeCallIds: $activeCallIds, wasInPushBeforeCall: $wasInPushBeforeCall" }
 
-        isCallActive = false
-
-        if (wasInPushBeforeCall && config.returnToPushAfterCallEnd) {
-            scheduleReturnToPushAfterCall(registeredAccounts)
+        // NUEVO: Remover callId específico si se proporciona
+        callId?.let {
+            activeCallIds.remove(it)
+            log.d(tag = TAG) { "Removed callId $it, remaining calls: ${activeCallIds.size}" }
         }
 
-        // Resetear el flag solo aquí, después de programar el retorno
-        wasInPushBeforeCall = false
+        // CRÍTICO: Solo marcar isCallActive=false si NO hay más llamadas
+        if (activeCallIds.isEmpty()) {
+            isCallActive = false
+
+            // Solo programar retorno a push si estábamos en push antes y no hay más llamadas
+            if (wasInPushBeforeCall && config.returnToPushAfterCallEnd) {
+                scheduleReturnToPushAfterCall(registeredAccounts)
+            }
+
+            // CRÍTICO: Solo resetear el flag cuando NO hay más llamadas activas
+            wasInPushBeforeCall = false
+            log.d(tag = TAG) { "Reset wasInPushBeforeCall flag - no more active calls" }
+        } else {
+            log.d(tag = TAG) { "Still have ${activeCallIds.size} active calls, keeping call state" }
+        }
     }
 
+    /**
+     * NUEVO: Método para limpiar llamada específica
+     */
+    fun onSpecificCallEnded(callId: String, registeredAccounts: Set<String>) {
+        onCallEnded(registeredAccounts, callId)
+    }
+
+    /**
+     * NUEVO: Método para resetear completamente el estado de llamadas
+     */
+    fun resetCallState() {
+        log.d(tag = TAG) { "Resetting complete call state" }
+        activeCallIds.clear()
+        isCallActive = false
+        wasInPushBeforeCall = false
+        cancelPendingTransition()
+        cancelCallEndTransition()
+    }
     /**
      * Transición manual a modo push
      */

@@ -295,24 +295,34 @@ class EddysSipLibrary private constructor() {
     }
 
     private fun setupAppLifecycleObserver() {
-        // Conectar con el PlatformRegistration para observar cambios de lifecycle
-        // y notificar al PushModeManager
         CoroutineScope(Dispatchers.Main).launch {
-            // Observar estados de lifecycle desde SipCoreManager
             sipCoreManager?.let { manager ->
-                // Configurar observer para cambios de lifecycle
                 manager.observeLifecycleChanges { event ->
                     val registeredAccounts = manager.getAllRegisteredAccountKeys()
 
-                    when (event) {
-                        "APP_BACKGROUNDED" -> {
+                    when {
+                        event == "APP_BACKGROUNDED" -> {
                             log.d(tag = TAG) { "App backgrounded - notifying PushModeManager" }
                             pushModeManager?.onAppBackgrounded(registeredAccounts)
                         }
 
-                        "APP_FOREGROUNDED" -> {
+                        event == "APP_FOREGROUNDED" -> {
                             log.d(tag = TAG) { "App foregrounded - notifying PushModeManager" }
                             pushModeManager?.onAppForegrounded(registeredAccounts)
+                        }
+
+                        event.startsWith("INCOMING_CALL:") -> {
+                            // NUEVO: Extraer callId de la llamada entrante
+                            val callId = event.substringAfter("INCOMING_CALL:")
+                            log.d(tag = TAG) { "Incoming call with ID: $callId" }
+                            pushModeManager?.onIncomingCallReceived(registeredAccounts, callId)
+                        }
+
+                        event.startsWith("CALL_ENDED:") -> {
+                            // NUEVO: Extraer callId de la llamada terminada
+                            val callId = event.substringAfter("CALL_ENDED:")
+                            log.d(tag = TAG) { "Call ended with ID: $callId" }
+                            pushModeManager?.onSpecificCallEnded(callId, registeredAccounts)
                         }
                     }
                 }
@@ -1950,6 +1960,34 @@ class EddysSipLibrary private constructor() {
                     // Forzar reconexión
                     forceReconnection(parts[0], parts[1])
                 }
+            }
+        }
+    }
+
+    fun diagnosePushModeTransitions(): String {
+        return buildString {
+            appendLine("=== PUSH MODE TRANSITIONS DIAGNOSTIC ===")
+            appendLine("Current Push Mode: ${getCurrentPushMode()}")
+
+            val pushState = getPushModeState()
+            appendLine("Was In Push Before Call: ${pushState.wasInPushBeforeCall}")
+            appendLine("Accounts In Push Mode: ${pushState.accountsInPushMode}")
+
+            appendLine("\n--- Active Calls ---")
+            val activeCalls = getAllCalls()
+            appendLine("Active Calls Count: ${activeCalls.size}")
+            activeCalls.forEach { call ->
+                appendLine("  - ${call.callId}: ${call.phoneNumber} (${call.direction})")
+            }
+
+            appendLine("\n--- Call State History ---")
+            getCallStateHistory().takeLast(5).forEach { state ->
+                appendLine("  ${state.timestamp}: ${state.previousState} -> ${state.state} (${state.callId})")
+            }
+
+            pushModeManager?.let {
+                appendLine("\n--- Push Manager Details ---")
+                appendLine(it.getDiagnosticInfo())
             }
         }
     }

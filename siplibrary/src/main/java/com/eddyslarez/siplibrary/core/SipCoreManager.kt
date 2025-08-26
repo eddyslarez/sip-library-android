@@ -292,18 +292,33 @@ class SipCoreManager private constructor(
                 CallState.INCOMING_RECEIVED -> {
                     currentAccountInfo?.currentCallData?.let { callData ->
                         log.d(tag = TAG) { "Notifying incoming call from ${callData.from}" }
+
+                        // CRÍTICO: Incluir callId en la notificación al PushModeManager
+                        val registeredAccounts = getAllRegisteredAccountKeys()
+                        lifecycleCallback?.invoke("INCOMING_CALL:${callData.callId}")
+
                         sipCallbacks?.onIncomingCall(callData.from, callData.remoteDisplayName)
                     }
+                }
+
+                CallState.ENDED -> {
+                    log.d(tag = TAG) { "Notifying call terminated" }
+
+                    // CRÍTICO: Notificar con callId específico
+                    currentAccountInfo?.currentCallData?.let { callData ->
+                        val accountKey = "${currentAccountInfo!!.username}@${currentAccountInfo!!.domain}"
+                        sipCallbacks?.onCallEndedForAccount(accountKey)
+
+                        // NUEVO: Notificar fin de llamada específica
+                        lifecycleCallback?.invoke("CALL_ENDED:${callData.callId}")
+                    }
+
+                    sipCallbacks?.onCallTerminated()
                 }
 
                 CallState.CONNECTED, CallState.STREAMS_RUNNING -> {
                     log.d(tag = TAG) { "Notifying call connected" }
                     sipCallbacks?.onCallConnected()
-                }
-
-                CallState.ENDED -> {
-                    log.d(tag = TAG) { "Notifying call terminated" }
-                    sipCallbacks?.onCallTerminated()
                 }
 
                 else -> {

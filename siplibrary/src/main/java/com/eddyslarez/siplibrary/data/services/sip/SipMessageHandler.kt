@@ -6,6 +6,7 @@ import com.eddyslarez.siplibrary.data.services.sip.AuthenticationHandler
 import com.eddyslarez.siplibrary.data.services.sip.SipMessageBuilder
 import com.eddyslarez.siplibrary.data.services.sip.SipMessageParser
 import com.eddyslarez.siplibrary.utils.CallStateManager
+import com.eddyslarez.siplibrary.utils.MultiCallManager
 import com.eddyslarez.siplibrary.utils.generateId
 import com.eddyslarez.siplibrary.utils.log
 import kotlinx.coroutines.CoroutineScope
@@ -727,11 +728,20 @@ class SipMessageHandler(private val sipCoreManager: SipCoreManager) {
                 // Detener todos los ringtones
                 sipCoreManager.audioManager.stopAllRingtones()
 
-                // Limpiar WebRTC
-                sipCoreManager.webRtcManager.dispose()
+                // CRÍTICO: Solo limpiar WebRTC si es la última llamada
+                val activeCalls = MultiCallManager.getActiveCalls()
+                if (activeCalls.size <= 1) {
+                    log.d(tag = TAG) { "Last call, disposing WebRTC" }
+                    sipCoreManager.webRtcManager.dispose()
+                } else {
+                    log.d(tag = TAG) { "Multiple calls active (${activeCalls.size}), keeping WebRTC" }
+                }
 
-                // Limpiar datos de cuenta
-                sipCoreManager.currentAccountInfo?.resetCallState()
+                // CRÍTICO: Solo limpiar datos de cuenta si es SU llamada
+                if (sipCoreManager.currentAccountInfo?.currentCallData?.callId == callData.callId) {
+                    sipCoreManager.currentAccountInfo?.resetCallState()
+                    log.d(tag = TAG) { "Reset account call state for call: ${callData.callId}" }
+                }
 
                 // Limpiar DTMF
                 sipCoreManager.clearDtmfQueue()
