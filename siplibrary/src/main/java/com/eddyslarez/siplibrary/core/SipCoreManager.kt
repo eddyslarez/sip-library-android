@@ -1299,6 +1299,10 @@ class SipCoreManager private constructor(
 
         clearDtmfQueue()
 
+        // NUEVO: Notificar que la llamada terminó para esta cuenta específica
+        val accountKey = "${accountInfo.username}@${accountInfo.domain}"
+        notifyCallEndedForSpecificAccount(accountKey)
+
         // MEJORADO: Una sola corrutina para manejar la limpieza
         CoroutineScope(Dispatchers.IO).launch {
             try {
@@ -1433,9 +1437,9 @@ class SipCoreManager private constructor(
             callState?.state != CallState.INCOMING_RECEIVED
         ) {
             log.w(tag = TAG) { "Cannot decline call - invalid state or direction" }
-
             return
         }
+
         log.d(tag = TAG) { "Declining call: ${targetCallData.callId}" }
 
         if (targetCallData.toTag?.isEmpty() == true) {
@@ -1450,10 +1454,15 @@ class SipCoreManager private constructor(
         val endTime = Clock.System.now().toEpochMilliseconds()
         callHistoryManager.addCallLog(targetCallData, CallTypes.DECLINED, endTime)
 
+        // NUEVO: Notificar que la llamada terminó para esta cuenta específica
+        val accountKey = "${accountInfo.username}@${accountInfo.domain}"
+        notifyCallEndedForSpecificAccount(accountKey)
+
         // Estado de rechazo y limpieza
         CallStateManager.callEnded(targetCallData.callId, sipReason = "Declined")
-//        notifyCallStateChanged(CallState.ENDED)
+        // notifyCallStateChanged(CallState.ENDED) // Comentado para evitar doble notificación
     }
+
 
     fun rejectCall(callId: String? = null) = declineCall(callId)
 
@@ -1739,6 +1748,21 @@ class SipCoreManager private constructor(
     fun getMessageHandler(): SipMessageHandler = messageHandler
 
 //nuevas funciones de prueba
+
+
+    /**
+     * NUEVO: Notifica que una llamada terminó para una cuenta específica
+     */
+    fun notifyCallEndedForSpecificAccount(accountKey: String) {
+        log.d(tag = TAG) { "Notifying call ended for specific account: $accountKey" }
+
+        // Notificar a callbacks internos
+        sipCallbacks?.onCallEndedForAccount(accountKey)
+
+        // Si el lifecycle callback está configurado, notificar también
+        lifecycleCallback?.invoke("CALL_ENDED:$accountKey")
+    }
+
     /**
      * Cambia una cuenta específica a modo push
      */
@@ -1760,6 +1784,7 @@ class SipCoreManager private constructor(
             // Actualizar user agent para modo push
             val pushUserAgent = "${userAgent()} Push"
             accountInfo.userAgent = pushUserAgent
+             isAppInBackground = true
 
             // Re-registrar con nuevo user agent para push
             messageHandler.sendRegister(accountInfo, true) // true = push mode
@@ -1791,6 +1816,7 @@ class SipCoreManager private constructor(
         try {
             // Actualizar user agent para modo foreground (normal)
             accountInfo.userAgent = userAgent()
+             isAppInBackground = false
 
             // Re-registrar con user agent normal
             messageHandler.sendRegister(accountInfo, false) // false = foreground mode

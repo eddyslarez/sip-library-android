@@ -18,6 +18,7 @@ object SipMessageBuilder {
     private const val MAX_FORWARDS = 70
     private const val DEFAULT_EXPIRES = 604800
     private const val UNREGISTER_EXPIRES = 0
+    private const val TAG = "SipMessageBuilder"
 
     /**
      * Build REGISTER message with optional push notification support
@@ -32,6 +33,16 @@ object SipMessageBuilder {
         val uri = "sip:${accountInfo.domain}"
         val builder = StringBuilder()
 
+        // Log para debug
+        log.d(tag = TAG) {
+            "Building REGISTER message:" +
+                    "\nAccount: ${accountInfo.username}@${accountInfo.domain}" +
+                    "\nIs App In Background: $isAppInBackground" +
+                    "\nToken: ${accountInfo.token}" +
+                    "\nProvider: ${accountInfo.provider}" +
+                    "\nUser Agent: ${accountInfo.userAgent}"
+        }
+
         builder.append("REGISTER $uri $SIP_VERSION\r\n")
         builder.append("Via: $SIP_VERSION/$SIP_TRANSPORT ${accountInfo.domain};branch=z9hG4bK${generateId()}\r\n")
         builder.append("Max-Forwards: $MAX_FORWARDS\r\n")
@@ -43,11 +54,15 @@ object SipMessageBuilder {
 
         // Contact header based on mode
         builder.append("Contact: <sip:${accountInfo.username}@${accountInfo.domain}")
-        if (isAppInBackground) {
-            builder.append(";pn-prid=${accountInfo.token};pn-provider=${accountInfo.provider}")
-        }
-        builder.append(";transport=ws>;expires=$DEFAULT_EXPIRES\r\n")
 
+        if (isAppInBackground) {
+            log.d(tag = TAG) { "Adding push notification parameters to Contact header" }
+            builder.append(";pn-prid=${accountInfo.token};pn-provider=${accountInfo.provider}")
+        } else {
+            log.d(tag = TAG) { "Building Contact header WITHOUT push notification parameters" }
+        }
+
+        builder.append(";transport=ws>;expires=$DEFAULT_EXPIRES\r\n")
         builder.append("Expires: $DEFAULT_EXPIRES\r\n")
 
         // Authorization if needed
@@ -56,7 +71,17 @@ object SipMessageBuilder {
         }
 
         builder.append("Content-Length: 0\r\n\r\n")
-        return builder.toString()
+
+        val finalMessage = builder.toString()
+
+        // Log del mensaje final para verificar
+        log.d(tag = TAG) {
+            "Final REGISTER message Contact header contains push params: ${
+                finalMessage.contains("pn-prid")
+            }"
+        }
+
+        return finalMessage
     }
 
     /**

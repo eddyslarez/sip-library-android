@@ -60,6 +60,7 @@ class EddysSipLibrary private constructor() {
         @Volatile
         private var INSTANCE: EddysSipLibrary? = null
         private const val TAG = "EddysSipLibrary"
+        private const val TAG1 = "ProcesoPush"
 
         fun getInstance(): EddysSipLibrary {
             return INSTANCE ?: synchronized(this) {
@@ -251,7 +252,7 @@ class EddysSipLibrary private constructor() {
     private fun setupPushModeManager() {
         pushModeManager?.setCallbacks(
             onModeChange = { pushModeState ->
-                log.d(tag = TAG) { "Push mode changed: ${pushModeState.currentMode} (${pushModeState.reason})" }
+                log.d(tag = TAG1) { "Push mode changed: ${pushModeState.currentMode} (${pushModeState.reason})" }
 
                 // Notificar a listeners si es necesario
                 listeners.forEach { listener ->
@@ -263,7 +264,7 @@ class EddysSipLibrary private constructor() {
                 }
             },
             onRegistrationRequired = { accounts, mode ->
-                log.d(tag = TAG) { "Registration required for ${accounts.size} accounts in $mode mode" }
+                log.d(tag = TAG1) { "Registration required for ${accounts.size} accounts in $mode mode" }
 
                 // Reregistrar cuentas según el modo
                 accounts.forEach { accountKey ->
@@ -271,15 +272,16 @@ class EddysSipLibrary private constructor() {
                     if (parts.size == 2) {
                         val username = parts[0]
                         val domain = parts[1]
+                        log.d(tag = TAG1) { "username $username domain: $domain" }
 
                         when (mode) {
                             PushMode.PUSH -> {
-                                log.d(tag = TAG) { "Switching $accountKey to push mode" }
+                                log.d(tag = TAG1) { "Switching $accountKey to push mode" }
                                 sipCoreManager?.switchToPushMode(username, domain)
                             }
 
                             PushMode.FOREGROUND -> {
-                                log.d(tag = TAG) { "Switching $accountKey to foreground mode" }
+                                log.d(tag = TAG1) { "Switching $accountKey to foreground mode" }
                                 sipCoreManager?.switchToForegroundMode(username, domain)
                             }
 
@@ -306,12 +308,12 @@ class EddysSipLibrary private constructor() {
 
                     when (event) {
                         "APP_BACKGROUNDED" -> {
-                            log.d(tag = TAG) { "App backgrounded - notifying PushModeManager" }
+                            log.d(tag = TAG1) { "App backgrounded - notifying PushModeManager" }
                             pushModeManager?.onAppBackgrounded(registeredAccounts)
                         }
 
                         "APP_FOREGROUNDED" -> {
-                            log.d(tag = TAG) { "App foregrounded - notifying PushModeManager" }
+                            log.d(tag = TAG1) { "App foregrounded - notifying PushModeManager" }
                             pushModeManager?.onAppForegrounded(registeredAccounts)
                         }
                     }
@@ -352,9 +354,8 @@ class EddysSipLibrary private constructor() {
                     log.d(tag = TAG) { "Internal callback: onIncomingCall from $callerNumber" }
 
                     // Notificar al Push Mode Manager
-                    val registeredAccounts =
-                        sipCoreManager?.getAllRegisteredAccountKeys() ?: emptySet()
-                    pushModeManager?.onIncomingCallReceived(registeredAccounts)
+//                    val registeredAccounts = sipCoreManager?.getAllRegisteredAccountKeys() ?: emptySet()
+//                    pushModeManager?.onIncomingCallReceived(registeredAccounts)
 
                     val callInfo = createIncomingCallInfoFromCurrentCall(callerNumber, callerName)
                     notifyIncomingCall(callInfo)
@@ -371,11 +372,12 @@ class EddysSipLibrary private constructor() {
                     notifyCallFailed(error, callInfo)
                 }
 
+                // NUEVO: Manejo mejorado del callback de llamada terminada por cuenta específica
                 override fun onCallEndedForAccount(accountKey: String) {
                     log.d(tag = TAG) { "Internal callback: onCallEndedForAccount - $accountKey" }
-                    val registeredAccounts =
-                        sipCoreManager?.getAllRegisteredAccountKeys() ?: emptySet()
-                    pushModeManager?.onCallEndedForAccount(accountKey, registeredAccounts)
+
+                    // Notificar al PushModeManager que la llamada terminó para esta cuenta específica
+                    pushModeManager?.onCallEndedForAccount(accountKey, setOf(accountKey))
                 }
             })
 
@@ -405,11 +407,16 @@ class EddysSipLibrary private constructor() {
                                 val reason = mapErrorReasonToCallEndReason(stateInfo.errorReason)
                                 notifyCallEnded(info, reason)
 
-                                // Notificar al Push Mode Manager que la llamada terminó
-                                val registeredAccounts =
-                                    sipCoreManager?.getAllRegisteredAccountKeys() ?: emptySet()
-
-                                pushModeManager?.onCallEnded(registeredAccounts)
+                                // CORREGIDO: Notificar al Push Mode Manager usando el accountKey específico
+                                val accountKey = determineAccountKeyFromCallInfo(info)
+                                if (accountKey != null) {
+                                    log.d(tag = TAG1) { "Notifying PushModeManager: call ended for $accountKey" }
+                                    pushModeManager?.onCallEndedForAccount(accountKey, setOf(accountKey))
+                                } else {
+                                    // Fallback: usar todas las cuentas registradas
+                                    val registeredAccounts = sipCoreManager?.getAllRegisteredAccountKeys() ?: emptySet()
+                                    pushModeManager?.onCallEnded(registeredAccounts)
+                                }
                             }
 
                             CallState.PAUSED -> notifyCallHeld(info)
@@ -427,6 +434,33 @@ class EddysSipLibrary private constructor() {
         }
     }
 
+    /**
+     * NUEVO: Determina el accountKey desde CallInfo
+     */
+    private fun determineAccountKeyFromCallInfo(callInfo: CallInfo): String? {
+        val manager = sipCoreManager ?: return null
+
+        // Primero intentar obtener desde la cuenta actual
+        val currentAccount = manager.currentAccountInfo
+        if (currentAccount != null) {
+            val accountKey = "${currentAccount.username}@${currentAccount.domain}"
+            log.d(tag = TAG) { "Determined account key from current account: $accountKey" }
+            return accountKey
+        }
+
+        // Si no hay cuenta actual, intentar determinar desde localAccount en CallInfo
+        if (callInfo.localAccount.isNotEmpty()) {
+            val registeredAccounts = manager.getAllRegisteredAccountKeys()
+            val matchingAccount = registeredAccounts.find { it.startsWith("${callInfo.localAccount}@") }
+            if (matchingAccount != null) {
+                log.d(tag = TAG) { "Determined account key from CallInfo localAccount: $matchingAccount" }
+                return matchingAccount
+            }
+        }
+
+        log.w(tag = TAG) { "Could not determine specific account key for call ${callInfo.callId}" }
+        return null
+    }
     // === MÉTODOS PARA CONFIGURAR LISTENERS ===
 
     /**
@@ -1468,15 +1502,17 @@ class EddysSipLibrary private constructor() {
      * Notifica que se recibió una notificación push (para uso interno o externo)
      */
     fun onPushNotificationReceived(data: Map<String, Any>? = null) {
+        log.d(tag = TAG1) { "onPushNotificationReceived: inicio data : $data" }
+
         checkInitialized()
 
-        if (data != null && data["type"] == "call" && data.containsKey("sipName")) {
+        if (data != null  && data.containsKey("sipName")) {
             // Notificación push específica para una cuenta
             val sipName = data["sipName"] as? String
-            val phoneNumber = data["incomingPhoneNumber"] as? String
+            val phoneNumber = data["phoneNumber"] as? String
             val callId = data["callId"] as? String
 
-            log.d(tag = TAG) {
+            log.d(tag = TAG1) {
                 "Push notification for specific account: sipName=$sipName, phoneNumber=$phoneNumber, callId=$callId"
             }
 
@@ -1486,7 +1522,7 @@ class EddysSipLibrary private constructor() {
                 val specificAccount = registeredAccounts.find { it.startsWith("$sipName@") }
 
                 if (specificAccount != null) {
-                    log.d(tag = TAG) { "Found specific account for push: $specificAccount" }
+                    log.d(tag = TAG1) { "Found specific account for push: $specificAccount" }
                     pushModeManager?.onPushNotificationReceived(
                         specificAccount = specificAccount,
                         allRegisteredAccounts = registeredAccounts
@@ -1495,7 +1531,7 @@ class EddysSipLibrary private constructor() {
 //                    // Preparar para la llamada entrante específica
 //                    prepareForIncomingCall(specificAccount, phoneNumber, callId)
                 } else {
-                    log.w(tag = TAG) { "Account not found for sipName: $sipName" }
+                    log.w(tag = TAG1) { "Account not found for sipName: $sipName" }
                     // Fallback: cambiar todas las cuentas
                     val allAccounts = sipCoreManager?.getAllRegisteredAccountKeys() ?: emptySet()
                     pushModeManager?.onPushNotificationReceived(allRegisteredAccounts = allAccounts)
@@ -1507,7 +1543,7 @@ class EddysSipLibrary private constructor() {
             pushModeManager?.onPushNotificationReceived(allRegisteredAccounts = registeredAccounts)
         }
 
-        log.d(tag = TAG) { "Push notification processed, managing mode transition" }
+        log.d(tag = TAG1) { "Push notification processed, managing mode transition" }
     }
 
     fun diagnosePushMode(): String {
