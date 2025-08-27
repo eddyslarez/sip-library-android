@@ -16,6 +16,8 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
 import android.net.Uri
+import android.os.Build
+import androidx.annotation.RequiresApi
 import com.eddyslarez.siplibrary.data.services.network.NetworkMonitor
 import com.eddyslarez.siplibrary.data.database.DatabaseAutoIntegration
 import com.eddyslarez.siplibrary.data.database.DatabaseManager
@@ -349,8 +351,7 @@ class EddysSipLibrary private constructor() {
                     log.d(tag = TAG) { "Internal callback: onIncomingCall from $callerNumber" }
 
                     // Notificar al Push Mode Manager
-                    val registeredAccounts =
-                        sipCoreManager?.getAllRegisteredAccountKeys() ?: emptySet()
+                    val registeredAccounts = sipCoreManager?.getAllRegisteredAccountKeys() ?: emptySet()
                     pushModeManager?.onIncomingCallReceived(registeredAccounts)
 
                     val callInfo = createIncomingCallInfoFromCurrentCall(callerNumber, callerName)
@@ -368,11 +369,12 @@ class EddysSipLibrary private constructor() {
                     notifyCallFailed(error, callInfo)
                 }
 
+                // NUEVO: Manejo mejorado del callback de llamada terminada por cuenta específica
                 override fun onCallEndedForAccount(accountKey: String) {
                     log.d(tag = TAG) { "Internal callback: onCallEndedForAccount - $accountKey" }
-                    val registeredAccounts =
-                        sipCoreManager?.getAllRegisteredAccountKeys() ?: emptySet()
-                    pushModeManager?.onCallEndedForAccount(accountKey, registeredAccounts)
+
+                    // Notificar al PushModeManager que la llamada terminó para esta cuenta específica
+                    pushModeManager?.onCallEndedForAccount(accountKey, setOf(accountKey))
                 }
             })
 
@@ -402,10 +404,16 @@ class EddysSipLibrary private constructor() {
                                 val reason = mapErrorReasonToCallEndReason(stateInfo.errorReason)
                                 notifyCallEnded(info, reason)
 
-                                // Notificar al Push Mode Manager que la llamada terminó
-                                val registeredAccounts =
-                                    sipCoreManager?.getAllRegisteredAccountKeys() ?: emptySet()
-                                pushModeManager?.onCallEnded(registeredAccounts)
+                                // CORREGIDO: Notificar al Push Mode Manager usando el accountKey específico
+                                val accountKey = determineAccountKeyFromCallInfo(info)
+                                if (accountKey != null) {
+                                    log.d(tag = TAG) { "Notifying PushModeManager: call ended for $accountKey" }
+                                    pushModeManager?.onCallEndedForAccount(accountKey, setOf(accountKey))
+                                } else {
+                                    // Fallback: usar todas las cuentas registradas
+                                    val registeredAccounts = sipCoreManager?.getAllRegisteredAccountKeys() ?: emptySet()
+                                    pushModeManager?.onCallEnded(registeredAccounts)
+                                }
                             }
 
                             CallState.PAUSED -> notifyCallHeld(info)
@@ -423,6 +431,33 @@ class EddysSipLibrary private constructor() {
         }
     }
 
+    /**
+     * NUEVO: Determina el accountKey desde CallInfo
+     */
+    private fun determineAccountKeyFromCallInfo(callInfo: CallInfo): String? {
+        val manager = sipCoreManager ?: return null
+
+        // Primero intentar obtener desde la cuenta actual
+        val currentAccount = manager.currentAccountInfo
+        if (currentAccount != null) {
+            val accountKey = "${currentAccount.username}@${currentAccount.domain}"
+            log.d(tag = TAG) { "Determined account key from current account: $accountKey" }
+            return accountKey
+        }
+
+        // Si no hay cuenta actual, intentar determinar desde localAccount en CallInfo
+        if (callInfo.localAccount.isNotEmpty()) {
+            val registeredAccounts = manager.getAllRegisteredAccountKeys()
+            val matchingAccount = registeredAccounts.find { it.startsWith("${callInfo.localAccount}@") }
+            if (matchingAccount != null) {
+                log.d(tag = TAG) { "Determined account key from CallInfo localAccount: $matchingAccount" }
+                return matchingAccount
+            }
+        }
+
+        log.w(tag = TAG) { "Could not determine specific account key for call ${callInfo.callId}" }
+        return null
+    }
     // === MÉTODOS PARA CONFIGURAR LISTENERS ===
 
     /**
@@ -895,6 +930,11 @@ class EddysSipLibrary private constructor() {
         checkInitialized()
         sipCoreManager?.refreshAudioDevices()
     }
+
+     @RequiresApi(Build.VERSION_CODES.O)
+     suspend fun initializeTranscriber() {
+         sipCoreManager?.initializeTranscriber()
+     }
 
     /**
      * Devuelve el par de dispositivos de audio actuales (input, output).

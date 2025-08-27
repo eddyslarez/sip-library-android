@@ -8,6 +8,7 @@ plugins {
 }
 group = "com.eddyslarez"
 version = "1.0.0"
+
 android {
     namespace = "com.eddyslarez.siplibrary"
     compileSdk = 35
@@ -41,6 +42,20 @@ android {
 }
 
 dependencies {
+    // Para procesamiento de audio
+//    implementation ("com.arthenica:mobile-ffmpeg-full:4.4.LTS")
+
+    // Para Google Speech-to-Text
+//    implementation ("com.google.cloud:google-cloud-speech:4.1.0")
+
+    // Para Whisper local (opcional)
+//    implementation ("com.whispercpp:whisper-android:1.0.0")
+
+    // Para procesamiento de señales de audio
+    implementation ("org.apache.commons:commons-math3:3.6.1")
+    implementation ("com.google.code.gson:gson:2.10.1")
+
+    implementation ("com.alphacephei:vosk-android:0.3.38")
     implementation("androidx.core:core-ktx:1.16.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.9.1")
     implementation("androidx.lifecycle:lifecycle-process:2.9.1")

@@ -1,6 +1,9 @@
 package com.eddyslarez.siplibrary.core
 
 import android.app.Application
+import android.os.Build
+import android.util.Log
+import androidx.annotation.RequiresApi
 import com.eddyslarez.siplibrary.EddysSipLibrary
 import com.eddyslarez.siplibrary.data.models.*
 import com.eddyslarez.siplibrary.data.services.audio.AudioDevice
@@ -161,6 +164,16 @@ class SipCoreManager private constructor(
     internal fun setCallbacks(callbacks: EddysSipLibrary.SipCallbacks) {
         this.sipCallbacks = callbacks
         log.d(tag = TAG) { "SipCallbacks configured in SipCoreManager" }
+    }
+
+    @RequiresApi(Build.VERSION_CODES.O)
+    suspend fun initializeTranscriber() {
+        try {
+          webRtcManager.initializeTranscriber()
+            Log.d(TAG, "Transcriber initialized successfully")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to initialize transcriber", e)
+        }
     }
 
     /**
@@ -695,6 +708,9 @@ class SipCoreManager private constructor(
 
         // Manejar reintento de registro normal
         handleRegistrationFailure()
+
+        forceReconnectAccount(accountInfo)
+//        onAppBackgrounded()
     }
 
     fun handleRegistrationSuccess(accountInfo: AccountInfo) {
@@ -1079,6 +1095,10 @@ class SipCoreManager private constructor(
 
         clearDtmfQueue()
 
+        // NUEVO: Notificar que la llamada terminó para esta cuenta específica
+        val accountKey = "${accountInfo.username}@${accountInfo.domain}"
+        notifyCallEndedForSpecificAccount(accountKey)
+
         // MEJORADO: Una sola corrutina para manejar la limpieza
         CoroutineScope(Dispatchers.IO).launch {
             try {
@@ -1251,9 +1271,9 @@ class SipCoreManager private constructor(
             callState?.state != CallState.INCOMING_RECEIVED
         ) {
             log.w(tag = TAG) { "Cannot decline call - invalid state or direction" }
-
             return
         }
+
         log.d(tag = TAG) { "Declining call: ${targetCallData.callId}" }
 
         if (targetCallData.toTag?.isEmpty() == true) {
@@ -1268,9 +1288,13 @@ class SipCoreManager private constructor(
         val endTime = Clock.System.now().toEpochMilliseconds()
         callHistoryManager.addCallLog(targetCallData, CallTypes.DECLINED, endTime)
 
+        // NUEVO: Notificar que la llamada terminó para esta cuenta específica
+        val accountKey = "${accountInfo.username}@${accountInfo.domain}"
+        notifyCallEndedForSpecificAccount(accountKey)
+
         // Estado de rechazo y limpieza
         CallStateManager.callEnded(targetCallData.callId, sipReason = "Declined")
-//        notifyCallStateChanged(CallState.ENDED)
+        // notifyCallStateChanged(CallState.ENDED) // Comentado para evitar doble notificación
     }
 
     fun rejectCall(callId: String? = null) = declineCall(callId)
@@ -1584,11 +1608,11 @@ class SipCoreManager private constructor(
             val pushUserAgent = "${userAgent()} Push"
             accountInfo.userAgent = pushUserAgent
 
-            // Re-registrar con nuevo user agent para push
-            messageHandler.sendRegister(accountInfo, true) // true = push mode
+            // Re-registrar con parámetro correcto para push mode
+             isAppInBackground = true //para modo push (incluye token push)
+            messageHandler.sendRegister(accountInfo, isAppInBackground = true)
 
             log.d(tag = TAG) { "Account switched to push mode successfully: $accountKey" }
-
         } catch (e: Exception) {
             log.e(tag = TAG) { "Error switching to push mode for $accountKey: ${e.message}" }
         }
@@ -1615,11 +1639,11 @@ class SipCoreManager private constructor(
             // Actualizar user agent para modo foreground (normal)
             accountInfo.userAgent = userAgent()
 
-            // Re-registrar con user agent normal
-            messageHandler.sendRegister(accountInfo, false) // false = foreground mode
+            // Re-registrar con parámetro correcto para foreground mode
+             isAppInBackground = false// para modo foreground (SIN token push)
+            messageHandler.sendRegister(accountInfo, isAppInBackground = false)
 
             log.d(tag = TAG) { "Account switched to foreground mode successfully: $accountKey" }
-
         } catch (e: Exception) {
             log.e(tag = TAG) { "Error switching to foreground mode for $accountKey: ${e.message}" }
         }
@@ -2011,6 +2035,16 @@ class SipCoreManager private constructor(
     fun resetReconnectionAttempts(username: String, domain: String) {
         val accountKey = "$username@$domain"
         networkAwareReconnectionService?.resetReconnectionAttempts(accountKey)
+    }
+
+    fun notifyCallEndedForSpecificAccount(accountKey: String) {
+        log.d(tag = TAG) { "Notifying call ended for specific account: $accountKey" }
+
+        // Notificar a callbacks internos
+        sipCallbacks?.onCallEndedForAccount(accountKey)
+
+        // Si el lifecycle callback está configurado, notificar también
+        lifecycleCallback?.invoke("CALL_ENDED:$accountKey")
     }
 
     /**

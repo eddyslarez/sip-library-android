@@ -520,6 +520,10 @@ class SipMessageHandler(private val sipCoreManager: SipCoreManager) {
                 CallStateManager.callEnded(callData.callId, sipReason = "Remote hangup")
                 sipCoreManager.notifyCallStateChanged(CallState.ENDED)
 
+                // NUEVO: Notificar al PushModeManager que la llamada terminó para esta cuenta específica
+                val accountKey = "${accountInfo.username}@${accountInfo.domain}"
+                sipCoreManager.notifyCallEndedForSpecificAccount(accountKey)
+
                 // Limpiar recursos
                 cleanupCall(callData)
             }
@@ -557,6 +561,10 @@ class SipMessageHandler(private val sipCoreManager: SipCoreManager) {
                 // Actualizar estado
                 CallStateManager.callEnded(callData.callId, 487, "Request Terminated")
                 sipCoreManager.notifyCallStateChanged(CallState.ENDED)
+
+                // NUEVO: Notificar al PushModeManager que la llamada terminó para esta cuenta específica
+                val accountKey = "${accountInfo.username}@${accountInfo.domain}"
+                sipCoreManager.notifyCallEndedForSpecificAccount(accountKey)
 
                 // Limpiar recursos
                 cleanupCall(callData)
@@ -849,7 +857,7 @@ class SipMessageHandler(private val sipCoreManager: SipCoreManager) {
             accountInfo.fromTag = fromTag
 
             val registerMessage = SipMessageBuilder.buildRegisterMessage(
-                accountInfo, callId, fromTag, isAppInBackground
+               accountInfo =  accountInfo, callId = callId, fromTag = fromTag, isAppInBackground = isAppInBackground
             )
 
             accountInfo.webSocketClient?.send(registerMessage)

@@ -195,22 +195,31 @@ class PushModeManager(
      * Notifica que se recibió una notificación push
      */
     fun onPushNotificationReceived(specificAccount: String? = null, allRegisteredAccounts: Set<String> = emptySet()) {
-        log.d(tag = TAG) { "Push notification received" }
+        log.d(tag = TAG) {
+            "=== PUSH NOTIFICATION RECEIVED ===" +
+                    "\nSpecific account: $specificAccount" +
+                    "\nAll registered accounts: $allRegisteredAccounts" +
+                    "\nCurrent mode: ${getCurrentMode()}"
+        }
 
         val currentState = _pushModeStateFlow.value
-        
+
         // Si estamos en modo push, cambiar a foreground solo la cuenta específica o todas
         if (currentState.currentMode == PushMode.PUSH) {
+            log.d(tag = TAG) { "Currently in PUSH mode, switching to FOREGROUND" }
             wasInPushBeforeCall = true
-            
+
             if (specificAccount != null) {
                 // Solo cambiar la cuenta específica a foreground
-                log.d(tag = TAG) { "Switching specific account to foreground: $specificAccount" }
+                log.d(tag = TAG) { "Switching SPECIFIC account to foreground: $specificAccount" }
                 transitionSpecificAccountToForeground(specificAccount, PushModeReasons.PUSH_NOTIFICATION_RECEIVED)
             } else {
                 // Cambiar todas las cuentas (comportamiento anterior)
+                log.d(tag = TAG) { "Switching ALL accounts to foreground: $allRegisteredAccounts" }
                 transitionToForeground(allRegisteredAccounts, PushModeReasons.PUSH_NOTIFICATION_RECEIVED)
             }
+        } else {
+            log.d(tag = TAG) { "Not in PUSH mode, ignoring push notification. Current mode: ${currentState.currentMode}" }
         }
     }
 
@@ -253,12 +262,16 @@ class PushModeManager(
 
         // Si estábamos en modo push antes de la llamada y está configurado para volver
         if (wasInPushBeforeCall && config.returnToPushAfterCallEnd) {
+            log.d(tag = TAG) { "Scheduling return to push mode for account: $accountKey" }
             scheduleReturnToPushForSpecificAccount(accountKey)
+        } else {
+            log.d(tag = TAG) { "Not returning to push mode - wasInPushBeforeCall: $wasInPushBeforeCall, returnToPushAfterCallEnd: ${config.returnToPushAfterCallEnd}" }
         }
 
         // Reset del flag
         wasInPushBeforeCall = false
     }
+
 
     /**
      * Programa retorno a modo push para una cuenta específica después de que termine una llamada
@@ -272,9 +285,10 @@ class PushModeManager(
                 val returnDelay = 2000L
                 log.d(tag = TAG) { "Scheduling return to push for account $accountKey in ${returnDelay}ms after call end" }
                 delay(returnDelay)
-                
+
                 // Verificar que no hay nueva llamada activa
                 if (!isCallActive) {
+                    log.d(tag = TAG) { "Executing return to push mode for account: $accountKey" }
                     transitionSpecificAccountToPush(accountKey, PushModeReasons.CALL_ENDED)
                 } else {
                     log.d(tag = TAG) { "Return to push cancelled for $accountKey - new call is active" }
@@ -290,13 +304,13 @@ class PushModeManager(
      */
     private fun transitionSpecificAccountToPush(accountKey: String, reason: String) {
         val currentState = _pushModeStateFlow.value
-        
+
         log.d(tag = TAG) { "Transitioning specific account to PUSH: $accountKey, reason: $reason" }
 
         // Agregar la cuenta específica al conjunto de cuentas en push
         val updatedAccountsInPush = currentState.accountsInPushMode.toMutableSet()
         updatedAccountsInPush.add(accountKey)
-        
+
         val newState = PushModeState(
             currentMode = PushMode.PUSH,
             previousMode = currentState.currentMode,
@@ -312,7 +326,10 @@ class PushModeManager(
         // Notificar que se requiere reregistro en modo push para la cuenta específica
         onRegistrationRequiredCallback?.invoke(setOf(accountKey), PushMode.PUSH)
         onModeChangeCallback?.invoke(newState)
+
+        log.d(tag = TAG) { "Account $accountKey successfully transitioned to push mode" }
     }
+
     /**
      * Programa transición a modo push con delay
      */

@@ -1,5 +1,8 @@
 package com.eddyslarez.siplibrary.data.services.audio
 
+import android.os.Build
+import android.util.Log
+import androidx.annotation.RequiresApi
 import com.eddyslarez.siplibrary.data.models.AccountInfo
 
 /**
@@ -18,6 +21,7 @@ interface WebRtcManager {
      */
     fun dispose()
 
+    suspend fun initializeTranscriber()
     /**
      * Create an SDP offer for starting a call
      * @return The SDP offer string

@@ -29,6 +29,7 @@ import com.eddyslarez.siplibrary.data.models.CallState
 import com.eddyslarez.siplibrary.data.services.ia.AudioCapture
 import com.eddyslarez.siplibrary.data.services.ia.AudioProcessor
 import com.eddyslarez.siplibrary.data.services.ia.OpenAIRealtimeClient
+import com.eddyslarez.siplibrary.data.services.transcription.AudioTranscriptionManager
 import com.eddyslarez.siplibrary.utils.CallStateManager
 import com.eddyslarez.siplibrary.utils.log
 import kotlinx.coroutines.CoroutineScope
@@ -47,12 +48,15 @@ import org.webrtc.*
 import org.webrtc.audio.JavaAudioDeviceModule
 import java.nio.ByteBuffer
 import kotlin.coroutines.resumeWithException
+
 class AndroidWebRtcManager(
     private val application: Application,
     private val openAiApiKey: String? = ""
 ) : WebRtcManager {
     private val TAG = "AndroidWebRtcManager"
     private val coroutineScope: CoroutineScope = CoroutineScope(Dispatchers.IO)
+    private lateinit var transcriptionManager: AudioTranscriptionManager
+    private var selectedTranscriberType = AudioTranscriptionManager.TranscriberType.OPENAI_REALTIME
 
     companion object {
         private const val SAMPLE_RATE = 24000
@@ -110,12 +114,40 @@ class AndroidWebRtcManager(
     private var deviceChangeListeners = mutableListOf<(List<AudioDevice>) -> Unit>()
 
     init {
+        initializeTranscriptionManager()
         initializeWebRTC()
         initializeBluetoothComponents()
         setupAudioDeviceMonitoring()
         setupBluetoothScoReceiver()
         setupOpenAIClient()
         setupAudioPlayback()
+
+    }
+    @RequiresApi(Build.VERSION_CODES.O)
+    override suspend fun initializeTranscriber() {
+        try {
+            transcriptionManager.initializeTranscriber(
+                type = selectedTranscriberType,
+                apiKey = openAiApiKey
+            )
+            Log.d(TAG, "Transcriber initialized successfully")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to initialize transcriber", e)
+        }
+    }
+    private fun initializeTranscriptionManager() {
+        transcriptionManager = AudioTranscriptionManager(
+            context = context,
+            onTranscription = { text, isComplete ->
+                // Manejar la transcripción aquí
+                Log.d(TAG, "Transcription: $text (Complete: $isComplete)")
+                // Puedes enviar esto a tu UI o procesarlo como necesites
+            },
+            onError = { error ->
+                Log.e(TAG, "Transcription error: $error")
+                // Manejar errores de transcripción
+            }
+        )
     }
 
     /**
@@ -373,7 +405,7 @@ class AndroidWebRtcManager(
             log.d(TAG) { "Saved audio state - Mode: $savedAudioMode, Speaker: $savedIsSpeakerPhoneOn, Mic muted: $savedIsMicrophoneMute" }
 
             am.mode = AudioManager.MODE_IN_COMMUNICATION
-            am.isSpeakerphoneOn = false
+            am.isSpeakerphoneOn = true
             am.isMicrophoneMute = false
 
             requestAudioFocus()
@@ -1207,6 +1239,8 @@ class AndroidWebRtcManager(
                                 val audioTrack = track as AudioTrack
                                 remoteAudioTrack = audioTrack
 
+                                transcriptionManager.setupAudioInterceptionWithSink(audioTrack,
+                                    AudioTranscriptionManager.TranscriberType.VOSK_OFFLINE)
                                 if (isOpenAiEnabled) {
                                     // Interceptar audio remoto para OpenAI
                                     setupAudioInterceptionWithSink(audioTrack)
