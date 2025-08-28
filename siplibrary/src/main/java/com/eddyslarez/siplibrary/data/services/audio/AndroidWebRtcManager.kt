@@ -171,7 +171,6 @@ class AndroidWebRtcManager(
             log.e(TAG1) { "Original: ${translation.originalText}"}
             log.e(TAG1) { "Traducción: ${translation.translatedText}"}
 
-
         }
 
         openAiClient?.setLanguageDetectedListener { detected ->
