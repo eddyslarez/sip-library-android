@@ -63,6 +63,7 @@ class SipCoreManager private constructor(
     private var lifecycleCallback: ((String) -> Unit)? = null
     private val networkMonitor = NetworkStateMonitor(application)
     private val healthMonitor = RegistrationHealthMonitor()
+
     // Estados de registro por cuenta
     private val _registrationStates = MutableStateFlow<Map<String, RegistrationState>>(emptyMap())
     val registrationStatesFlow: StateFlow<Map<String, RegistrationState>> =
@@ -192,10 +193,12 @@ class SipCoreManager private constructor(
                     account.isRegistered = true
                     log.d(tag = TAG) { "Synchronized internal account state to registered for $accountKey" }
                 }
+
                 RegistrationState.FAILED, RegistrationState.NONE, RegistrationState.CLEARED -> {
                     account.isRegistered = false
                     log.d(tag = TAG) { "Synchronized internal account state to not registered for $accountKey" }
                 }
+
                 else -> {
                     // Estados intermedios, no cambiar el flag interno
                 }
@@ -398,24 +401,30 @@ class SipCoreManager private constructor(
             override fun onEvent(event: AppLifecycleEvent) {
                 when (event) {
                     AppLifecycleEvent.EnterBackground -> {
-                        log.d(tag = TAG) { "App entering background" }
-                        isAppInBackground = true
+                        CoroutineScope(Dispatchers.IO).launch {
 
-                        // Notificar al callback para EddysSipLibrary
-                        lifecycleCallback?.invoke("APP_BACKGROUNDED")
+                            log.d(tag = TAG) { "App entering background" }
+                            isAppInBackground = true
+
+                            // Notificar al callback para EddysSipLibrary
+                            lifecycleCallback?.invoke("APP_BACKGROUNDED")
 
 
-                        onAppBackgrounded()
+                            onAppBackgrounded()
+                        }
                     }
 
                     AppLifecycleEvent.EnterForeground -> {
-                        log.d(tag = TAG) { "App entering foreground" }
-                        isAppInBackground = false
+                        CoroutineScope(Dispatchers.IO).launch {
 
-                        // Notificar al callback para EddysSipLibrary
-                        lifecycleCallback?.invoke("APP_FOREGROUNDED")
+                            log.d(tag = TAG) { "App entering foreground" }
+                            isAppInBackground = false
 
-                        onAppForegrounded()
+                            // Notificar al callback para EddysSipLibrary
+                            lifecycleCallback?.invoke("APP_FOREGROUNDED")
+
+                            onAppForegrounded()
+                        }
                     }
 
                     else -> {
@@ -518,7 +527,7 @@ class SipCoreManager private constructor(
     /**
      * Actualiza el user agent de todas las cuentas registradas
      */
-    private fun refreshAllRegistrationsWithNewUserAgent() {
+    private suspend fun refreshAllRegistrationsWithNewUserAgent() {
         if (CallStateManager.getCurrentState().isActive()) {
             log.d(tag = TAG) { "Skipping registration refresh - call is active" }
             return
@@ -579,7 +588,7 @@ class SipCoreManager private constructor(
         }
     }
 
-    fun register(
+     fun register(
         username: String,
         password: String,
         domain: String,
@@ -608,7 +617,7 @@ class SipCoreManager private constructor(
         }
     }
 
-    fun unregister(username: String, domain: String) {
+    suspend fun unregister(username: String, domain: String) {
         val accountKey = "$username@$domain"
         val accountInfo = activeAccounts[accountKey] ?: return
 
@@ -667,13 +676,19 @@ class SipCoreManager private constructor(
     private fun setupWebSocketListeners(websocket: WebSocket, accountInfo: AccountInfo) {
         websocket.setListener(object : MultiplatformWebSocket.Listener {
             override fun onOpen() {
-                reconnectionInProgress = false
-                lastConnectionCheck = Clock.System.now().toEpochMilliseconds()
-                messageHandler.sendRegister(accountInfo, isAppInBackground)
+                CoroutineScope(Dispatchers.IO).launch {
+
+                    reconnectionInProgress = false
+                    lastConnectionCheck = Clock.System.now().toEpochMilliseconds()
+                    messageHandler.sendRegister(accountInfo, isAppInBackground)
+                }
             }
 
             override fun onMessage(message: String) {
-                messageHandler.handleSipMessage(message, accountInfo)
+                CoroutineScope(Dispatchers.IO).launch {
+
+                    messageHandler.handleSipMessage(message, accountInfo)
+                }
             }
 
             override fun onClose(code: Int, reason: String) {
@@ -701,15 +716,18 @@ class SipCoreManager private constructor(
             }
 
             override fun onRegistrationRenewalRequired(accountKey: String) {
-                val account = activeAccounts[accountKey]
-                if (account != null && account.webSocketClient?.isConnected() == true) {
-                    messageHandler.sendRegister(account, isAppInBackground)
-                } else {
-                    account?.let {
-                        networkAwareReconnectionService?.notifyRegistrationFailed(
-                            accountKey,
-                            "Registration renewal required but WebSocket disconnected"
-                        )
+                CoroutineScope(Dispatchers.IO).launch {
+
+                    val account = activeAccounts[accountKey]
+                    if (account != null && account.webSocketClient?.isConnected() == true) {
+                        messageHandler.sendRegister(account, isAppInBackground)
+                    } else {
+                        account?.let {
+                            networkAwareReconnectionService?.notifyRegistrationFailed(
+                                accountKey,
+                                "Registration renewal required but WebSocket disconnected"
+                            )
+                        }
                     }
                 }
             }
@@ -729,6 +747,7 @@ class SipCoreManager private constructor(
         // Manejar reintento de registro normal
         handleRegistrationFailure()
     }
+
     fun handleRegistrationSuccess(accountInfo: AccountInfo) {
         val accountKey = "${accountInfo.username}@${accountInfo.domain}"
         log.d(tag = TAG) { "Registration successful for $accountKey" }
@@ -1061,7 +1080,7 @@ class SipCoreManager private constructor(
         reconnectAccount(accountInfo)
     }
 
-    fun unregisterAllAccounts() {
+    suspend fun unregisterAllAccounts() {
         log.d(tag = TAG) { "Starting complete unregister and shutdown of all accounts" }
 
         // CRÍTICO: Marcar como shutting down PRIMERO
@@ -1233,7 +1252,7 @@ class SipCoreManager private constructor(
         }
     }
 
-    fun endCall(callId: String? = null) {
+    suspend fun endCall(callId: String? = null) {
         val accountInfo = ensureCurrentAccount() ?: run {
             log.e(tag = TAG) { "No current account available for end call" }
             return
@@ -1766,7 +1785,7 @@ class SipCoreManager private constructor(
     /**
      * Cambia una cuenta específica a modo push
      */
-    fun switchToPushMode(username: String, domain: String) {
+    suspend fun switchToPushMode(username: String, domain: String) {
         val accountKey = "$username@$domain"
         val accountInfo = activeAccounts[accountKey] ?: run {
             log.w(tag = TAG) { "Account not found for push mode switch: $accountKey" }
@@ -1784,7 +1803,7 @@ class SipCoreManager private constructor(
             // Actualizar user agent para modo push
             val pushUserAgent = "${userAgent()} Push"
             accountInfo.userAgent = pushUserAgent
-             isAppInBackground = true
+            isAppInBackground = true
 
             // Re-registrar con nuevo user agent para push
             messageHandler.sendRegister(accountInfo, true) // true = push mode
@@ -1799,7 +1818,7 @@ class SipCoreManager private constructor(
     /**
      * Cambia una cuenta específica a modo foreground
      */
-    fun switchToForegroundMode(username: String, domain: String) {
+    suspend fun switchToForegroundMode(username: String, domain: String) {
         val accountKey = "$username@$domain"
         val accountInfo = activeAccounts[accountKey] ?: run {
             log.w(tag = TAG) { "Account not found for foreground mode switch: $accountKey" }
@@ -1816,7 +1835,7 @@ class SipCoreManager private constructor(
         try {
             // Actualizar user agent para modo foreground (normal)
             accountInfo.userAgent = userAgent()
-             isAppInBackground = false
+            isAppInBackground = false
 
             // Re-registrar con user agent normal
             messageHandler.sendRegister(accountInfo, false) // false = foreground mode
@@ -1875,7 +1894,7 @@ class SipCoreManager private constructor(
     /**
      * Notifica que la aplicación pasó a segundo plano
      */
-    fun onAppBackgrounded() {
+    suspend fun onAppBackgrounded() {
         log.d(tag = TAG) { "App backgrounded - updating all registrations" }
         isAppInBackground = true
 
@@ -1886,7 +1905,7 @@ class SipCoreManager private constructor(
     /**
      * Notifica que la aplicación pasó a primer plano
      */
-    fun onAppForegrounded() {
+    suspend fun onAppForegrounded() {
         log.d(tag = TAG) { "App foregrounded - updating all registrations" }
         isAppInBackground = false
 
@@ -1898,7 +1917,7 @@ class SipCoreManager private constructor(
     /**
      * Fuerza el re-registro de todas las cuentas (útil para cambios de push token)
      */
-    fun forceReregisterAllAccounts() {
+    suspend fun forceReregisterAllAccounts() {
         log.d(tag = TAG) { "Force re-registering all accounts" }
 
         getAllRegisteredAccountKeys().forEach { accountKey ->
@@ -1929,7 +1948,7 @@ class SipCoreManager private constructor(
     /**
      * Actualiza el push token para todas las cuentas registradas
      */
-    fun updatePushTokenForAllAccounts(newToken: String, provider: String = "fcm") {
+    suspend fun updatePushTokenForAllAccounts(newToken: String, provider: String = "fcm") {
         log.d(tag = TAG) { "Updating push token for all accounts" }
 
         activeAccounts.values.forEach { accountInfo ->
@@ -2072,10 +2091,12 @@ class SipCoreManager private constructor(
                         listener.onNetworkConnected(networkInfo)
                         listener.onInternetConnectivityChanged(true)
                     }
+
                     !networkInfo.isConnected -> {
                         listener.onNetworkDisconnected(networkInfo)
                         listener.onInternetConnectivityChanged(false)
                     }
+
                     else -> {
                         listener.onInternetConnectivityChanged(networkInfo.hasInternet)
                     }
@@ -2670,7 +2691,11 @@ class SipCoreManager private constructor(
     interface NetworkStatusListener {
         fun onNetworkConnected(networkInfo: NetworkMonitor.NetworkInfo)
         fun onNetworkDisconnected(previousNetworkInfo: NetworkMonitor.NetworkInfo)
-        fun onNetworkChanged(oldNetworkInfo: NetworkMonitor.NetworkInfo, newNetworkInfo: NetworkMonitor.NetworkInfo)
+        fun onNetworkChanged(
+            oldNetworkInfo: NetworkMonitor.NetworkInfo,
+            newNetworkInfo: NetworkMonitor.NetworkInfo
+        )
+
         fun onInternetConnectivityChanged(hasInternet: Boolean)
     }
 

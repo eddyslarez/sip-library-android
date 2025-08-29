@@ -276,13 +276,17 @@ class EddysSipLibrary private constructor() {
 
                         when (mode) {
                             PushMode.PUSH -> {
+                                CoroutineScope(Dispatchers.IO).launch {
+
                                 log.d(tag = TAG1) { "Switching $accountKey to push mode" }
-                                sipCoreManager?.switchToPushMode(username, domain)
+                                sipCoreManager?.switchToPushMode(username, domain)}
                             }
 
                             PushMode.FOREGROUND -> {
+                                CoroutineScope(Dispatchers.IO).launch {
+
                                 log.d(tag = TAG1) { "Switching $accountKey to foreground mode" }
-                                sipCoreManager?.switchToForegroundMode(username, domain)
+                                sipCoreManager?.switchToForegroundMode(username, domain)}
                             }
 
                             else -> {}
@@ -969,7 +973,7 @@ class EddysSipLibrary private constructor() {
     /**
      * Registra una cuenta SIP
      */
-    fun registerAccount(
+    suspend fun registerAccount(
         username: String,
         password: String,
         domain: String? = null,
@@ -995,7 +999,7 @@ class EddysSipLibrary private constructor() {
     /**
      * Desregistra una cuenta SIP específica
      */
-    fun unregisterAccount(username: String, domain: String) {
+  suspend  fun unregisterAccount(username: String, domain: String) {
         checkInitialized()
         log.d(tag = TAG) { "Unregistering account: $username@$domain" }
         sipCoreManager?.unregister(username, domain)
@@ -1004,7 +1008,7 @@ class EddysSipLibrary private constructor() {
     /**
      * Desregistra todas las cuentas
      */
-    fun unregisterAllAccounts() {
+ suspend   fun unregisterAllAccounts() {
         checkInitialized()
         log.d(tag = TAG) { "Unregistering all accounts" }
         sipCoreManager?.unregisterAllAccounts()
@@ -1175,7 +1179,7 @@ class EddysSipLibrary private constructor() {
     /**
      * Termina una llamada (con soporte para múltiples llamadas)
      */
-    fun endCall(callId: String? = null) {
+   suspend fun endCall(callId: String? = null) {
         checkInitialized()
 
         val calls = MultiCallManager.getAllCalls()

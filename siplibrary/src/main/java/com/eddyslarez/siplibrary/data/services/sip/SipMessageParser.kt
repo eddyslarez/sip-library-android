@@ -28,6 +28,12 @@ object SipMessageParser {
         return statusLine?.substringAfter(" ", "")?.substringAfter(" ", "")?.trim() ?: "Unknown error"
     }
 
+
+    fun parseRetryAfter(response: String): Int? {
+        val regex = Regex("(?i)Retry-After:\\s*(\\d+)")
+        return regex.find(response)?.groupValues?.get(1)?.toIntOrNull()
+    }
+
     /**
      * Extracts the branch parameter from a Via header
      */
@@ -37,16 +43,22 @@ object SipMessageParser {
         return matchResult?.groupValues?.get(1) ?: ""
     }
 
+
     /**
      * Extracts and updates the sequence number (CSeq) if present
      */
-    fun updateCSeqIfPresent(lines: List<String>, accountInfo: AccountInfo) {
+    suspend fun updateCSeqIfPresent(lines: List<String>, accountInfo: AccountInfo) {
         lines.find { it.startsWith("CSeq:", ignoreCase = true) }?.let { cseqLine ->
             val parts = cseqLine.split("\\s+".toRegex())
             if (parts.size >= 2) {
                 parts[1].toIntOrNull()?.let { seqNum ->
-                    accountInfo.cseq = seqNum
-                    log.d(tag = TAG) { "⭐️ Updated accountInfo.cseq = $seqNum" }
+                    // CAMBIO: Usar método thread-safe para actualizar CSeq
+                    val updated = accountInfo.updateCSeqFromExternal(seqNum, "SIP_MESSAGE")
+                    if (updated) {
+                        log.d(tag = TAG) { "⭐️ Updated accountInfo.cseq = $seqNum" }
+                    } else {
+                        log.d(tag = TAG) { "CSeq $seqNum not applied (current: ${accountInfo.cseq})" }
+                    }
                 }
             }
         }
