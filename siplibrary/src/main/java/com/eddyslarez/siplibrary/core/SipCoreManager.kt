@@ -2448,11 +2448,16 @@ class SipCoreManager private constructor(
             this.let { manager ->
                 val dbIntegration = DatabaseAutoIntegration.getInstance(application, manager)
                 val dbManager = DatabaseManager.getInstance(application)
-
                 // Obtener desde BD y convertir al formato esperado
                 val callLogsWithContact = dbManager.getRecentCallLogs(limit).first()
+                log.d(tag = "CallHistoryManager") { " getting call logs from database: ${callLogsWithContact}" }
+
+
                 callLogsWithContact.toCallLogs()
+
+
             }
+
         } catch (e: Exception) {
             log.e(tag = TAG) { "Error getting call logs from database: ${e.message}" }
             // Fallback a memoria si falla la BD

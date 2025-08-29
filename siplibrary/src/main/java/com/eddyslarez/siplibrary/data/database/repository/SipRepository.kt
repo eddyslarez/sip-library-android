@@ -12,42 +12,42 @@ import com.eddyslarez.siplibrary.utils.log
 
 /**
  * Repositorio principal para operaciones de base de datos SIP
- * 
+ *
  * @author Eddys Larez
  */
 class SipRepository(private val database: SipDatabase) {
-    
+
     private val sipAccountDao = database.sipAccountDao()
     private val callLogDao = database.callLogDao()
     private val callDataDao = database.callDataDao()
     private val contactDao = database.contactDao()
     private val callStateHistoryDao = database.callStateDao()
-    
+
     private val TAG = "SipRepository"
-    
+
     // === OPERACIONES DE CUENTAS SIP ===
-    
+
     /**
      * Obtiene todas las cuentas activas
      */
     fun getActiveAccounts(): Flow<List<SipAccountEntity>> {
         return sipAccountDao.getActiveAccounts()
     }
-    
+
     /**
      * Obtiene cuentas registradas
      */
     fun getRegisteredAccounts(): Flow<List<SipAccountEntity>> {
         return sipAccountDao.getRegisteredAccounts()
     }
-    
+
     /**
      * Obtiene cuenta por credenciales
      */
     suspend fun getAccountByCredentials(username: String, domain: String): SipAccountEntity? {
         return sipAccountDao.getAccountByCredentials(username, domain)
     }
-    
+
     /**
      * Crea o actualiza una cuenta SIP
      */
@@ -60,7 +60,7 @@ class SipRepository(private val database: SipDatabase) {
         pushProvider: String? = null
     ): SipAccountEntity {
         val existingAccount = getAccountByCredentials(username, domain)
-        
+
         val account = if (existingAccount != null) {
             existingAccount.copy(
                 password = password,
@@ -80,13 +80,13 @@ class SipRepository(private val database: SipDatabase) {
                 pushProvider = pushProvider
             )
         }
-        
+
         sipAccountDao.insertAccount(account)
         log.d(tag = TAG) { "Account created/updated: ${account.getAccountKey()}" }
-        
+
         return account
     }
-    
+
     /**
      * Actualiza estado de registro
      */
@@ -102,7 +102,7 @@ class SipRepository(private val database: SipDatabase) {
         }
         log.d(tag = TAG) { "Registration state updated: $accountId -> $state" }
     }
-    
+
     /**
      * Elimina una cuenta
      */
@@ -110,9 +110,9 @@ class SipRepository(private val database: SipDatabase) {
         sipAccountDao.deleteAccountById(accountId)
         log.d(tag = TAG) { "Account deleted: $accountId" }
     }
-    
+
     // === OPERACIONES DE HISTORIAL DE LLAMADAS ===
-    
+
     /**
      * Obtiene historial de llamadas reciente
      */
@@ -124,7 +124,7 @@ class SipRepository(private val database: SipDatabase) {
             }
         }
     }
-    
+
     /**
      * Obtiene llamadas perdidas
      */
@@ -136,7 +136,7 @@ class SipRepository(private val database: SipDatabase) {
             }
         }
     }
-    
+
     /**
      * Crea entrada en historial de llamadas
      */
@@ -148,18 +148,44 @@ class SipRepository(private val database: SipDatabase) {
         sipCode: Int? = null,
         sipReason: String? = null
     ): CallLogEntity {
+        // DEBUG: Log los valores antes de procesarlos
+        log.d(tag = TAG) { "Creating call log - CallData: $callData" }
+        log.d(tag = TAG) { "Remote party: ${callData.getRemoteParty()}" }
+        log.d(tag = TAG) { "Local party: ${callData.getLocalParty()}" }
+
+        // Obtener la cuenta para tener datos completos
+        val account = sipAccountDao.getAccountById(accountId)
+        val localUsername = account?.username ?: ""
+
+        // Determinar remote party y local party con validación
+        val (phoneNumber, localAddress) = when (callData.direction) {
+            CallDirections.OUTGOING -> {
+                val remote = callData.to.takeIf { it.isNotEmpty() } ?: callData.getRemoteParty()
+                val local = callData.from.takeIf { it.isNotEmpty() } ?: localUsername
+                Pair(remote, local)
+            }
+            CallDirections.INCOMING -> {
+                val remote = callData.from.takeIf { it.isNotEmpty() } ?: callData.getRemoteParty()
+                val local = callData.to.takeIf { it.isNotEmpty() } ?: localUsername
+                Pair(remote, local)
+            }
+        }
+
+        // Log de los valores finales
+        log.d(tag = TAG) { "Final values - phoneNumber: $phoneNumber, localAddress: $localAddress" }
+
         val duration = if (endTime != null && callData.startTime > 0) {
             ((endTime - callData.startTime) / 1000).toInt()
         } else {
             0
         }
-        
+
         val callLog = CallLogEntity(
             id = generateId(),
             accountId = accountId,
             callId = callData.callId,
-            phoneNumber = callData.getRemoteParty(),
-            displayName = callData.remoteDisplayName.ifEmpty { callData.getRemoteParty() },
+            phoneNumber = phoneNumber,
+            displayName = callData.remoteDisplayName.ifEmpty { phoneNumber },
             direction = callData.direction,
             callType = callType,
             startTime = callData.startTime,
@@ -167,22 +193,24 @@ class SipRepository(private val database: SipDatabase) {
             duration = duration,
             sipCode = sipCode,
             sipReason = sipReason,
-            localAddress = callData.getLocalParty()
+            localAddress = localAddress
         )
-        
+
+        log.d(tag = TAG) { "CallLog created: $callLog" }
+
         callLogDao.insertCallLog(callLog)
-        
+
         // Actualizar estadísticas de contacto
-        updateContactStatistics(callLog.phoneNumber, callType, duration.toLong())
-        
+        updateContactStatistics(phoneNumber, callType, duration.toLong())
+
         // Actualizar estadísticas de cuenta
         updateAccountStatistics(accountId, callType)
-        
+
         log.d(tag = TAG) { "Call log created: ${callLog.id} (${callType.name})" }
-        
+
         return callLog
     }
-    
+
     /**
      * Busca en historial de llamadas
      */
@@ -194,7 +222,7 @@ class SipRepository(private val database: SipDatabase) {
             }
         }
     }
-    
+
     /**
      * Limpia historial de llamadas
      */
@@ -202,16 +230,16 @@ class SipRepository(private val database: SipDatabase) {
         callLogDao.deleteAllCallLogs()
         log.d(tag = TAG) { "All call logs cleared" }
     }
-    
+
     // === OPERACIONES DE DATOS DE LLAMADAS ===
-    
+
     /**
      * Obtiene llamadas activas
      */
     fun getActiveCalls(): Flow<List<CallDataEntity>> {
         return callDataDao.getActiveCallData()
     }
-    
+
     /**
      * Crea datos de llamada
      */
@@ -243,17 +271,16 @@ class SipRepository(private val database: SipDatabase) {
             md5Hash = callData.md5Hash,
             sipName = callData.sipName
         )
-        
+
         callDataDao.insertCallData(callDataEntity)
         log.d(tag = TAG) { "Call data created: ${callData.callId}" }
-        
+
         return callDataEntity
     }
-    
+
     /**
      * Actualiza estado de llamada
-     */
-    suspend fun updateCallState(
+     */suspend fun updateCallState(
         callId: String,
         newState: CallState,
         errorReason: CallErrorReason = CallErrorReason.NONE,
@@ -263,10 +290,10 @@ class SipRepository(private val database: SipDatabase) {
         // Obtener estado anterior
         val currentCallData = callDataDao.getCallDataById(callId)
         val previousState = currentCallData?.currentState
-        
+
         // Actualizar estado en call_data
         callDataDao.updateCallState(callId, newState)
-        
+
         // Crear entrada en historial de estados
         val stateHistory = CallStateHistoryEntity(
             id = generateId(),
@@ -279,12 +306,13 @@ class SipRepository(private val database: SipDatabase) {
             sipReason = sipReason,
             hasError = errorReason != CallErrorReason.NONE || newState == CallState.ERROR
         )
-        
+
         callStateHistoryDao.insertStateHistory(stateHistory)
-        
+
         log.d(tag = TAG) { "Call state updated: $callId -> $previousState -> $newState" }
     }
-    
+
+
     /**
      * Finaliza llamada
      */
@@ -293,23 +321,23 @@ class SipRepository(private val database: SipDatabase) {
         updateCallState(callId, CallState.ENDED)
         log.d(tag = TAG) { "Call ended: $callId" }
     }
-    
+
     // === OPERACIONES DE CONTACTOS ===
-    
+
     /**
      * Obtiene todos los contactos
      */
     fun getAllContacts(): Flow<List<ContactEntity>> {
         return contactDao.getAllContacts()
     }
-    
+
     /**
      * Busca contactos
      */
     fun searchContacts(query: String): Flow<List<ContactEntity>> {
         return contactDao.searchContacts(query)
     }
-    
+
     /**
      * Crea o actualiza contacto
      */
@@ -322,7 +350,7 @@ class SipRepository(private val database: SipDatabase) {
         company: String? = null
     ): ContactEntity {
         val existingContact = contactDao.getContactByPhoneNumber(phoneNumber)
-        
+
         val contact = if (existingContact != null) {
             existingContact.copy(
                 displayName = displayName,
@@ -343,22 +371,22 @@ class SipRepository(private val database: SipDatabase) {
                 company = company
             )
         }
-        
+
         contactDao.insertContact(contact)
         log.d(tag = TAG) { "Contact created/updated: $phoneNumber" }
-        
+
         return contact
     }
-    
+
     /**
      * Verifica si un número está bloqueado
      */
     suspend fun isPhoneNumberBlocked(phoneNumber: String): Boolean {
         return contactDao.isPhoneNumberBlocked(phoneNumber) ?: false
     }
-    
+
     // === ESTADÍSTICAS ===
-    
+
     /**
      * Obtiene estadísticas generales
      */
@@ -369,7 +397,7 @@ class SipRepository(private val database: SipDatabase) {
         val missedCalls = callLogDao.getCallCountByType(CallTypes.MISSED)
         val totalContacts = contactDao.getTotalContactCount()
         val activeCalls = callDataDao.getActiveCallCount()
-        
+
         return GeneralStatistics(
             totalAccounts = totalAccounts,
             registeredAccounts = registeredAccounts,
@@ -379,16 +407,16 @@ class SipRepository(private val database: SipDatabase) {
             activeCalls = activeCalls
         )
     }
-    
+
     /**
      * Obtiene estadísticas de llamadas para un número
      */
     suspend fun getCallStatisticsForNumber(phoneNumber: String): CallStatistics? {
         return callLogDao.getCallStatisticsForNumber(phoneNumber)
     }
-    
+
     // === MÉTODOS PRIVADOS ===
-    
+
     /**
      * Actualiza estadísticas de contacto
      */
@@ -398,44 +426,44 @@ class SipRepository(private val database: SipDatabase) {
         duration: Long
     ) {
         contactDao.incrementCallCount(phoneNumber)
-        
+
         if (callType == CallTypes.SUCCESS && duration > 0) {
             contactDao.addCallDuration(phoneNumber, duration)
         }
-        
+
         if (callType == CallTypes.MISSED) {
             contactDao.incrementMissedCalls(phoneNumber)
         }
     }
-    
+
     /**
      * Actualiza estadísticas de cuenta
      */
     private suspend fun updateAccountStatistics(accountId: String, callType: CallTypes) {
         sipAccountDao.incrementTotalCalls(accountId)
-        
+
         when (callType) {
             CallTypes.SUCCESS -> sipAccountDao.incrementSuccessfulCalls(accountId)
-            CallTypes.MISSED, CallTypes.DECLINED, CallTypes.ABORTED -> 
+            CallTypes.MISSED, CallTypes.DECLINED, CallTypes.ABORTED ->
                 sipAccountDao.incrementFailedCalls(accountId)
         }
     }
-    
+
     // === LIMPIEZA ===
-    
+
     /**
      * Limpia datos antiguos
      */
     suspend fun cleanupOldData(daysToKeep: Int = 30) {
         val threshold = System.currentTimeMillis() - (daysToKeep * 24 * 60 * 60 * 1000L)
-        
+
         callLogDao.deleteCallLogsOlderThan(threshold)
         callStateHistoryDao.deleteStateHistoryOlderThan(threshold)
         callDataDao.deleteInactiveCallsOlderThan(threshold)
-        
+
         log.d(tag = TAG) { "Cleanup completed for data older than $daysToKeep days" }
     }
-    
+
     /**
      * Mantiene solo los registros más recientes
      */
@@ -445,7 +473,7 @@ class SipRepository(private val database: SipDatabase) {
     ) {
         callLogDao.keepOnlyRecentCallLogs(callLogsLimit)
         callStateHistoryDao.keepOnlyRecentStateHistory(stateHistoryLimit)
-        
+
         log.d(tag = TAG) { "Kept only recent data: $callLogsLimit call logs, $stateHistoryLimit state history" }
     }
 }
@@ -460,15 +488,15 @@ data class CallLogWithContact(
     fun getDisplayName(): String {
         return contact?.displayName ?: callLog.displayName ?: callLog.phoneNumber
     }
-    
+
     fun getAvatarUrl(): String? {
         return contact?.avatarUrl
     }
-    
+
     fun isBlocked(): Boolean {
         return contact?.isBlocked ?: false
     }
-    
+
     fun isFavorite(): Boolean {
         return contact?.isFavorite ?: false
     }

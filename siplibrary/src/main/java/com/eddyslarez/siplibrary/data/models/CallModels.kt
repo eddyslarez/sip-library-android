@@ -1,6 +1,7 @@
 package com.eddyslarez.siplibrary.data.models
 
 import android.os.Parcelable
+import com.eddyslarez.siplibrary.utils.log
 import kotlinx.parcelize.Parcelize
 import kotlinx.datetime.Clock
 
@@ -66,18 +67,23 @@ data class CallData(
     }
 
     fun getRemoteParty(): String {
-        return when (direction) {
-            CallDirections.OUTGOING -> to
-            CallDirections.INCOMING -> from
+        val remote = when (direction) {
+            CallDirections.OUTGOING -> to     // El número al que llamamos
+            CallDirections.INCOMING -> from   // El número que nos llama
         }
+        log.d("CallData") { "getRemoteParty: direction=$direction, from=$from, to=$to, remote=$remote" }
+        return remote
     }
 
     fun getLocalParty(): String {
-        return when (direction) {
-            CallDirections.OUTGOING -> from
-            CallDirections.INCOMING -> to
+        val local = when (direction) {
+            CallDirections.OUTGOING -> from   // Nuestro número cuando llamamos
+            CallDirections.INCOMING -> to     // Nuestro número cuando nos llaman
         }
+        log.d("CallData") { "getLocalParty: direction=$direction, from=$from, to=$to, local=$local" }
+        return local
     }
+
 
     override fun toString(): String {
         return "CallData(id=$callId, $from→$to, dir=$direction, started=$startTime, " +

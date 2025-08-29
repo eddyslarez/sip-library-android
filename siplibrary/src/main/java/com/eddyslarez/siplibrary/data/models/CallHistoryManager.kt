@@ -1,6 +1,7 @@
 package com.eddyslarez.siplibrary.data.models
 
 import com.eddyslarez.siplibrary.utils.generateId
+import com.eddyslarez.siplibrary.utils.log
 import kotlinx.datetime.Instant
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
@@ -14,7 +15,7 @@ class CallHistoryManager {
 
     private val _callLogs = mutableListOf<CallLog>()
     val callLogs: List<CallLog> get() = _callLogs.toList()
-
+val TAG= "CallHistoryManager"
     fun addCallLog(
         callData: CallData,
         type: CallTypes,
@@ -39,7 +40,7 @@ class CallHistoryManager {
             callType = type,
             localAddress = callData.getLocalParty()
         )
-
+        log.d(TAG) { "callLogs $callLog" }
         _callLogs.add(0, callLog)
     }
 
