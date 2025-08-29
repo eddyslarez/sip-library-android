@@ -1320,6 +1320,32 @@ class EddysSipLibrary private constructor() {
         }
     }
 
+    // === MÉTODOS DE CAMBIO RINGTONE ===
+    fun setIncomingRingtone(uri: Uri) {
+        checkInitialized()
+        try {
+            sipCoreManager?.audioManager?.setIncomingRingtone(uri)
+            log.d(tag = TAG) { "Incoming ringtone URI set: $uri" }
+
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error in CallListener onMuteStateChanged: ${e.message}" }
+        }
+
+    }
+
+    fun setOutgoingRingtone(uri: Uri) {
+        checkInitialized()
+        try {
+            sipCoreManager?.audioManager?.setOutgoingRingtone(uri)
+            log.d(tag = TAG) { "Outgoing ringtone URI set: $uri" }
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error in CallListener onMuteStateChanged: ${e.message}" }
+        }
+
+    }
+    // === MÉTODOS DE CAMBIO RINGTONE ===
+
+
     // === MÉTODOS DE INFORMACIÓN ===
 
     fun hasActiveCall(): Boolean {
