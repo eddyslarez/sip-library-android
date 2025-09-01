@@ -24,6 +24,7 @@ import com.eddyslarez.siplibrary.data.database.entities.SipAccountEntity
 import com.eddyslarez.siplibrary.data.database.repository.CallLogWithContact
 import com.eddyslarez.siplibrary.data.database.repository.GeneralStatistics
 import com.eddyslarez.siplibrary.data.database.setupDatabaseIntegration
+import com.eddyslarez.siplibrary.data.services.asistente.SipManager
 import com.eddyslarez.siplibrary.utils.PushNotificationSimulator
 import kotlinx.coroutines.delay
 
@@ -37,6 +38,7 @@ import kotlinx.coroutines.delay
 class EddysSipLibrary private constructor() {
 
     private var sipCoreManager: SipCoreManager? = null
+    private var sipManager: SipManager? = null
     private var isInitialized = false
     private lateinit var config: SipConfig
     private val listeners = mutableSetOf<SipEventListener>()
@@ -51,6 +53,7 @@ class EddysSipLibrary private constructor() {
     private var pushModeManager: PushModeManager? = null
     private var networkStatusListener: NetworkStatusListener? = null
     private var autoReconnectionListener: AutoReconnectionListener? = null
+
     companion object {
         @Volatile
         private var INSTANCE: EddysSipLibrary? = null
@@ -220,7 +223,7 @@ class EddysSipLibrary private constructor() {
             if (enableDatabase) {
                 setupDatabaseIntegration(application)
             }
-
+            sipManager?.initialize()
             // Inicializar Push Mode Manager
             pushModeManager = PushModeManager(config.pushModeConfig)
             setupPushModeManager()
@@ -937,7 +940,7 @@ class EddysSipLibrary private constructor() {
         sipCoreManager?.makeCall(phoneNumber, finalUsername, finalDomain)
     }
 
-    fun setOpenAIEnabled(enabled: Boolean){
+    fun setOpenAIEnabled(enabled: Boolean) {
         sipCoreManager?.setOpenAIEnabled(enabled)
     }
 
@@ -951,7 +954,7 @@ class EddysSipLibrary private constructor() {
         val targetCallId = if (callId == null && calls.size == 1) {
             // Llamada única, usar sin callId
             log.d(tag = TAG) { "Accepting single call" }
-            sipCoreManager?.acceptCall()
+            sipManager?.acceptCall()
             return
         } else {
             callId ?: calls.firstOrNull()?.callId
@@ -1683,7 +1686,8 @@ class EddysSipLibrary private constructor() {
 
                                     !state.isReconnecting && state.attempts > 0 -> {
                                         // Reconexión terminó
-                                        val registrationState = getRegistrationState(username, domain)
+                                        val registrationState =
+                                            getRegistrationState(username, domain)
 
                                         if (registrationState == RegistrationState.OK) {
                                             autoReconnectionListener?.onReconnectionSuccess(
@@ -1713,6 +1717,7 @@ class EddysSipLibrary private constructor() {
             }
         }
     }
+
     /**
      * Notifica que la red se recuperó
      */
@@ -1742,6 +1747,7 @@ class EddysSipLibrary private constructor() {
         // Los listeners ya serán notificados por el NetworkStatusListener
         // Aquí podríamos sepuede hacer preparativos adicionales si es necesario
     }
+
     /**
      * Método setupNetworkStatusListener()
      */
@@ -1881,6 +1887,7 @@ class EddysSipLibrary private constructor() {
             }
         })
     }
+
     /**
      * NUEVO: Configura listener para cambios de estado de red
      */
@@ -1958,6 +1965,7 @@ class EddysSipLibrary private constructor() {
         log.d(tag = TAG) { "Force reconnection for all accounts" }
         sipCoreManager?.forceReconnectionAllAccounts()
     }
+
     /**
      * NUEVO: Notifica manualmente que se necesita verificar reconexiones
      */
@@ -1996,9 +2004,11 @@ class EddysSipLibrary private constructor() {
                                 needReconnection.add(Pair(username, domain))
                                 log.d(tag = TAG) { "Account $accountKey needs reconnection (state: $state)" }
                             }
+
                             RegistrationState.IN_PROGRESS -> {
                                 log.d(tag = TAG) { "Account $accountKey already reconnecting" }
                             }
+
                             RegistrationState.OK -> {
                                 log.d(tag = TAG) { "Account $accountKey is properly registered" }
                             }
@@ -2031,6 +2041,7 @@ class EddysSipLibrary private constructor() {
             }
         }
     }
+
     /**
      * NUEVO: Diagnóstico completo de reconexión
      */
@@ -2054,8 +2065,10 @@ class EddysSipLibrary private constructor() {
             appendLine("\n--- Account States ---")
             val accountStates = getAllRegistrationStates()
             accountStates.forEach { (accountKey, state) ->
-                val reconnectAttempts = getReconnectionAttempts(accountKey.split("@")[0], accountKey.split("@")[1])
-                val isReconnecting = isAccountReconnecting(accountKey.split("@")[0], accountKey.split("@")[1])
+                val reconnectAttempts =
+                    getReconnectionAttempts(accountKey.split("@")[0], accountKey.split("@")[1])
+                val isReconnecting =
+                    isAccountReconnecting(accountKey.split("@")[0], accountKey.split("@")[1])
 
                 appendLine("$accountKey:")
                 appendLine("  State: $state")
@@ -2238,7 +2251,9 @@ class EddysSipLibrary private constructor() {
             }
 
             appendLine("\n--- Core System ---")
-            appendLine(sipCoreManager?.getCompleteDiagnosticInfo() ?: "SipCoreManager not available")
+            appendLine(
+                sipCoreManager?.getCompleteDiagnosticInfo() ?: "SipCoreManager not available"
+            )
 
             appendLine("\n--- Listeners ---")
             appendLine("Network Status Listener: ${networkStatusListener != null}")
@@ -2256,7 +2271,8 @@ class EddysSipLibrary private constructor() {
         val reconnectionStates = getAllReconnectionStates()
         val networkInfo = getCurrentNetworkInfo()
         val totalAccounts = getAllRegistrationStates().size
-        val registeredAccounts = getAllRegistrationStates().count { it.value == RegistrationState.OK }
+        val registeredAccounts =
+            getAllRegistrationStates().count { it.value == RegistrationState.OK }
         val reconnectingAccounts = reconnectionStates.count { it.value.isReconnecting }
         val totalReconnectionAttempts = reconnectionStates.values.sumOf { it.attempts }
 

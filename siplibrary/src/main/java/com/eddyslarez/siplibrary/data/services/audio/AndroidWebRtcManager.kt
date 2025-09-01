@@ -1,4 +1,5 @@
 package com.eddyslarez.siplibrary.data.services.audio
+
 import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Application
@@ -26,6 +27,7 @@ import androidx.annotation.RequiresPermission
 import androidx.core.content.ContextCompat
 import com.eddyslarez.siplibrary.data.models.AccountInfo
 import com.eddyslarez.siplibrary.data.models.CallState
+import com.eddyslarez.siplibrary.data.services.asistente.RealtimeSession
 import com.eddyslarez.siplibrary.data.services.ia.AudioCapture
 import com.eddyslarez.siplibrary.data.services.ia.AudioProcessor
 import com.eddyslarez.siplibrary.data.services.ia.MCNAssistantClient
@@ -54,6 +56,8 @@ import org.webrtc.*
 import org.webrtc.audio.JavaAudioDeviceModule
 import java.nio.ByteBuffer
 import kotlin.coroutines.resumeWithException
+
+
 class AndroidWebRtcManager(
     private val application: Application,
     private val openAiApiKey: String? = ""
@@ -61,6 +65,7 @@ class AndroidWebRtcManager(
     private val TAG = "AndroidWebRtcManager"
     private val TAG1 = "AndroidWebTraduccion"
     private val coroutineScope: CoroutineScope = CoroutineScope(Dispatchers.IO)
+    private val realtimeSession= RealtimeSession(openAiApiKey ?: "")
 
     companion object {
         private const val SAMPLE_RATE = 24000
@@ -71,9 +76,11 @@ class AndroidWebRtcManager(
 
     // OpenAI integration
     private val openAiClient = openAiApiKey?.let { MCNTranslatorClient6(it) }
-//    private val openAiClient = openAiApiKey?.let { MCNAssistantClient(it) }
+
+    //    private val openAiClient = openAiApiKey?.let { MCNAssistantClient(it) }
 //    private val openAiClient = openAiApiKey?.let { MCNTranslatorClient5(it, application) }
     private var isOpenAiEnabled = false
+
     // Audio playback para OpenAI responses
     private var audioTrack: android.media.AudioTrack? = null
     private var isPlaybackActive = false
@@ -127,7 +134,7 @@ class AndroidWebRtcManager(
         setupBluetoothScoReceiver()
         setupOpenAIClient()
         setupAudioPlayback()
-        openAiClient?.setTranslationMode(true)
+//        openAiClient?.setTranslationMode(true)
     }
 
     /**
@@ -164,35 +171,37 @@ class AndroidWebRtcManager(
 
 
     private fun setupOpenAIClient() {
-
-
-        openAiClient?.setTranslationReceivedListener { translation ->
-            log.e(TAG1) { "${translation.sourceLanguage} → ${translation.targetLanguage}"}
-            log.e(TAG1) { "Original: ${translation.originalText}"}
-            log.e(TAG1) { "Traducción: ${translation.translatedText}"}
-
+        CoroutineScope(Dispatchers.IO).launch {
+            realtimeSession?.initialize()
         }
-
-        openAiClient?.setLanguageDetectedListener { detected ->
-            log.e(TAG1) { "Idioma detectado: ${detected.language} (${detected.confidence})"}
-
-        }
-
-        openAiClient?.setConnectionStateListener { connected ->
-            log.d(TAG) { "OpenAI connection: $connected" }
-            if (connected) {
-
-                startAudioResponsePlayback()
-            }
-        }
-
-        openAiClient?.setErrorListener { error ->
-            log.e(TAG) { "OpenAI error: $error" }
-        }
-
-        openAiClient?.setAudioReceivedListener { audioData ->
-            playAudioData(audioData)
-        }
+//
+//        openAiClient?.setTranslationReceivedListener { translation ->
+//            log.e(TAG1) { "${translation.sourceLanguage} → ${translation.targetLanguage}" }
+//            log.e(TAG1) { "Original: ${translation.originalText}" }
+//            log.e(TAG1) { "Traducción: ${translation.translatedText}" }
+//
+//        }
+//
+//        openAiClient?.setLanguageDetectedListener { detected ->
+//            log.e(TAG1) { "Idioma detectado: ${detected.language} (${detected.confidence})" }
+//
+//        }
+//
+//        openAiClient?.setConnectionStateListener { connected ->
+//            log.d(TAG) { "OpenAI connection: $connected" }
+//            if (connected) {
+//
+//                startAudioResponsePlayback()
+//            }
+//        }
+//
+//        openAiClient?.setErrorListener { error ->
+//            log.e(TAG) { "OpenAI error: $error" }
+//        }
+//
+//        openAiClient?.setAudioReceivedListener { audioData ->
+//            playAudioData(audioData)
+//        }
     }
 
     private fun setupAudioPlayback() {
@@ -266,6 +275,7 @@ class AndroidWebRtcManager(
             }
         }
     }
+
     fun playAudioData(data: ByteArray) {
 
         if (data.isEmpty() || data.size % 2 != 0) {
@@ -532,6 +542,7 @@ class AndroidWebRtcManager(
 
         return Pair(inputDevices, outputDevices)
     }
+
     /**
      * Get fallback devices when detection fails
      */
@@ -805,7 +816,10 @@ class AndroidWebRtcManager(
 
         if (!isLocalAudioReady) {
             log.d(TAG) { "Ensuring local audio track is ready..." }
-            isLocalAudioReady = ensureLocalAudioTrack()
+            realtimeSession?.let {
+                isLocalAudioReady = setupDirectRealtimeConnection(it
+                )
+            }
         }
 
         return coroutineScope.async {
@@ -822,6 +836,7 @@ class AndroidWebRtcManager(
                             override fun onSetSuccess() {
                                 log.d(TAG) { "Local description set successfully" }
                             }
+
                             override fun onCreateFailure(p0: String?) {}
                             override fun onSetFailure(p0: String?) {}
                         }, it)
@@ -832,6 +847,7 @@ class AndroidWebRtcManager(
                 override fun onCreateFailure(error: String?) {
                     log.e(TAG) { "Create offer failed: $error" }
                 }
+
                 override fun onSetFailure(error: String?) {}
             }
 
@@ -977,6 +993,7 @@ class AndroidWebRtcManager(
             override fun onSetSuccess() {
                 log.d(TAG) { "Remote description set successfully" }
             }
+
             override fun onCreateFailure(p0: String?) {}
             override fun onSetFailure(error: String?) {
                 log.e(TAG) { "Set remote description failed: $error" }
@@ -1141,7 +1158,8 @@ class AndroidWebRtcManager(
             val senders = peerConnection?.senders ?: return false
 
             val audioSender = senders.find { sender ->
-                sender.track()?.kind().equals(MediaStreamTrack.AUDIO_TRACK_KIND, ignoreCase = true) }
+                sender.track()?.kind().equals(MediaStreamTrack.AUDIO_TRACK_KIND, ignoreCase = true)
+            }
 
             if (audioSender == null) {
                 log.d(TAG) { "Cannot send DTMF: No audio sender found" }
@@ -1227,11 +1245,16 @@ class AndroidWebRtcManager(
                     override fun onDataChannel(dataChannel: DataChannel?) {}
                     override fun onRenegotiationNeeded() {}
 
-                    override fun onAddTrack(receiver: RtpReceiver?, streams: Array<out MediaStream>?) {
+                    override fun onAddTrack(
+                        receiver: RtpReceiver?,
+                        streams: Array<out MediaStream>?
+                    ) {
                         log.d(TAG) { "Track added: ${receiver?.track()?.kind()}" }
 
                         receiver?.track()?.let { track ->
-                            if (track.kind().equals(MediaStreamTrack.AUDIO_TRACK_KIND, ignoreCase = true)) {
+                            if (track.kind()
+                                    .equals(MediaStreamTrack.AUDIO_TRACK_KIND, ignoreCase = true)
+                            ) {
                                 val audioTrack = track as AudioTrack
                                 remoteAudioTrack = audioTrack
 
@@ -1393,7 +1416,12 @@ class AndroidWebRtcManager(
             log.e(TAG) { "Error procesando audio para OpenAI: ${e.message}" }
         }
     }
-    private fun resampleAudio(audioData: ByteArray, fromSampleRate: Int, toSampleRate: Int): ByteArray {
+
+    private fun resampleAudio(
+        audioData: ByteArray,
+        fromSampleRate: Int,
+        toSampleRate: Int
+    ): ByteArray {
         if (fromSampleRate == toSampleRate) return audioData
 
         // Implementación básica de resampling
@@ -1440,12 +1468,16 @@ class AndroidWebRtcManager(
             audioSource = peerConnectionFactory?.createAudioSource(audioConstraints)
 
             // Create local audio track
-            localAudioTrack = peerConnectionFactory?.createAudioTrack("local_audio_${System.currentTimeMillis()}", audioSource)
+            localAudioTrack = peerConnectionFactory?.createAudioTrack(
+                "local_audio_${System.currentTimeMillis()}",
+                audioSource
+            )
             localAudioTrack?.setEnabled(true)
 
             // CORREGIDO: Usar addTrack con transceiver direction más específica
             localAudioTrack?.let { track ->
-                val rtpSender = peerConn.addTrack(track, listOf("local_stream_${System.currentTimeMillis()}"))
+                val rtpSender =
+                    peerConn.addTrack(track, listOf("local_stream_${System.currentTimeMillis()}"))
 
                 // CORREGIDO: Configurar dirección del transceiver si es necesario
                 peerConn.transceivers.find { it.sender == rtpSender }?.let { transceiver ->
@@ -1669,8 +1701,9 @@ class AndroidWebRtcManager(
      * Get default output descriptor
      */
     private fun getDefaultOutputDescriptor(): String {
-        return if (audioManager?.isWiredHeadsetOn()  == true) "earpiece" else "speaker"
+        return if (audioManager?.isWiredHeadsetOn() == true) "earpiece" else "speaker"
     }
+
     /**
     //     * FIXED: Enhanced Bluetooth input switching
     //     */
@@ -1759,6 +1792,7 @@ class AndroidWebRtcManager(
             false
         }
     }
+
     /**
      * Add built-in audio devices
      */
@@ -2015,18 +2049,21 @@ class AndroidWebRtcManager(
                             currentInputDescriptor, currentOutputDescriptor
                         )
                     }
+
                     AudioDeviceInfo.TYPE_DOCK -> {
                         addDockDevice(
                             deviceInfo, inputDevices, outputDevices,
                             currentInputDescriptor, currentOutputDescriptor
                         )
                     }
+
                     AudioDeviceInfo.TYPE_AUX_LINE -> {
                         addAuxDevice(
                             deviceInfo, inputDevices, outputDevices,
                             currentInputDescriptor, currentOutputDescriptor
                         )
                     }
+
                     AudioDeviceInfo.TYPE_HEARING_AID -> {
                         addHearingAidDevice(
                             deviceInfo, inputDevices, outputDevices,
@@ -2221,11 +2258,14 @@ class AndroidWebRtcManager(
                     isWireless = true,
                     supportsHDVoice = true,
                     latency = 50,
-                    vendorInfo = extractVendorFromDeviceName(deviceInfo.productName?.toString() ?: "")
+                    vendorInfo = extractVendorFromDeviceName(
+                        deviceInfo.productName?.toString() ?: ""
+                    )
                 )
             )
         }
     }
+
     /**
      * Enhanced current device detection
      */
@@ -2257,6 +2297,7 @@ class AndroidWebRtcManager(
 //            createBuiltinMicDevice()
 //        }
     }
+
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     override fun getCurrentOutputDevice(): AudioDevice? {
         //if (currentOutputDevice != null) {
@@ -2315,9 +2356,17 @@ class AndroidWebRtcManager(
 
             peerConn.setLocalDescription(object : SdpObserver {
                 override fun onCreateSuccess(desc: SessionDescription) {}
-                override fun onSetSuccess() { log.d(TAG) { "Local description updated" } }
-                override fun onCreateFailure(error: String) { log.d(TAG) { "Create failed: $error" } }
-                override fun onSetFailure(error: String) { log.d(TAG) { "Set failed: $error" } }
+                override fun onSetSuccess() {
+                    log.d(TAG) { "Local description updated" }
+                }
+
+                override fun onCreateFailure(error: String) {
+                    log.d(TAG) { "Create failed: $error" }
+                }
+
+                override fun onSetFailure(error: String) {
+                    log.d(TAG) { "Set failed: $error" }
+                }
             }, newDesc)
 
             // Si ya hay remoteDescription, renegociar
@@ -2356,7 +2405,6 @@ class AndroidWebRtcManager(
     }
 
 
-
     /**
      * Applies modified SDP to the peer connection
      * @param modifiedSdp The modified SDP string
@@ -2370,6 +2418,7 @@ class AndroidWebRtcManager(
                 override fun onSetSuccess() {
                     log.d(TAG) { "Modified SDP applied successfully" }
                 }
+
                 override fun onCreateFailure(error: String) {}
                 override fun onSetFailure(error: String) {
                     log.d(TAG) { "Error applying modified SDP: $error" }
@@ -2464,7 +2513,7 @@ class AndroidWebRtcManager(
 
             // 4. Verify that the specific Bluetooth device is connected
             val bluetoothDevice = device.nativeDevice as? BluetoothDevice
-            if (bluetoothDevice != null ) {
+            if (bluetoothDevice != null) {
                 log.w(TAG) { "Bluetooth device not connected: ${device.name}" }
                 return false
             }
@@ -2614,7 +2663,8 @@ class AndroidWebRtcManager(
                 if (line.startsWith("a=sendrecv") ||
                     line.startsWith("a=sendonly") ||
                     line.startsWith("a=recvonly") ||
-                    line.startsWith("a=inactive")) {
+                    line.startsWith("a=inactive")
+                ) {
                     lines[i] = "a=$directionStr"
                 }
             }
@@ -2629,6 +2679,38 @@ class AndroidWebRtcManager(
         return lines.joinToString("\r\n")
     }
 
+    // ✅ AÑADIR - Conexión directa sin interceptación
+    fun setupDirectRealtimeConnection(realtimeSession: RealtimeSession): Boolean {
+        return try {
+            // Deshabilitar interceptación existente
+            isOpenAiEnabled = false
+
+            // Configurar conexión directa con OpenAI Realtime
+            localAudioTrack?.let { track ->
+                // Enrutar directamente a Peer B del RealtimeSession
+                val peerB = realtimeSession.getPeerBForAgentAudio()
+                peerB?.addTrack(track, listOf("agent_direct_stream"))
+            }
+
+            remoteAudioTrack?.let { track ->
+                // Enrutar directamente a Peer A del RealtimeSession
+                val peerA = realtimeSession.getPeerAForClientAudio()
+                // El audio del cliente ya llegará al Peer A automáticamente
+                track.setEnabled(false) // No reproducir directamente
+            }
+
+            log.d(TAG) { "Direct Realtime connection established" }
+            true
+        } catch (e: Exception) {
+            log.e(TAG) { "Error setting up direct Realtime connection: ${e.message}" }
+            false
+        }
+    }
+
+    // ✅ AÑADIR - Obtener tracks para AudioBridge
+    fun getCurrentCallAudioTracks(): Pair<AudioTrack?, AudioTrack?> {
+        return Pair(remoteAudioTrack, localAudioTrack)
+    }
 }
 /**
  * Enhanced Android implementation of WebRtcManager interface with comprehensive audio device support
