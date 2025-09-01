@@ -1179,7 +1179,7 @@ class EddysSipLibrary private constructor() {
     /**
      * Termina una llamada (con soporte para múltiples llamadas)
      */
-   suspend fun endCall(callId: String? = null) {
+    fun endCall(callId: String? = null) {
         checkInitialized()
 
         val calls = MultiCallManager.getAllCalls()

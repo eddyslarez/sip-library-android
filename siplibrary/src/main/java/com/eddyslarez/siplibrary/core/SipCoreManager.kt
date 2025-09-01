@@ -1252,7 +1252,114 @@ class SipCoreManager private constructor(
         }
     }
 
-    suspend fun endCall(callId: String? = null) {
+//      fun endCall(callId: String? = null) {
+//        val accountInfo = ensureCurrentAccount() ?: run {
+//            log.e(tag = TAG) { "No current account available for end call" }
+//            return
+//        }
+//
+//        val targetCallData = if (callId != null) {
+//            MultiCallManager.getCall(callId)
+//        } else {
+//            accountInfo.currentCallData
+//        } ?: run {
+//            log.e(tag = TAG) { "No call data available for end" }
+//            return
+//        }
+//
+//        val callState = if (callId != null) {
+//            MultiCallManager.getCallState(callId)
+//        } else {
+//            CallStateManager.getCurrentState()
+//        }
+//
+//        if (callState?.isActive() != true) {
+//            log.w(tag = TAG) { "No active call to end" }
+//            return
+//        }
+//
+//        val endTime = Clock.System.now().toEpochMilliseconds()
+//        val currentState = callState.state
+//
+//        log.d(tag = TAG) { "Ending single call" }
+//
+//        // CRÍTICO: Detener ringtones INMEDIATAMENTE y con force stop
+//        audioManager.stopAllRingtones()
+//        log.d(tag = TAG) { "Stopping ALL ringtones - FORCE STOP" }
+//
+//        // CRÍTICO: Iniciar proceso de finalización
+//        CallStateManager.startEnding(targetCallData.callId)
+//
+//        // CRÍTICO: Enviar mensaje apropiado según estado y dirección
+//        when (currentState) {
+//            CallState.CONNECTED, CallState.STREAMS_RUNNING, CallState.PAUSED -> {
+//                log.d(tag = TAG) { "Sending BYE for established call (${targetCallData.direction})" }
+//                messageHandler.sendBye(accountInfo, targetCallData)
+//                callHistoryManager.addCallLog(targetCallData, CallTypes.SUCCESS, endTime)
+//            }
+//
+//            CallState.OUTGOING_INIT, CallState.OUTGOING_PROGRESS, CallState.OUTGOING_RINGING -> {
+//                log.d(tag = TAG) { "Sending CANCEL for outgoing call" }
+//                messageHandler.sendCancel(accountInfo, targetCallData)
+//                callHistoryManager.addCallLog(targetCallData, CallTypes.ABORTED, endTime)
+//            }
+//
+//            CallState.INCOMING_RECEIVED -> {
+//                log.d(tag = TAG) { "Sending DECLINE for incoming call" }
+//                messageHandler.sendDeclineResponse(accountInfo, targetCallData)
+//                callHistoryManager.addCallLog(targetCallData, CallTypes.DECLINED, endTime)
+//            }
+//
+//            else -> {
+//                log.w(tag = TAG) { "Ending call in unexpected state: $currentState" }
+//                messageHandler.sendBye(accountInfo, targetCallData)
+//            }
+//        }
+//
+//        clearDtmfQueue()
+//
+//        // NUEVO: Notificar que la llamada terminó para esta cuenta específica
+//        val accountKey = "${accountInfo.username}@${accountInfo.domain}"
+//        notifyCallEndedForSpecificAccount(accountKey)
+//
+//        // MEJORADO: Una sola corrutina para manejar la limpieza
+//        CoroutineScope(Dispatchers.IO).launch {
+//            try {
+//                // Esperar un poco para que se envíe el mensaje SIP
+//                delay(500)
+//
+//                // Limpiar WebRTC solo si no hay más llamadas
+//                if (MultiCallManager.getAllCalls().size <= 1) {
+//                    webRtcManager.dispose()
+//                    log.d(tag = TAG) { "WebRTC disposed - no more active calls" }
+//                }
+//
+//                // Finalizar llamada
+//                delay(500) // Total 1 segundo como antes
+//                CallStateManager.callEnded(targetCallData.callId)
+//                notifyCallStateChanged(CallState.ENDED)
+//
+//                // Limpiar datos de cuenta
+//                if (accountInfo.currentCallData?.callId == targetCallData.callId) {
+//                    accountInfo.resetCallState()
+//                }
+//
+//                handleCallTermination()
+//
+//                log.d(tag = TAG) { "Call cleanup completed successfully" }
+//
+//            } catch (e: Exception) {
+//                log.e(tag = TAG) { "Error during call cleanup: ${e.message}" }
+//                // Forzar limpieza en caso de error
+//                audioManager.stopAllRingtones()
+//                if (accountInfo.currentCallData?.callId == targetCallData.callId) {
+//                    accountInfo.resetCallState()
+//                }
+//            }
+//        }
+//    }
+
+    fun endCall(callId: String? = null) {
         val accountInfo = ensureCurrentAccount() ?: run {
             log.e(tag = TAG) { "No current account available for end call" }
             return
@@ -1290,61 +1397,70 @@ class SipCoreManager private constructor(
         // CRÍTICO: Iniciar proceso de finalización
         CallStateManager.startEnding(targetCallData.callId)
 
-        // CRÍTICO: Enviar mensaje apropiado según estado y dirección
-        when (currentState) {
-            CallState.CONNECTED, CallState.STREAMS_RUNNING, CallState.PAUSED -> {
-                log.d(tag = TAG) { "Sending BYE for established call (${targetCallData.direction})" }
-                messageHandler.sendBye(accountInfo, targetCallData)
-                callHistoryManager.addCallLog(targetCallData, CallTypes.SUCCESS, endTime)
-            }
-
-            CallState.OUTGOING_INIT, CallState.OUTGOING_PROGRESS, CallState.OUTGOING_RINGING -> {
-                log.d(tag = TAG) { "Sending CANCEL for outgoing call" }
-                messageHandler.sendCancel(accountInfo, targetCallData)
-                callHistoryManager.addCallLog(targetCallData, CallTypes.ABORTED, endTime)
-            }
-
-            CallState.INCOMING_RECEIVED -> {
-                log.d(tag = TAG) { "Sending DECLINE for incoming call" }
-                messageHandler.sendDeclineResponse(accountInfo, targetCallData)
-                callHistoryManager.addCallLog(targetCallData, CallTypes.DECLINED, endTime)
-            }
-
-            else -> {
-                log.w(tag = TAG) { "Ending call in unexpected state: $currentState" }
-                messageHandler.sendBye(accountInfo, targetCallData)
-            }
-        }
-
-        clearDtmfQueue()
-
         // NUEVO: Notificar que la llamada terminó para esta cuenta específica
         val accountKey = "${accountInfo.username}@${accountInfo.domain}"
         notifyCallEndedForSpecificAccount(accountKey)
 
-        // MEJORADO: Una sola corrutina para manejar la limpieza
+        clearDtmfQueue()
+
+        // Lanzar operaciones suspend en paralelo para máximo rendimiento
         CoroutineScope(Dispatchers.IO).launch {
             try {
-                // Esperar un poco para que se envíe el mensaje SIP
-                delay(500)
+                // CRÍTICO: Enviar mensaje apropiado según estado y dirección
+                val messageJob = launch {
+                    when (currentState) {
+                        CallState.CONNECTED, CallState.STREAMS_RUNNING, CallState.PAUSED -> {
+                            log.d(tag = TAG) { "Sending BYE for established call (${targetCallData.direction})" }
+                            messageHandler.sendBye(accountInfo, targetCallData)
+                            callHistoryManager.addCallLog(targetCallData, CallTypes.SUCCESS, endTime)
+                        }
 
-                // Limpiar WebRTC solo si no hay más llamadas
-                if (MultiCallManager.getAllCalls().size <= 1) {
-                    webRtcManager.dispose()
-                    log.d(tag = TAG) { "WebRTC disposed - no more active calls" }
+                        CallState.OUTGOING_INIT, CallState.OUTGOING_PROGRESS, CallState.OUTGOING_RINGING -> {
+                            log.d(tag = TAG) { "Sending CANCEL for outgoing call" }
+                            messageHandler.sendCancel(accountInfo, targetCallData)
+                            callHistoryManager.addCallLog(targetCallData, CallTypes.ABORTED, endTime)
+                        }
+
+                        CallState.INCOMING_RECEIVED -> {
+                            log.d(tag = TAG) { "Sending DECLINE for incoming call" }
+                            messageHandler.sendDeclineResponse(accountInfo, targetCallData)
+                            callHistoryManager.addCallLog(targetCallData, CallTypes.DECLINED, endTime)
+                        }
+
+                        else -> {
+                            log.w(tag = TAG) { "Ending call in unexpected state: $currentState" }
+                            messageHandler.sendBye(accountInfo, targetCallData)
+                        }
+                    }
                 }
 
-                // Finalizar llamada
-                delay(500) // Total 1 segundo como antes
-                CallStateManager.callEnded(targetCallData.callId)
-                notifyCallStateChanged(CallState.ENDED)
+                // Cleanup job que se ejecuta en paralelo
+                val cleanupJob = launch {
+                    // Esperar un poco para que se envíe el mensaje SIP
+                    delay(500)
 
-                // Limpiar datos de cuenta
-                if (accountInfo.currentCallData?.callId == targetCallData.callId) {
-                    accountInfo.resetCallState()
+                    // Limpiar WebRTC solo si no hay más llamadas
+                    if (MultiCallManager.getAllCalls().size <= 1) {
+                        webRtcManager.dispose()
+                        log.d(tag = TAG) { "WebRTC disposed - no more active calls" }
+                    }
+
+                    // Finalizar llamada
+                    delay(500) // Total 1 segundo como antes
+                    CallStateManager.callEnded(targetCallData.callId)
+                    notifyCallStateChanged(CallState.ENDED)
+
+                    // Limpiar datos de cuenta
+                    if (accountInfo.currentCallData?.callId == targetCallData.callId) {
+                        accountInfo.resetCallState()
+                    }
+
+                    handleCallTermination()
                 }
 
-                handleCallTermination()
+                // Esperar que ambos jobs terminen
+                messageJob.join()
+                cleanupJob.join()
 
                 log.d(tag = TAG) { "Call cleanup completed successfully" }
 
@@ -1358,8 +1474,6 @@ class SipCoreManager private constructor(
             }
         }
     }
-
-
     fun acceptCall(callId: String? = null) {
         val accountInfo = ensureCurrentAccount() ?: run {
             log.e(tag = TAG) { "No current account available for accepting call" }
