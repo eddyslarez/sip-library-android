@@ -10,6 +10,9 @@ import com.eddyslarez.siplibrary.data.database.entities.*
 import com.eddyslarez.siplibrary.data.database.dao.*
 import com.eddyslarez.siplibrary.data.database.converters.DatabaseConverters
 import com.eddyslarez.siplibrary.utils.log
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import java.util.concurrent.Executors
 
 /**
@@ -23,9 +26,10 @@ import java.util.concurrent.Executors
         CallLogEntity::class,
         CallDataEntity::class,
         ContactEntity::class,
-        CallStateHistoryEntity::class
+        CallStateHistoryEntity::class,
+        AppConfigEntity::class
     ],
-    version = 1,
+    version = 2, // INCREMENTAR VERSION
     exportSchema = false
 )
 @TypeConverters(DatabaseConverters::class)
@@ -36,6 +40,7 @@ abstract class SipDatabase : RoomDatabase() {
     abstract fun callDataDao(): CallDataDao
     abstract fun contactDao(): ContactDao
     abstract fun callStateDao(): CallHistoryDao
+    abstract fun appConfigDao(): AppConfigDao  // NUEVO DAO
 
     companion object {
         @Volatile
@@ -55,11 +60,10 @@ abstract class SipDatabase : RoomDatabase() {
                 "sip_database"
             )
                 .fallbackToDestructiveMigration() // TEMPORAL: para desarrollo
-                .enableMultiInstanceInvalidation() // NUEVO: Para múltiples instancias
+                .enableMultiInstanceInvalidation()
                 .setJournalMode(RoomDatabase.JournalMode.WRITE_AHEAD_LOGGING)
                 .setQueryCallback(object : RoomDatabase.QueryCallback {
                     override fun onQuery(sqlQuery: String, bindArgs: List<Any?>) {
-                        // Log para debugging (opcional)
                         log.d { "Query: $sqlQuery" }
                     }
                 }, Executors.newSingleThreadExecutor())
@@ -67,13 +71,24 @@ abstract class SipDatabase : RoomDatabase() {
                     override fun onCreate(db: SupportSQLiteDatabase) {
                         super.onCreate(db)
                         log.d { "Database created successfully" }
+
+                        // Crear configuración por defecto
+                        CoroutineScope(Dispatchers.IO).launch {
+                            try {
+                                val instance = getDatabase(context)
+                                val defaultConfig = AppConfigEntity()
+                                instance.appConfigDao().insertConfig(defaultConfig)
+                                log.d { "Default configuration created" }
+                            } catch (e: Exception) {
+                                log.e { "Error creating default configuration: ${e.message}" }
+                            }
+                        }
                     }
 
                     override fun onOpen(db: SupportSQLiteDatabase) {
                         super.onOpen(db)
                         log.d { "Database opened successfully" }
 
-                        // NUEVO: Verificar integridad al abrir
                         try {
                             db.execSQL("PRAGMA integrity_check;")
                             log.d { "Database integrity check passed" }

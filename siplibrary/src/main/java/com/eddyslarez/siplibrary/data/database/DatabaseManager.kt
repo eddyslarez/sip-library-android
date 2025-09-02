@@ -1,6 +1,7 @@
 package com.eddyslarez.siplibrary.data.database
 
 import android.app.Application
+import android.net.Uri
 import androidx.room.withTransaction
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -413,5 +414,76 @@ class DatabaseManager private constructor(application: Application) {
         } catch (e: Exception) {
             log.e(tag = TAG) { "Error closing database: ${e.message}" }
         }
+    }
+
+
+    /**
+     * Obtiene la configuración de la aplicación
+     */
+    suspend fun getAppConfig(): AppConfigEntity? {
+        return repository.getAppConfig()
+    }
+
+    /**
+     * Flow para observar cambios en la configuración
+     */
+    fun getAppConfigFlow(): Flow<AppConfigEntity?> {
+        return repository.getAppConfigFlow()
+    }
+
+    /**
+     * Crea o actualiza configuración completa
+     */
+    suspend fun createOrUpdateAppConfig(
+        incomingRingtoneUri: String? = null,
+        outgoingRingtoneUri: String? = null,
+        defaultDomain: String? = null,
+        webSocketUrl: String? = null,
+        userAgent: String? = null,
+        enableLogs: Boolean? = null,
+        enableAutoReconnect: Boolean? = null,
+        pingIntervalMs: Long? = null
+    ): AppConfigEntity {
+        return repository.createOrUpdateAppConfig(
+            incomingRingtoneUri = incomingRingtoneUri,
+            outgoingRingtoneUri = outgoingRingtoneUri,
+            defaultDomain = defaultDomain,
+            webSocketUrl = webSocketUrl,
+            userAgent = userAgent,
+            enableLogs = enableLogs,
+            enableAutoReconnect = enableAutoReconnect,
+            pingIntervalMs = pingIntervalMs
+        )
+    }
+
+    /**
+     * Actualiza URI del ringtone de entrada
+     */
+    suspend fun updateIncomingRingtoneUri(uri: Uri?) {
+        repository.updateIncomingRingtoneUri(uri?.toString())
+    }
+
+    /**
+     * Actualiza URI del ringtone de salida
+     */
+    suspend fun updateOutgoingRingtoneUri(uri: Uri?) {
+        repository.updateOutgoingRingtoneUri(uri?.toString())
+    }
+
+    /**
+     * Actualiza ambas URIs de ringtones
+     */
+    suspend fun updateRingtoneUris(incomingUri: Uri?, outgoingUri: Uri?) {
+        repository.updateRingtoneUris(
+            incomingUri?.toString(),
+            outgoingUri?.toString()
+        )
+    }
+
+    /**
+     * Carga configuración inicial o crea una por defecto
+     */
+    suspend fun loadOrCreateDefaultConfig(): AppConfigEntity {
+        return getAppConfig() ?: createOrUpdateAppConfig()
     }
 }

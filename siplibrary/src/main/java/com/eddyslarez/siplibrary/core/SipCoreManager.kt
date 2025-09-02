@@ -2,10 +2,12 @@ package com.eddyslarez.siplibrary.core
 
 import android.app.Application
 import android.content.Context
+import android.net.Uri
 import com.eddyslarez.siplibrary.EddysSipLibrary
 import com.eddyslarez.siplibrary.data.database.DatabaseAutoIntegration
 import com.eddyslarez.siplibrary.data.database.DatabaseManager
 import com.eddyslarez.siplibrary.data.database.converters.toCallLogs
+import com.eddyslarez.siplibrary.data.database.entities.AppConfigEntity
 import com.eddyslarez.siplibrary.data.models.*
 import com.eddyslarez.siplibrary.data.services.audio.AudioDevice
 import com.eddyslarez.siplibrary.data.services.audio.AudioDeviceManager
@@ -50,6 +52,9 @@ class SipCoreManager private constructor(
     val platformInfo: PlatformInfo,
     val settingsDataStore: SettingsDataStore,
 ) {
+
+    private var databaseManager: DatabaseManager? = null
+    private var loadedConfig: AppConfigEntity? = null
     private var isRegistrationInProgress = false
     private var healthCheckJob: Job? = null
     private val registrationTimeout = 30000L
@@ -144,6 +149,7 @@ class SipCoreManager private constructor(
 
     fun initialize() {
         log.d(tag = TAG) { "Initializing SIP Core with optimized call states" }
+        loadConfigurationFromDatabase()
 
         webRtcManager.initialize()
         setupWebRtcEventListener()
@@ -156,6 +162,57 @@ class SipCoreManager private constructor(
 
         networkMonitor.startMonitoring()
         healthMonitor.startMonitoring()
+    }
+
+    /**
+     * NUEVO: Carga configuración desde la base de datos
+     */
+    private fun loadConfigurationFromDatabase() {
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                // Inicializar database manager si no existe
+                if (databaseManager == null) {
+                    databaseManager = DatabaseManager.getInstance(application)
+                }
+
+                // Cargar configuración
+                loadedConfig = databaseManager?.loadOrCreateDefaultConfig()
+
+                // Aplicar configuración de ringtones si existen
+                loadedConfig?.let { config ->
+                    log.d(tag = TAG) { "Loading configuration from database" }
+
+                    // Aplicar ringtones
+                    config.incomingRingtoneUri?.let { uriString ->
+                        try {
+                            val uri = Uri.parse(uriString)
+                            audioManager.setIncomingRingtone(uri)
+                            log.d(tag = TAG) { "Loaded incoming ringtone from DB: $uriString" }
+                        } catch (e: Exception) {
+                            log.e(tag = TAG) { "Error loading incoming ringtone URI: ${e.message}" }
+                        }
+                    }
+
+                    config.outgoingRingtoneUri?.let { uriString ->
+                        try {
+                            val uri = Uri.parse(uriString)
+                            audioManager.setOutgoingRingtone(uri)
+                            log.d(tag = TAG) { "Loaded outgoing ringtone from DB: $uriString" }
+                        } catch (e: Exception) {
+                            log.e(tag = TAG) { "Error loading outgoing ringtone URI: ${e.message}" }
+                        }
+                    }
+
+                    log.d(tag = TAG) { "Configuration loaded successfully from database" }
+                } ?: run {
+                    log.d(tag = TAG) { "No configuration found in database, using defaults" }
+                }
+
+            } catch (e: Exception) {
+                log.e(tag = TAG) { "Error loading configuration from database: ${e.message}" }
+                // Continuar con configuración por defecto
+            }
+        }
     }
 
 
@@ -588,7 +645,7 @@ class SipCoreManager private constructor(
         }
     }
 
-     fun register(
+    fun register(
         username: String,
         password: String,
         domain: String,
@@ -1412,19 +1469,31 @@ class SipCoreManager private constructor(
                         CallState.CONNECTED, CallState.STREAMS_RUNNING, CallState.PAUSED -> {
                             log.d(tag = TAG) { "Sending BYE for established call (${targetCallData.direction})" }
                             messageHandler.sendBye(accountInfo, targetCallData)
-                            callHistoryManager.addCallLog(targetCallData, CallTypes.SUCCESS, endTime)
+                            callHistoryManager.addCallLog(
+                                targetCallData,
+                                CallTypes.SUCCESS,
+                                endTime
+                            )
                         }
 
                         CallState.OUTGOING_INIT, CallState.OUTGOING_PROGRESS, CallState.OUTGOING_RINGING -> {
                             log.d(tag = TAG) { "Sending CANCEL for outgoing call" }
                             messageHandler.sendCancel(accountInfo, targetCallData)
-                            callHistoryManager.addCallLog(targetCallData, CallTypes.ABORTED, endTime)
+                            callHistoryManager.addCallLog(
+                                targetCallData,
+                                CallTypes.ABORTED,
+                                endTime
+                            )
                         }
 
                         CallState.INCOMING_RECEIVED -> {
                             log.d(tag = TAG) { "Sending DECLINE for incoming call" }
                             messageHandler.sendDeclineResponse(accountInfo, targetCallData)
-                            callHistoryManager.addCallLog(targetCallData, CallTypes.DECLINED, endTime)
+                            callHistoryManager.addCallLog(
+                                targetCallData,
+                                CallTypes.DECLINED,
+                                endTime
+                            )
                         }
 
                         else -> {
@@ -1474,6 +1543,7 @@ class SipCoreManager private constructor(
             }
         }
     }
+
     fun acceptCall(callId: String? = null) {
         val accountInfo = ensureCurrentAccount() ?: run {
             log.e(tag = TAG) { "No current account available for accepting call" }
@@ -1664,6 +1734,59 @@ class SipCoreManager private constructor(
                 isDtmfProcessing = false
             }
         }
+    }
+
+    /**
+     * NUEVO: Guarda la URI del ringtone de entrada en la base de datos
+     */
+    fun saveIncomingRingtoneUri(uri: Uri) {
+        try {
+            CoroutineScope(Dispatchers.IO).launch {
+                databaseManager?.updateIncomingRingtoneUri(uri)
+                audioManager.setIncomingRingtone(uri)
+                log.d(tag = TAG) { "Incoming ringtone URI saved to database: $uri" }
+            }
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error saving incoming ringtone URI: ${e.message}" }
+        }
+    }
+
+    /**
+     * NUEVO: Guarda la URI del ringtone de salida en la base de datos
+     */
+    fun saveOutgoingRingtoneUri(uri: Uri) {
+        try {
+            CoroutineScope(Dispatchers.IO).launch {
+                databaseManager?.updateOutgoingRingtoneUri(uri)
+                audioManager.setOutgoingRingtone(uri)
+                log.d(tag = TAG) { "Outgoing ringtone URI saved to database: $uri" }
+            }
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error saving outgoing ringtone URI: ${e.message}" }
+        }
+    }
+
+    /**
+     * NUEVO: Guarda ambas URIs de ringtones en la base de datos
+     */
+    suspend fun saveRingtoneUris(incomingUri: Uri?, outgoingUri: Uri?) {
+        try {
+            databaseManager?.updateRingtoneUris(incomingUri, outgoingUri)
+
+            incomingUri?.let { audioManager.setIncomingRingtone(it) }
+            outgoingUri?.let { audioManager.setOutgoingRingtone(it) }
+
+            log.d(tag = TAG) { "Both ringtone URIs saved to database - Incoming: $incomingUri, Outgoing: $outgoingUri" }
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error saving ringtone URIs: ${e.message}" }
+        }
+    }
+
+    /**
+     * NUEVO: Obtiene la configuración actual cargada
+     */
+    fun getLoadedConfig(): AppConfigEntity? {
+        return loadedConfig
     }
 
     private suspend fun sendSingleDtmf(digit: Char, duration: Int): Boolean {
@@ -1912,6 +2035,7 @@ class SipCoreManager private constructor(
         }
 
         log.d(tag = TAG) { "Switching account to push mode: $accountKey" }
+        updateRegistrationState(accountKey, RegistrationState.IN_PROGRESS)
 
         try {
             // Actualizar user agent para modo push
@@ -1945,6 +2069,7 @@ class SipCoreManager private constructor(
         }
 
         log.d(tag = TAG) { "Switching account to foreground mode: $accountKey" }
+        updateRegistrationState(accountKey, RegistrationState.IN_PROGRESS)
 
         try {
             // Actualizar user agent para modo foreground (normal)

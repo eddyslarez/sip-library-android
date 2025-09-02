@@ -1,6 +1,9 @@
 package com.eddyslarez.siplibrary.data.database.converters
 
 
+import android.net.Uri
+import com.eddyslarez.siplibrary.EddysSipLibrary
+import com.eddyslarez.siplibrary.data.database.entities.AppConfigEntity
 import com.eddyslarez.siplibrary.data.database.entities.CallLogEntity
 import com.eddyslarez.siplibrary.data.database.repository.CallLogWithContact
 import com.eddyslarez.siplibrary.data.models.CallDirections
@@ -79,4 +82,59 @@ private fun formatStartDate(timestamp: Long): String {
 
 private fun formatPhoneNumber(phoneNumber: String): String {
     return phoneNumber.trim()
+}
+
+
+/**
+ * Convierte AppConfigEntity a SipConfig
+ */
+fun AppConfigEntity.toSipConfig(): EddysSipLibrary.SipConfig {
+    return EddysSipLibrary.SipConfig(
+        defaultDomain = this.defaultDomain,
+        webSocketUrl = this.webSocketUrl,
+        userAgent = this.userAgent,
+        enableLogs = this.enableLogs,
+        enableAutoReconnect = this.enableAutoReconnect,
+        pingIntervalMs = this.pingIntervalMs,
+        incomingRingtoneUri = this.incomingRingtoneUri?.let { Uri.parse(it) },
+        outgoingRingtoneUri = this.outgoingRingtoneUri?.let { Uri.parse(it) }
+    )
+}
+
+/**
+ * Convierte SipConfig a AppConfigEntity
+ */
+fun EddysSipLibrary.SipConfig.toAppConfigEntity(): AppConfigEntity {
+    return AppConfigEntity(
+        defaultDomain = this.defaultDomain,
+        webSocketUrl = this.webSocketUrl,
+        userAgent = this.userAgent,
+        enableLogs = this.enableLogs,
+        enableAutoReconnect = this.enableAutoReconnect,
+        pingIntervalMs = this.pingIntervalMs,
+        incomingRingtoneUri = this.incomingRingtoneUri?.toString(),
+        outgoingRingtoneUri = this.outgoingRingtoneUri?.toString()
+    )
+}
+
+/**
+ * Merge SipConfig con AppConfigEntity (prioridad a SipConfig)
+ */
+fun EddysSipLibrary.SipConfig.mergeWithDatabaseConfig(dbConfig: AppConfigEntity?): EddysSipLibrary.SipConfig {
+    if (dbConfig == null) return this
+
+    return this.copy(
+        // Usar config de parámetros si está presente, sino usar de BD
+        defaultDomain = if (this.defaultDomain.isNotEmpty()) this.defaultDomain else dbConfig.defaultDomain,
+        webSocketUrl = if (this.webSocketUrl.isNotEmpty()) this.webSocketUrl else dbConfig.webSocketUrl,
+        userAgent = if (this.userAgent.isNotEmpty()) this.userAgent else dbConfig.userAgent,
+        // Para ringtones, priorizar BD sobre config inicial
+        incomingRingtoneUri = dbConfig.incomingRingtoneUri?.let { Uri.parse(it) } ?: this.incomingRingtoneUri,
+        outgoingRingtoneUri = dbConfig.outgoingRingtoneUri?.let { Uri.parse(it) } ?: this.outgoingRingtoneUri,
+        // Para booleanos y números, usar config de parámetros
+        enableLogs = this.enableLogs,
+        enableAutoReconnect = this.enableAutoReconnect,
+        pingIntervalMs = this.pingIntervalMs,
+        pushModeConfig = this.pushModeConfig
+    )
 }

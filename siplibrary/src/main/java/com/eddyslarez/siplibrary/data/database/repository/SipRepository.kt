@@ -17,6 +17,7 @@ import com.eddyslarez.siplibrary.utils.log
  */
 class SipRepository(private val database: SipDatabase) {
 
+    private val appConfigDao = database.appConfigDao()
     private val sipAccountDao = database.sipAccountDao()
     private val callLogDao = database.callLogDao()
     private val callDataDao = database.callDataDao()
@@ -475,6 +476,101 @@ class SipRepository(private val database: SipDatabase) {
         callStateHistoryDao.keepOnlyRecentStateHistory(stateHistoryLimit)
 
         log.d(tag = TAG) { "Kept only recent data: $callLogsLimit call logs, $stateHistoryLimit state history" }
+    }
+
+
+    // === OPERACIONES DE CONFIGURACIÓN ===
+
+    /**
+     * Obtiene la configuración de la aplicación
+     */
+    suspend fun getAppConfig(): AppConfigEntity? {
+        return appConfigDao.getConfig()
+    }
+
+    /**
+     * Flow para observar cambios en la configuración
+     */
+    fun getAppConfigFlow(): Flow<AppConfigEntity?> {
+        return appConfigDao.getConfigFlow()
+    }
+
+    /**
+     * Crea o actualiza la configuración completa
+     */
+    suspend fun createOrUpdateAppConfig(
+        incomingRingtoneUri: String? = null,
+        outgoingRingtoneUri: String? = null,
+        defaultDomain: String? = null,
+        webSocketUrl: String? = null,
+        userAgent: String? = null,
+        enableLogs: Boolean? = null,
+        enableAutoReconnect: Boolean? = null,
+        pingIntervalMs: Long? = null
+    ): AppConfigEntity {
+        val existingConfig = appConfigDao.getConfig()
+
+        val config = if (existingConfig != null) {
+            existingConfig.copy(
+                incomingRingtoneUri = incomingRingtoneUri ?: existingConfig.incomingRingtoneUri,
+                outgoingRingtoneUri = outgoingRingtoneUri ?: existingConfig.outgoingRingtoneUri,
+                defaultDomain = defaultDomain ?: existingConfig.defaultDomain,
+                webSocketUrl = webSocketUrl ?: existingConfig.webSocketUrl,
+                userAgent = userAgent ?: existingConfig.userAgent,
+                enableLogs = enableLogs ?: existingConfig.enableLogs,
+                enableAutoReconnect = enableAutoReconnect ?: existingConfig.enableAutoReconnect,
+                pingIntervalMs = pingIntervalMs ?: existingConfig.pingIntervalMs,
+                updatedAt = System.currentTimeMillis()
+            )
+        } else {
+            AppConfigEntity(
+                incomingRingtoneUri = incomingRingtoneUri,
+                outgoingRingtoneUri = outgoingRingtoneUri,
+                defaultDomain = defaultDomain ?: "",
+                webSocketUrl = webSocketUrl ?: "",
+                userAgent = userAgent ?: "",
+                enableLogs = enableLogs ?: true,
+                enableAutoReconnect = enableAutoReconnect ?: true,
+                pingIntervalMs = pingIntervalMs ?: 30000L
+            )
+        }
+
+        appConfigDao.insertConfig(config)
+        log.d(tag = TAG) { "App configuration created/updated" }
+
+        return config
+    }
+
+    /**
+     * Actualiza solo la URI del ringtone de entrada
+     */
+    suspend fun updateIncomingRingtoneUri(uri: String?) {
+        appConfigDao.updateIncomingRingtoneUri(uri)
+        log.d(tag = TAG) { "Incoming ringtone URI updated: $uri" }
+    }
+
+    /**
+     * Actualiza solo la URI del ringtone de salida
+     */
+    suspend fun updateOutgoingRingtoneUri(uri: String?) {
+        appConfigDao.updateOutgoingRingtoneUri(uri)
+        log.d(tag = TAG) { "Outgoing ringtone URI updated: $uri" }
+    }
+
+    /**
+     * Actualiza ambas URIs de ringtones
+     */
+    suspend fun updateRingtoneUris(incomingUri: String?, outgoingUri: String?) {
+        val existingConfig = appConfigDao.getConfig() ?: AppConfigEntity()
+
+        val updatedConfig = existingConfig.copy(
+            incomingRingtoneUri = incomingUri,
+            outgoingRingtoneUri = outgoingUri,
+            updatedAt = System.currentTimeMillis()
+        )
+
+        appConfigDao.insertConfig(updatedConfig)
+        log.d(tag = TAG) { "Both ringtone URIs updated - Incoming: $incomingUri, Outgoing: $outgoingUri" }
     }
 }
 

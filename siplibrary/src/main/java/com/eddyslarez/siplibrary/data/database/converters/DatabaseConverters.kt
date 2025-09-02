@@ -1,5 +1,6 @@
 package com.eddyslarez.siplibrary.data.database.converters
 
+import android.net.Uri
 import androidx.room.TypeConverter
 import com.eddyslarez.siplibrary.data.models.*
 
@@ -141,5 +142,15 @@ class DatabaseConverters {
         } else {
             data.split(",").map { it.trim() }.toSet()
         }
+    }
+
+    @TypeConverter
+    fun fromUri(uri: Uri?): String? {
+        return uri?.toString()
+    }
+
+    @TypeConverter
+    fun toUri(uriString: String?): Uri? {
+        return if (uriString.isNullOrEmpty()) null else Uri.parse(uriString)
     }
 }
