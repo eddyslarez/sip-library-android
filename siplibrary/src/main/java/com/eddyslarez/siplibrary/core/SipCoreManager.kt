@@ -2,6 +2,10 @@ package com.eddyslarez.siplibrary.core
 
 import android.app.Application
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.net.Uri
 import com.eddyslarez.siplibrary.EddysSipLibrary
 import com.eddyslarez.siplibrary.data.database.DatabaseAutoIntegration
@@ -52,7 +56,15 @@ class SipCoreManager private constructor(
     val platformInfo: PlatformInfo,
     val settingsDataStore: SettingsDataStore,
 ) {
-
+    private var connectivityManager: ConnectivityManager? = null
+    private var networkCallback: ConnectivityManager.NetworkCallback? = null
+    private var reconnectionJob: Job? = null
+    private var isNetworkAvailable = false
+    private var wasDisconnectedDueToNetwork = false
+    private val reconnectionAttempts = mutableMapOf<String, Int>()
+    private val maxReconnectionAttempts = 5
+    private val reconnectionBaseDelay = 2000L // 2 segundos base
+    private val reconnectionMaxDelay = 30000L // 30 segundos máximo
     private var databaseManager: DatabaseManager? = null
     private var loadedConfig: AppConfigEntity? = null
     private var isRegistrationInProgress = false
@@ -62,12 +74,10 @@ class SipCoreManager private constructor(
     internal var sipCallbacks: EddysSipLibrary.SipCallbacks? = null
     private var isShuttingDown = false
     val callHistoryManager = CallHistoryManager()
-    private var networkAwareReconnectionService: NetworkAwareReconnectionService? = null
-    private var networkStatusListener: NetworkStatusListener? = null
-    private var autoReconnectEnabled = true
+    private var networkConnectivityListener: NetworkConnectivityListener? = null
+
     private var lifecycleCallback: ((String) -> Unit)? = null
-    private val networkMonitor = NetworkStateMonitor(application)
-    private val healthMonitor = RegistrationHealthMonitor()
+
 
     // Estados de registro por cuenta
     private val _registrationStates = MutableStateFlow<Map<String, RegistrationState>>(emptyMap())
@@ -78,7 +88,6 @@ class SipCoreManager private constructor(
     var callStartTimeMillis: Long = 0
     var currentAccountInfo: AccountInfo? = null
     var isAppInBackground = false
-    private var reconnectionInProgress = false
     private var lastConnectionCheck = 0L
     private val connectionCheckInterval = 30000L
     private val dtmfQueue = mutableListOf<DtmfRequest>()
@@ -87,8 +96,7 @@ class SipCoreManager private constructor(
     var onCallTerminated: (() -> Unit)? = null
     var isCallFromPush = false
     private var registrationCallbackForCall: ((AccountInfo, Boolean) -> Unit)? = null
-    private var connectionRetryCount = 0
-    private val maxRetryAttempts = 5
+
 
     // WebRTC manager and other managers
     val webRtcManager = WebRtcManagerFactory.createWebRtcManager(application)
@@ -154,14 +162,354 @@ class SipCoreManager private constructor(
         webRtcManager.initialize()
         setupWebRtcEventListener()
         setupPlatformLifecycleObservers()
-        startConnectionHealthCheck()
+        setupNetworkMonitoring()
 
         CallStateManager.initialize()
 
-        initializeAutoReconnectionSystem()
+    }
 
-        networkMonitor.startMonitoring()
-        healthMonitor.startMonitoring()
+
+    /**
+     * NUEVO: Configura el monitoreo de conectividad de red
+     */
+    private fun setupNetworkMonitoring() {
+        try {
+            connectivityManager = application.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+
+            networkCallback = object : ConnectivityManager.NetworkCallback() {
+                override fun onAvailable(network: Network) {
+                    log.d(tag = TAG) { "Network available: ${network}" }
+                    handleNetworkAvailable()
+                }
+
+                override fun onLost(network: Network) {
+                    log.d(tag = TAG) { "Network lost: ${network}" }
+                    handleNetworkLost()
+                }
+
+                override fun onCapabilitiesChanged(
+                    network: Network,
+                    networkCapabilities: NetworkCapabilities
+                ) {
+                    val hasInternet = networkCapabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                    log.d(tag = TAG) { "Network capabilities changed. Has internet: $hasInternet" }
+
+                    if (hasInternet && !isNetworkAvailable) {
+                        handleNetworkAvailable()
+                    }
+                }
+            }
+
+            // Registrar callback de red
+            val request = NetworkRequest.Builder()
+                .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+                .addTransportType(NetworkCapabilities.TRANSPORT_CELLULAR)
+                .build()
+
+            connectivityManager?.registerNetworkCallback(request, networkCallback!!)
+
+            // Verificar estado inicial de red
+            checkInitialNetworkState()
+
+            log.d(tag = TAG) { "Network monitoring configured successfully" }
+
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error setting up network monitoring: ${e.message}" }
+        }
+    }
+
+
+    /**
+     * Verifica el estado inicial de la red
+     */
+    private fun checkInitialNetworkState() {
+        try {
+            val networkInfo = connectivityManager?.activeNetworkInfo
+            isNetworkAvailable = networkInfo?.isConnected == true
+
+            log.d(tag = TAG) { "Initial network state - Available: $isNetworkAvailable" }
+
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error checking initial network state: ${e.message}" }
+            isNetworkAvailable = false
+        }
+    }
+
+    /**
+     * Maneja cuando la red está disponible
+     */
+    private fun handleNetworkAvailable() {
+        CoroutineScope(Dispatchers.IO).launch {
+            val wasDisconnected = !isNetworkAvailable || wasDisconnectedDueToNetwork
+            isNetworkAvailable = true
+
+            log.d(tag = TAG) { "Network became available. Was disconnected: $wasDisconnected" }
+
+            if (wasDisconnected) {
+                wasDisconnectedDueToNetwork = false
+
+                // Notificar al listener si existe
+                networkConnectivityListener?.onNetworkRestored()
+
+                // Dar un momento para que la red se estabilice
+                delay(2000)
+
+                // Iniciar proceso de reconexión
+                startReconnectionProcess()
+            }
+        }
+    }
+    /**
+     * Maneja cuando se pierde la red
+     */
+    private fun handleNetworkLost() {
+        isNetworkAvailable = false
+        wasDisconnectedDueToNetwork = true
+
+        log.d(tag = TAG) { "Network lost - marking accounts for reconnection" }
+
+        // Cancelar trabajos de reconexión en curso
+        reconnectionJob?.cancel()
+
+        // Marcar todas las cuentas como desconectadas por red
+        activeAccounts.values.forEach { accountInfo ->
+            val accountKey = "${accountInfo.username}@${accountInfo.domain}"
+            if (accountInfo.isRegistered) {
+                log.d(tag = TAG) { "Marking account as disconnected due to network: $accountKey" }
+                accountInfo.isRegistered = false
+                updateRegistrationState(accountKey, RegistrationState.FAILED)
+            }
+        }
+
+        // Notificar al listener si existe
+        networkConnectivityListener?.onNetworkLost()
+    }
+
+    /**
+     * NUEVO: Inicia el proceso de reconexión automática
+     */
+    private suspend fun startReconnectionProcess() {
+        // Cancelar reconexión anterior si está en curso
+        reconnectionJob?.cancel()
+
+        reconnectionJob = CoroutineScope(Dispatchers.IO).launch {
+            log.d(tag = TAG) { "Starting automatic reconnection process for ${activeAccounts.size} accounts" }
+
+            // Obtener cuentas que necesitan reconectarse
+            val accountsToReconnect = getAccountsNeedingReconnection()
+
+            if (accountsToReconnect.isEmpty()) {
+                log.d(tag = TAG) { "No accounts need reconnection" }
+                return@launch
+            }
+
+            log.d(tag = TAG) { "Reconnecting ${accountsToReconnect.size} accounts" }
+
+            // Reconectar cada cuenta con retry logic
+            accountsToReconnect.forEach { accountInfo ->
+                if (isActive) { // Verificar que la corrutina sigue activa
+                    reconnectAccountWithRetry(accountInfo)
+                }
+            }
+        }
+    }
+
+    /**
+     * Obtiene las cuentas que necesitan reconectarse
+     */
+    private fun getAccountsNeedingReconnection(): List<AccountInfo> {
+        return activeAccounts.values.filter { accountInfo ->
+            // Solo reconectar cuentas que estaban registradas pero ahora no están
+            val wasRegistered = reconnectionAttempts.containsKey("${accountInfo.username}@${accountInfo.domain}")
+            val needsReconnection = !accountInfo.isRegistered &&
+                    (wasDisconnectedDueToNetwork || wasRegistered ||
+                            accountInfo.webSocketClient?.isConnected() != true)
+
+            if (needsReconnection) {
+                log.d(tag = TAG) { "Account needs reconnection: ${accountInfo.username}@${accountInfo.domain}" }
+            }
+
+            needsReconnection
+        }
+    }
+
+    /**
+     * NUEVO: Reconecta una cuenta específica con lógica de retry
+     */
+    private suspend fun reconnectAccountWithRetry(accountInfo: AccountInfo) {
+        val accountKey = "${accountInfo.username}@${accountInfo.domain}"
+
+        if (!isNetworkAvailable) {
+            log.w(tag = TAG) { "Network not available, skipping reconnection for: $accountKey" }
+            return
+        }
+
+        var attempts = reconnectionAttempts[accountKey] ?: 0
+
+        while (attempts < maxReconnectionAttempts && isNetworkAvailable && !accountInfo.isRegistered) {
+            attempts++
+            reconnectionAttempts[accountKey] = attempts
+
+            log.d(tag = TAG) { "Reconnection attempt $attempts/$maxReconnectionAttempts for: $accountKey" }
+
+            try {
+                updateRegistrationState(accountKey, RegistrationState.IN_PROGRESS)
+
+                // Cerrar WebSocket existente si está abierto pero no funcional
+                if (accountInfo.webSocketClient?.isConnected() == true) {
+                    try {
+                        accountInfo.webSocketClient?.close()
+                        delay(1000) // Esperar a que se cierre completamente
+                    } catch (e: Exception) {
+                        log.w(tag = TAG) { "Error closing existing WebSocket: ${e.message}" }
+                    }
+                }
+
+                // Reconectar WebSocket y registrar
+                connectWebSocketAndRegister(accountInfo)
+
+                // Esperar resultado de la conexión
+                val success = waitForReconnectionResult(accountInfo, 10000L) // 10 segundos timeout
+
+                if (success) {
+                    log.d(tag = TAG) { "Successfully reconnected: $accountKey" }
+                    reconnectionAttempts.remove(accountKey) // Limpiar contador de intentos
+                    break
+                } else {
+                    log.w(tag = TAG) { "Reconnection failed for: $accountKey (attempt $attempts)" }
+
+                    if (attempts < maxReconnectionAttempts) {
+                        val delayMs = calculateReconnectionDelay(attempts)
+                        log.d(tag = TAG) { "Waiting ${delayMs}ms before next reconnection attempt for: $accountKey" }
+                        delay(delayMs)
+                    }
+                }
+
+            } catch (e: Exception) {
+                log.e(tag = TAG) { "Error during reconnection attempt $attempts for $accountKey: ${e.message}" }
+
+                if (attempts < maxReconnectionAttempts) {
+                    val delayMs = calculateReconnectionDelay(attempts)
+                    delay(delayMs)
+                } else {
+                    updateRegistrationState(accountKey, RegistrationState.FAILED)
+                }
+            }
+        }
+
+        if (attempts >= maxReconnectionAttempts) {
+            log.e(tag = TAG) { "Max reconnection attempts reached for: $accountKey" }
+            updateRegistrationState(accountKey, RegistrationState.FAILED)
+            reconnectionAttempts.remove(accountKey)
+        }
+    }
+
+
+    /**
+     * Espera el resultado de la reconexión con timeout
+     */
+    private suspend fun waitForReconnectionResult(accountInfo: AccountInfo, timeoutMs: Long): Boolean {
+        val startTime = System.currentTimeMillis()
+
+        while (System.currentTimeMillis() - startTime < timeoutMs) {
+            if (accountInfo.isRegistered) {
+                return true
+            }
+            delay(500) // Verificar cada 500ms
+        }
+
+        return false
+    }
+
+    /**
+     * Calcula el delay para el siguiente intento de reconexión (backoff exponencial)
+     */
+    private fun calculateReconnectionDelay(attempt: Int): Long {
+        val delay = minOf(
+            reconnectionBaseDelay * (1 shl (attempt - 1)), // 2^(attempt-1) * base
+            reconnectionMaxDelay
+        )
+        return delay
+    }
+
+    /**
+     * NUEVO: Método público para forzar reconexión manual
+     */
+    fun forceReconnection() {
+        if (!isNetworkAvailable) {
+            log.w(tag = TAG) { "Cannot force reconnection - network not available" }
+            return
+        }
+
+        log.d(tag = TAG) { "Forcing manual reconnection" }
+
+        CoroutineScope(Dispatchers.IO).launch {
+            // Resetear contadores de intentos
+            reconnectionAttempts.clear()
+
+            // Marcar como desconectado para forzar reconexión
+            wasDisconnectedDueToNetwork = true
+
+            startReconnectionProcess()
+        }
+    }
+
+    /**
+     * NUEVO: Verifica y corrige el estado de conectividad de todas las cuentas
+     */
+    fun verifyAndFixConnectivity() {
+        if (!isNetworkAvailable) {
+            log.d(tag = TAG) { "Network not available, cannot verify connectivity" }
+            return
+        }
+
+        log.d(tag = TAG) { "Verifying and fixing connectivity for all accounts" }
+
+        CoroutineScope(Dispatchers.IO).launch {
+            activeAccounts.values.forEach { accountInfo ->
+                val accountKey = "${accountInfo.username}@${accountInfo.domain}"
+
+                try {
+                    val webSocketConnected = accountInfo.webSocketClient?.isConnected() == true
+                    val isRegistered = accountInfo.isRegistered
+                    val registrationState = getRegistrationState(accountKey)
+
+                    log.d(tag = TAG) {
+                        "Account $accountKey - WebSocket: $webSocketConnected, Registered: $isRegistered, State: $registrationState"
+                    }
+
+                    // Si debería estar registrada pero no lo está, intentar reconectar
+                    if (!isRegistered && !webSocketConnected) {
+                        log.d(tag = TAG) { "Account $accountKey needs reconnection" }
+                        reconnectAccountWithRetry(accountInfo)
+                    }
+
+                } catch (e: Exception) {
+                    log.e(tag = TAG) { "Error verifying connectivity for $accountKey: ${e.message}" }
+                }
+            }
+        }
+    }
+
+    /**
+     * Configura listener para eventos de conectividad
+     */
+    fun setNetworkConnectivityListener(listener: NetworkConnectivityListener?) {
+        this.networkConnectivityListener = listener
+    }
+
+    /**
+     * NUEVO: Obtiene información de estado de conectividad
+     */
+    fun getConnectivityStatus(): Map<String, Any> {
+        return mapOf(
+            "networkAvailable" to isNetworkAvailable,
+            "wasDisconnectedDueToNetwork" to wasDisconnectedDueToNetwork,
+            "reconnectionInProgress" to (reconnectionJob?.isActive == true),
+            "accountsNeedingReconnection" to getAccountsNeedingReconnection().size,
+            "reconnectionAttempts" to reconnectionAttempts.toMap()
+        )
     }
 
     /**
@@ -491,52 +839,6 @@ class SipCoreManager private constructor(
             }
         })
     }
-//    private fun setupPlatformLifecycleObservers() {
-//        platformRegistration.setupNotificationObservers(object : AppLifecycleListener {
-//            override fun onEvent(event: AppLifecycleEvent) {
-//                when (event) {
-//                    AppLifecycleEvent.EnterBackground -> {
-//                        log.d(tag = TAG) { "App entering background" }
-//                        onAppBackgrounded()
-//
-//                        // Notificar al PushModeManager a través de EddysSipLibrary si es necesario
-//                        // Esto se manejaría desde EddysSipLibrary llamando pushModeManager?.onAppBackgrounded()
-//                    }
-//
-//                    AppLifecycleEvent.EnterForeground -> {
-//                        log.d(tag = TAG) { "App entering foreground" }
-//                        onAppForegrounded()
-//
-//                        // Notificar al PushModeManager a través de EddysSipLibrary si es necesario
-//                        // Esto se manejaría desde EddysSipLibrary llamando pushModeManager?.onAppForegrounded()
-//                    }
-//
-//                    else -> {
-//                        log.d(tag = TAG) { "Other lifecycle event: $event" }
-//                    }
-//                }
-//            }
-//        })
-//    }
-//    private fun setupPlatformLifecycleObservers() {
-//        platformRegistration.setupNotificationObservers(object : AppLifecycleListener {
-//            override fun onEvent(event: AppLifecycleEvent) {
-//                when (event) {
-//                    AppLifecycleEvent.EnterBackground -> {
-//                        isAppInBackground = true
-//                        refreshAllRegistrationsWithNewUserAgent()
-//                    }
-//
-//                    AppLifecycleEvent.EnterForeground -> {
-//                        isAppInBackground = false
-//                        refreshAllRegistrationsWithNewUserAgent()
-//                    }
-//
-//                    else -> {}
-//                }
-//            }
-//        })
-//    }
 
     private fun handleWebRtcConnected() {
         callStartTimeMillis = Clock.System.now().toEpochMilliseconds()
@@ -569,18 +871,6 @@ class SipCoreManager private constructor(
         sipCallbacks?.onCallTerminated()
     }
 
-//    private fun refreshAllRegistrationsWithNewUserAgent() {
-//        if (!CallStateManager.getCurrentState().isActive()) {
-//            return
-//        }
-//
-//        activeAccounts.values.forEach { accountInfo ->
-//            if (accountInfo.isRegistered) {
-//                accountInfo.userAgent = userAgent()
-//                messageHandler.sendRegister(accountInfo, isAppInBackground)
-//            }
-//        }
-//    }
     /**
      * Actualiza el user agent de todas las cuentas registradas
      */
@@ -608,42 +898,6 @@ class SipCoreManager private constructor(
         }
     }
 
-    private fun startConnectionHealthCheck() {
-        CoroutineScope(Dispatchers.IO).launch {
-            while (true) {
-                delay(connectionCheckInterval)
-                checkConnectionHealth()
-            }
-        }
-    }
-
-    private fun checkConnectionHealth() {
-        activeAccounts.values.forEach { accountInfo ->
-            val webSocket = accountInfo.webSocketClient
-            if (webSocket != null && accountInfo.isRegistered) {
-                if (!webSocket.isConnected()) {
-                    reconnectAccount(accountInfo)
-                }
-            }
-        }
-    }
-
-    private fun reconnectAccount(accountInfo: AccountInfo) {
-        if (reconnectionInProgress) return
-
-        reconnectionInProgress = true
-        try {
-            accountInfo.webSocketClient?.close()
-            accountInfo.userAgent = userAgent()
-            val headers = createHeaders()
-            val newWebSocketClient = createWebSocketClient(accountInfo, headers)
-            accountInfo.webSocketClient = newWebSocketClient
-        } catch (e: Exception) {
-            log.e(tag = TAG) { "Error during reconnection: ${e.message}" }
-        } finally {
-            reconnectionInProgress = false
-        }
-    }
 
     fun register(
         username: String,
@@ -663,13 +917,11 @@ class SipCoreManager private constructor(
 
             // Inicializar estado de registro para esta cuenta
             updateRegistrationState(accountKey, RegistrationState.IN_PROGRESS)
-            networkAwareReconnectionService?.registerAccount(accountInfo)
 
             connectWebSocketAndRegister(accountInfo)
         } catch (e: Exception) {
             val accountKey = "$username@$domain"
             updateRegistrationState(accountKey, RegistrationState.FAILED)
-            networkAwareReconnectionService?.notifyRegistrationFailed(accountKey, e.message)
             throw Exception("Registration error: ${e.message}")
         }
     }
@@ -682,14 +934,10 @@ class SipCoreManager private constructor(
             messageHandler.sendUnregister(accountInfo)
             accountInfo.webSocketClient?.close()
 
-            networkAwareReconnectionService?.unregisterAccount(accountKey)
-
             activeAccounts.remove(accountKey)
 
-            // Actualizar estado
             updateRegistrationState(accountKey, RegistrationState.NONE)
 
-            // Remover del mapa de estados
             val currentStates = _registrationStates.value.toMutableMap()
             currentStates.remove(accountKey)
             _registrationStates.value = currentStates
@@ -730,42 +978,56 @@ class SipCoreManager private constructor(
         return websocket
     }
 
+
+
     private fun setupWebSocketListeners(websocket: WebSocket, accountInfo: AccountInfo) {
         websocket.setListener(object : MultiplatformWebSocket.Listener {
             override fun onOpen() {
                 CoroutineScope(Dispatchers.IO).launch {
-
-                    reconnectionInProgress = false
                     lastConnectionCheck = Clock.System.now().toEpochMilliseconds()
+
+                    // Limpiar contador de intentos de reconexión al conectarse exitosamente
+                    val accountKey = "${accountInfo.username}@${accountInfo.domain}"
+                    reconnectionAttempts.remove(accountKey)
+
                     messageHandler.sendRegister(accountInfo, isAppInBackground)
                 }
             }
 
             override fun onMessage(message: String) {
                 CoroutineScope(Dispatchers.IO).launch {
-
                     messageHandler.handleSipMessage(message, accountInfo)
                 }
             }
 
             override fun onClose(code: Int, reason: String) {
-                val accountKey = "${accountInfo.username}@${accountInfo.domain}"
-                accountInfo.isRegistered = false
-                updateRegistrationState(accountKey, RegistrationState.NONE)
-                if (code != 1000) {
-                    networkAwareReconnectionService?.notifyWebSocketDisconnected(accountKey)
-                }
-                if (code != 1000) {
-                    handleUnexpectedDisconnection(accountInfo)
+                log.d(tag = TAG) { "WebSocket closed for ${accountInfo.username}@${accountInfo.domain} - Code: $code, Reason: $reason" }
+
+                // Solo marcar para reconexión si no es un cierre normal (código 1000)
+                // y si la red está disponible
+                if (code != 1000 && isNetworkAvailable && !isShuttingDown) {
+                    wasDisconnectedDueToNetwork = true
+
+                    CoroutineScope(Dispatchers.IO).launch {
+                        delay(2000) // Esperar antes de intentar reconectar
+                        if (isNetworkAvailable) {
+                            startReconnectionProcess()
+                        }
+                    }
                 }
             }
 
             override fun onError(error: Exception) {
-                val accountKey = "${accountInfo.username}@${accountInfo.domain}"
+                log.e(tag = TAG) { "WebSocket error for ${accountInfo.username}@${accountInfo.domain}: ${error.message}" }
                 accountInfo.isRegistered = false
+
+                val accountKey = "${accountInfo.username}@${accountInfo.domain}"
                 updateRegistrationState(accountKey, RegistrationState.FAILED)
-                networkAwareReconnectionService?.notifyRegistrationFailed(accountKey, error.message)
-                handleConnectionError(accountInfo, error)
+
+                // Si hay conectividad, marcar para reconexión
+                if (isNetworkAvailable && !isShuttingDown) {
+                    wasDisconnectedDueToNetwork = true
+                }
             }
 
             override fun onPong(timeMs: Long) {
@@ -774,17 +1036,12 @@ class SipCoreManager private constructor(
 
             override fun onRegistrationRenewalRequired(accountKey: String) {
                 CoroutineScope(Dispatchers.IO).launch {
-
                     val account = activeAccounts[accountKey]
-                    if (account != null && account.webSocketClient?.isConnected() == true) {
+                    if (account != null && account.webSocketClient?.isConnected() == true && isNetworkAvailable) {
                         messageHandler.sendRegister(account, isAppInBackground)
-                    } else {
-                        account?.let {
-                            networkAwareReconnectionService?.notifyRegistrationFailed(
-                                accountKey,
-                                "Registration renewal required but WebSocket disconnected"
-                            )
-                        }
+                    } else if (isNetworkAvailable) {
+                        // Si la red está disponible pero WebSocket no, reconectar
+                        account?.let { reconnectAccountWithRetry(it) }
                     }
                 }
             }
@@ -798,11 +1055,8 @@ class SipCoreManager private constructor(
         accountInfo.isRegistered = false
         updateRegistrationState(accountKey, RegistrationState.FAILED)
 
-        // Si hay un callback pendiente para llamada, ejecutarlo con fallo
         registrationCallbackForCall?.invoke(accountInfo, false)
 
-        // Manejar reintento de registro normal
-        handleRegistrationFailure()
     }
 
     fun handleRegistrationSuccess(accountInfo: AccountInfo) {
@@ -821,10 +1075,6 @@ class SipCoreManager private constructor(
             log.d(tag = TAG) { "Set current account to: $accountKey" }
         }
 
-        // Reset retry count on success
-        connectionRetryCount = 0
-
-        networkAwareReconnectionService?.resetReconnectionAttempts(accountKey)
 
         // NUEVO: Forzar notificación inmediata
         CoroutineScope(Dispatchers.Main).launch {
@@ -838,60 +1088,6 @@ class SipCoreManager private constructor(
         }
     }
 
-//    fun handleRegistrationSuccess(accountInfo: AccountInfo) {
-//        val accountKey = "${accountInfo.username}@${accountInfo.domain}"
-//        log.d(tag = TAG) { "Registration successful for $accountKey" }
-//
-//        accountInfo.isRegistered = true
-//        updateRegistrationState(accountKey, RegistrationState.OK)
-//
-//        // Establecer como cuenta actual si no hay una
-//        if (currentAccountInfo == null) {
-//            currentAccountInfo = accountInfo
-//            log.d(tag = TAG) { "Set current account to: $accountKey" }
-//        }
-//        // Reset retry count on success
-//        connectionRetryCount = 0
-//
-//        networkAwareReconnectionService?.resetReconnectionAttempts(accountKey)
-//    }
-
-    private fun handleRegistrationFailure() {
-        if (isShuttingDown) {
-            log.d(tag = TAG) { "Skipping registration failure handling - shutting down" }
-            return
-        }
-
-        if (connectionRetryCount >= maxRetryAttempts) {
-            log.e(tag = TAG) { "Max retry attempts reached - stopping automatic reconnection" }
-            return
-        }
-
-        connectionRetryCount++
-        val delayMs = calculateBackoffDelay(connectionRetryCount)
-
-        log.d(tag = TAG) { "Scheduling reconnection attempt $connectionRetryCount/$maxRetryAttempts in ${delayMs}ms" }
-
-        CoroutineScope(Dispatchers.IO).launch {
-            delay(delayMs)
-            attemptReconnectionForAllAccounts()
-        }
-    }
-
-    private fun attemptReconnectionForAllAccounts() {
-        if (isShuttingDown) {
-            log.d(tag = TAG) { "Skipping reconnection - shutting down" }
-            return
-        }
-        log.d(tag = TAG) { "Attempting reconnection for all accounts" }
-
-        activeAccounts.values.forEach { accountInfo ->
-            if (!accountInfo.isRegistered || accountInfo.webSocketClient?.isConnected() != true) {
-                log.d(tag = TAG) { "Reconnecting account: ${accountInfo.username}" }
-                reconnectAccountImproved(accountInfo)
-            }
-        }
-    }
 
     /**
      * NUEVO: Método para verificar y corregir el estado de todas las cuentas
@@ -934,175 +1130,6 @@ class SipCoreManager private constructor(
         }
     }
 
-    /**
-     * NUEVO: Método para forzar reconexión de TODAS las cuentas que no estén OK
-     */
-    fun forceReconnectAllDisconnectedAccounts() {
-        log.d(tag = TAG) { "Force reconnecting all disconnected accounts" }
-
-        val accountsToReconnect = activeAccounts.values.filter { accountInfo ->
-            val accountKey = "${accountInfo.username}@${accountInfo.domain}"
-            val state = getRegistrationState(accountKey)
-            val needsReconnection = state != RegistrationState.OK
-
-            log.d(tag = TAG) { "Account $accountKey: state=$state, needs reconnection=$needsReconnection" }
-            needsReconnection
-        }
-
-        if (accountsToReconnect.isNotEmpty()) {
-            log.d(tag = TAG) { "Force reconnecting ${accountsToReconnect.size} accounts" }
-
-            CoroutineScope(Dispatchers.IO).launch {
-                accountsToReconnect.forEachIndexed { index, accountInfo ->
-                    try {
-                        if (index > 0) {
-                            delay(2000) // Delay escalonado
-                        }
-
-                        reconnectAccountAfterNetworkRecovery(accountInfo)
-                    } catch (e: Exception) {
-                        log.e(tag = TAG) { "Error force reconnecting ${accountInfo.username}: ${e.message}" }
-                    }
-                }
-            }
-        } else {
-            log.d(tag = TAG) { "All accounts are properly connected" }
-        }
-    }
-
-    private fun reconnectAccountImproved(accountInfo: AccountInfo) {
-        if (isShuttingDown) {
-            log.d(tag = TAG) { "Skipping reconnection - shutting down" }
-            return
-        }
-
-        val accountKey = "${accountInfo.username}@${accountInfo.domain}"
-
-        if (reconnectionInProgress) {
-            log.d(tag = TAG) { "Global reconnection already in progress, queuing $accountKey" }
-
-            // Queue for later processing
-            CoroutineScope(Dispatchers.IO).launch {
-                delay(5000) // Wait 5 seconds and try again
-                if (!reconnectionInProgress && !isShuttingDown) {
-                    reconnectAccountImproved(accountInfo)
-                }
-            }
-            return
-        }
-
-        CoroutineScope(Dispatchers.IO).launch {
-            try {
-                reconnectionInProgress = true
-                updateRegistrationState(accountKey, RegistrationState.IN_PROGRESS)
-
-                log.d(tag = TAG) { "Starting improved reconnection for: $accountKey" }
-
-                // 1. Cerrar conexión existente completamente
-                accountInfo.webSocketClient?.let { webSocket ->
-                    try {
-                        webSocket.stopPingTimer()
-                        webSocket.stopRegistrationRenewalTimer()
-                        webSocket.close()
-                    } catch (e: Exception) {
-                        log.w(tag = TAG) { "Error closing WebSocket for $accountKey: ${e.message}" }
-                    }
-                }
-
-                accountInfo.isRegistered = false
-
-                // 2. Esperar para liberar recursos
-                delay(2000)
-
-                // 3. Verificar que la red esté disponible
-                val networkAvailable = networkAwareReconnectionService?.isNetworkConnected() ?: true
-                if (!networkAvailable) {
-                    log.d(tag = TAG) { "Network not available for reconnection of $accountKey" }
-                    updateRegistrationState(accountKey, RegistrationState.FAILED)
-                    return@launch
-                }
-
-                // 4. Actualizar información de cuenta
-                accountInfo.userAgent = userAgent()
-                accountInfo.resetAuthState()
-
-                // 5. Crear nueva conexión WebSocket
-                val headers = createHeaders()
-                val newWebSocketClient = createWebSocketClient(accountInfo, headers)
-                accountInfo.webSocketClient = newWebSocketClient
-
-                log.d(tag = TAG) { "Improved reconnection initiated for $accountKey" }
-
-            } catch (e: Exception) {
-                log.e(tag = TAG) { "Error during improved reconnection for $accountKey: ${e.message}" }
-                updateRegistrationState(accountKey, RegistrationState.FAILED)
-
-                // Programar reintento si no se alcanzó el máximo
-                if (connectionRetryCount < maxRetryAttempts && !isShuttingDown) {
-                    connectionRetryCount++
-                    CoroutineScope(Dispatchers.IO).launch {
-                        delay(calculateBackoffDelay(connectionRetryCount))
-                        if (!isShuttingDown) {
-                            reconnectAccountImproved(accountInfo)
-                        }
-                    }
-                }
-            } finally {
-                reconnectionInProgress = false
-            }
-        }
-    }
-//    private fun reconnectAccountImproved(accountInfo: AccountInfo) {
-//        if (isShuttingDown) {
-//            log.d(tag = TAG) { "Skipping reconnection - shutting down" }
-//            return
-//        }
-//
-//        if (reconnectionInProgress) {
-//            log.d(tag = TAG) { "Reconnection already in progress for ${accountInfo.username}" }
-//            return
-//        }
-//
-//        val accountKey = "${accountInfo.username}@${accountInfo.domain}"
-//        reconnectionInProgress = true
-//        updateRegistrationState(accountKey, RegistrationState.IN_PROGRESS)
-//
-//        log.d(tag = TAG) { "Starting improved reconnection for: ${accountInfo.username}" }
-//
-//        CoroutineScope(Dispatchers.IO).launch {
-//            try {
-//                // 1. Cerrar conexión existente limpiamente
-//                accountInfo.webSocketClient?.close()
-//                accountInfo.isRegistered = false
-//
-//                // 2. Esperar un momento para que se liberen recursos
-//                delay(1000)
-//
-//                // 3. Actualizar información de la cuenta
-//                accountInfo.userAgent = userAgent()
-//
-//                // 4. Crear nueva conexión WebSocket
-//                val headers = createHeaders()
-//                val newWebSocketClient = createWebSocketClient(accountInfo, headers)
-//                accountInfo.webSocketClient = newWebSocketClient
-//
-//                log.d(tag = TAG) { "Reconnection initiated for ${accountInfo.username}" }
-//
-//            } catch (e: Exception) {
-//                log.e(tag = TAG) { "Error during improved reconnection: ${e.message}" }
-//                updateRegistrationState(accountKey, RegistrationState.FAILED)
-//                reconnectionInProgress = false
-//
-//                // Programar otro intento si no hemos alcanzado el máximo
-//                if (connectionRetryCount < maxRetryAttempts) {
-//                    CoroutineScope(Dispatchers.IO).launch {
-//                        delay(5000) // Esperar 5 segundos antes del siguiente intento
-//                        reconnectAccountImproved(accountInfo)
-//                    }
-//                }
-//            }
-//        }
-//    }
 
     private fun calculateBackoffDelay(attempt: Int): Long {
         val baseDelay = 2000L // 2 segundos base
@@ -1111,31 +1138,6 @@ class SipCoreManager private constructor(
         return minOf(delay, maxDelay)
     }
 
-    private fun handleUnexpectedDisconnection(accountInfo: AccountInfo) {
-        if (!reconnectionInProgress) {
-            CoroutineScope(Dispatchers.IO).launch {
-                delay(2000)
-                reconnectAccount(accountInfo)
-            }
-        }
-    }
-
-    private fun handleConnectionError(accountInfo: AccountInfo, error: Exception) {
-        lastConnectionCheck = 0L
-        when {
-            error.message?.contains("timeout") == true -> {
-                forceReconnectAccount(accountInfo)
-            }
-
-            else -> {
-                reconnectAccount(accountInfo)
-            }
-        }
-    }
-
-    private fun forceReconnectAccount(accountInfo: AccountInfo) {
-        reconnectAccount(accountInfo)
-    }
 
     suspend fun unregisterAllAccounts() {
         log.d(tag = TAG) { "Starting complete unregister and shutdown of all accounts" }
@@ -1144,8 +1146,6 @@ class SipCoreManager private constructor(
         isShuttingDown = true
 
         try {
-            networkAwareReconnectionService?.stop()
-
             // 1. Detener health check inmediatamente
             healthCheckJob?.cancel()
             healthCheckJob = null
@@ -1176,7 +1176,6 @@ class SipCoreManager private constructor(
                 accountsToUnregister.values.forEach { accountInfo ->
                     try {
                         val accountKey = "${accountInfo.username}@${accountInfo.domain}"
-                        networkAwareReconnectionService?.unregisterAccount(accountKey)
 
                         // Detener timers del WebSocket
                         accountInfo.webSocketClient?.let { webSocket ->
@@ -1224,9 +1223,7 @@ class SipCoreManager private constructor(
             // 7. Resetear todos los estados
             callStartTimeMillis = 0
             isAppInBackground = false
-            reconnectionInProgress = false
             isRegistrationInProgress = false
-            connectionRetryCount = 0
             lastConnectionCheck = 0L
             lastRegistrationAttempt = 0L
 
@@ -1928,8 +1925,7 @@ class SipCoreManager private constructor(
     fun isSipCoreManagerHealthy(): Boolean {
         return try {
             webRtcManager.isInitialized() &&
-                    activeAccounts.isNotEmpty() &&
-                    !reconnectionInProgress
+                    activeAccounts.isNotEmpty()
         } catch (e: Exception) {
             false
         }
@@ -1986,10 +1982,21 @@ class SipCoreManager private constructor(
         // Detener todos los ringtones
         audioManager.stopAllRingtones()
 
-        networkAwareReconnectionService?.dispose()
-        networkAwareReconnectionService = null
-        networkStatusListener = null
-        // Limpiar llamadas
+        // Cancelar trabajos de reconexión
+        reconnectionJob?.cancel()
+
+        // Desregistrar callback de red
+        try {
+            networkCallback?.let { callback ->
+                connectivityManager?.unregisterNetworkCallback(callback)
+            }
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error unregistering network callback: ${e.message}" }
+        }
+
+        // Limpiar contadores de reconexión
+        reconnectionAttempts.clear()
+
         MultiCallManager.clearAllCalls()
 
         webRtcManager.dispose()
@@ -1999,7 +2006,12 @@ class SipCoreManager private constructor(
         // Resetear estados
         CallStateManager.resetToIdle()
         CallStateManager.clearHistory()
+
+        isNetworkAvailable = false
+        wasDisconnectedDueToNetwork = false
+        networkConnectivityListener = null
     }
+
 
     fun getMessageHandler(): SipMessageHandler = messageHandler
 
@@ -2206,476 +2218,7 @@ class SipCoreManager private constructor(
             }
         }
     }
-///////// nuevos metodos de red////
 
-
-    /**
-     * NUEVO: Inicializa el sistema de reconexión automática
-     */
-    private fun initializeAutoReconnectionSystem() {
-        if (!config.enableAutoReconnect) {
-            log.d(tag = TAG) { "Auto-reconnection disabled in config" }
-            return
-        }
-
-        try {
-            // Crear servicio de reconexión automática
-            networkAwareReconnectionService = NetworkAwareReconnectionService(application)
-
-            // Configurar callbacks
-            networkAwareReconnectionService?.setCallbacks(
-                onReconnectionRequired = { accountInfo, reason ->
-                    handleReconnectionRequired(accountInfo, reason)
-                },
-                onNetworkStatusChanged = { networkInfo ->
-                    handleNetworkStatusChanged(networkInfo)
-                }
-            )
-
-            // Iniciar el servicio
-            networkAwareReconnectionService?.start()
-
-            log.d(tag = TAG) { "Auto-reconnection system initialized successfully" }
-
-        } catch (e: Exception) {
-            log.e(tag = TAG) { "Error initializing auto-reconnection system: ${e.message}" }
-        }
-    }
-
-    /**
-     * NUEVO: Maneja requerimientos de reconexión
-     */
-    private fun handleReconnectionRequired(
-        accountInfo: AccountInfo,
-        reason: ReconnectionManager.ReconnectionReason
-    ) {
-        if (!autoReconnectEnabled) {
-            log.d(tag = TAG) { "Auto-reconnection disabled, skipping reconnection for ${accountInfo.getAccountIdentity()}" }
-            return
-        }
-
-        log.d(tag = TAG) { "Reconnection required for ${accountInfo.getAccountIdentity()}: $reason" }
-
-        CoroutineScope(Dispatchers.IO).launch {
-            try {
-                when (reason) {
-                    ReconnectionManager.ReconnectionReason.NETWORK_LOST,
-                    ReconnectionManager.ReconnectionReason.NETWORK_CHANGED,
-                    ReconnectionManager.ReconnectionReason.WEBSOCKET_DISCONNECTED -> {
-                        // Reconectar WebSocket y re-registrar
-                        reconnectAccountImproved(accountInfo)
-                    }
-
-                    ReconnectionManager.ReconnectionReason.REGISTRATION_FAILED,
-                    ReconnectionManager.ReconnectionReason.REGISTRATION_EXPIRED -> {
-                        // Solo re-registrar
-                        if (accountInfo.webSocketClient?.isConnected() == true) {
-                            messageHandler.sendRegister(accountInfo, isAppInBackground)
-                        } else {
-                            reconnectAccountImproved(accountInfo)
-                        }
-                    }
-
-                    ReconnectionManager.ReconnectionReason.AUTHENTICATION_FAILED -> {
-                        // Resetear auth y reconectar
-                        accountInfo.resetAuthState()
-                        reconnectAccountImproved(accountInfo)
-                    }
-
-                    ReconnectionManager.ReconnectionReason.MANUAL_TRIGGER -> {
-                        // Forzar reconexión completa
-                        forceReconnectAccount(accountInfo)
-                    }
-
-                    else -> {
-                        // Reconexión genérica
-                        reconnectAccountImproved(accountInfo)
-                    }
-                }
-
-            } catch (e: Exception) {
-                log.e(tag = TAG) { "Error handling reconnection for ${accountInfo.getAccountIdentity()}: ${e.message}" }
-
-                // Notificar fallo al servicio
-                networkAwareReconnectionService?.notifyRegistrationFailed(
-                    accountInfo.getAccountIdentity(),
-                    e.message
-                )
-            }
-        }
-    }
-
-    /**
-     * NUEVO: Maneja cambios de estado de red
-     */
-    private fun handleNetworkStatusChanged(networkInfo: NetworkMonitor.NetworkInfo) {
-        log.d(tag = TAG) { "Network status changed: connected=${networkInfo.isConnected}, internet=${networkInfo.hasInternet}, type=${networkInfo.networkType}" }
-
-        when {
-            networkInfo.isConnected && networkInfo.hasInternet -> {
-                // CRÍTICO: Cuando regresa internet, verificar TODAS las cuentas
-                handleNetworkRecovered(networkInfo)
-            }
-
-            !networkInfo.isConnected -> {
-                handleNetworkLost()
-            }
-        }
-
-        // Notificar al listener externo
-        networkStatusListener?.let { listener ->
-            try {
-                when {
-                    networkInfo.isConnected && networkInfo.hasInternet -> {
-                        listener.onNetworkConnected(networkInfo)
-                        listener.onInternetConnectivityChanged(true)
-                    }
-
-                    !networkInfo.isConnected -> {
-                        listener.onNetworkDisconnected(networkInfo)
-                        listener.onInternetConnectivityChanged(false)
-                    }
-
-                    else -> {
-                        listener.onInternetConnectivityChanged(networkInfo.hasInternet)
-                    }
-                }
-            } catch (e: Exception) {
-                log.e(tag = TAG) { "Error in network status listener: ${e.message}" }
-            }
-        }
-    }
-
-    private fun handleNetworkLost() {
-        log.d(tag = TAG) { "Network lost - marking ${activeAccounts.size} accounts as disconnected" }
-
-        activeAccounts.values.forEach { accountInfo ->
-            val accountKey = "${accountInfo.username}@${accountInfo.domain}"
-
-            // Marcar como no registrada pero mantener la información
-            accountInfo.isRegistered = false
-            updateRegistrationState(accountKey, RegistrationState.NONE)
-
-            log.d(tag = TAG) { "Marked account $accountKey as disconnected due to network loss" }
-        }
-    }
-
-//    private fun handleNetworkStatusChanged(networkInfo: NetworkMonitor.NetworkInfo) {
-//        log.d(tag = TAG) { "Network status changed: connected=${networkInfo.isConnected}, internet=${networkInfo.hasInternet}, type=${networkInfo.networkType}" }
-//
-//        // Notificar al listener externo
-//        networkStatusListener?.let { listener ->
-//            try {
-//                when {
-//                    networkInfo.isConnected && networkInfo.hasInternet -> {
-//                        listener.onNetworkConnected(networkInfo)
-//                        listener.onInternetConnectivityChanged(true)
-//                    }
-//
-//                    !networkInfo.isConnected -> {
-//                        listener.onNetworkDisconnected(networkInfo)
-//                        listener.onInternetConnectivityChanged(false)
-//                    }
-//
-//                    else -> {
-//                        listener.onInternetConnectivityChanged(networkInfo.hasInternet)
-//                    }
-//                }
-//            } catch (e: Exception) {
-//                log.e(tag = TAG) { "Error in network status listener: ${e.message}" }
-//            }
-//        }
-//    }
-    /**
-     * NUEVO: Maneja específicamente la recuperación de red
-     */
-    private fun handleNetworkRecovered(networkInfo: NetworkMonitor.NetworkInfo) {
-        if (isShuttingDown) return
-
-        log.d(tag = TAG) { "Network recovered - checking ${activeAccounts.size} accounts for reconnection" }
-
-        CoroutineScope(Dispatchers.IO).launch {
-            // Esperar que la red se estabilice
-            delay(3000)
-
-            if (isShuttingDown) return@launch
-
-            // CRÍTICO: Procesar TODAS las cuentas activas, no solo las registradas
-            val accountsToCheck = activeAccounts.values.toList()
-
-            log.d(tag = TAG) { "Network recovered - processing ${accountsToCheck.size} accounts" }
-
-            accountsToCheck.forEach { accountInfo ->
-                val accountKey = "${accountInfo.username}@${accountInfo.domain}"
-
-                try {
-                    val currentState = getRegistrationState(accountKey)
-                    log.d(tag = TAG) { "Account $accountKey current state: $currentState, was registered: ${accountInfo.isRegistered}" }
-
-                    // CORREGIDO: Reconectar si NO está en estado OK, independientemente del flag isRegistered
-                    val needsReconnection = currentState != RegistrationState.OK
-
-                    if (needsReconnection) {
-                        log.d(tag = TAG) { "Network recovered - reconnecting account: $accountKey" }
-
-                        // Marcar como no registrada para forzar reconexión completa
-                        accountInfo.isRegistered = false
-                        updateRegistrationState(accountKey, RegistrationState.IN_PROGRESS)
-
-                        // Delay escalonado para evitar saturar el servidor
-                        delay(1000)
-
-                        // Reconectar completamente
-                        reconnectAccountAfterNetworkRecovery(accountInfo)
-
-                    } else {
-                        log.d(tag = TAG) { "Account $accountKey already properly registered" }
-
-                        // Asegurar que el flag interno esté correcto
-                        if (!accountInfo.isRegistered) {
-                            accountInfo.isRegistered = true
-                            log.d(tag = TAG) { "Fixed internal registration flag for $accountKey" }
-                        }
-                    }
-
-                } catch (e: Exception) {
-                    log.e(tag = TAG) { "Error processing account $accountKey after network recovery: ${e.message}" }
-
-                    // En caso de error, forzar reconexión
-                    try {
-                        reconnectAccountAfterNetworkRecovery(accountInfo)
-                    } catch (ex: Exception) {
-                        log.e(tag = TAG) { "Critical error reconnecting $accountKey: ${ex.message}" }
-                    }
-                }
-            }
-
-            log.d(tag = TAG) { "Network recovery processing completed for all accounts" }
-        }
-    }
-
-    /**
-     * NUEVO: Reconecta una cuenta específica después de recuperación de red
-     */
-    private suspend fun reconnectAccountAfterNetworkRecovery(accountInfo: AccountInfo) {
-        val accountKey = "${accountInfo.username}@${accountInfo.domain}"
-
-        try {
-            log.d(tag = TAG) { "Starting network recovery reconnection for: $accountKey" }
-
-            // 1. Cerrar conexión existente limpiamente
-            accountInfo.webSocketClient?.let { webSocket ->
-                try {
-                    webSocket.stopPingTimer()
-                    webSocket.stopRegistrationRenewalTimer()
-                    webSocket.close()
-                } catch (e: Exception) {
-                    log.w(tag = TAG) { "Error closing existing WebSocket for $accountKey: ${e.message}" }
-                }
-            }
-
-            // 2. Marcar como no registrada
-            accountInfo.isRegistered = false
-
-            // 3. Esperar un poco para liberar recursos
-            delay(2000)
-
-            // 4. Actualizar información de cuenta
-            accountInfo.userAgent = userAgent()
-            accountInfo.resetAuthState() // Reset authentication state
-
-            // 5. Crear nueva conexión WebSocket
-            val headers = createHeaders()
-            val newWebSocketClient = createWebSocketClient(accountInfo, headers)
-            accountInfo.webSocketClient = newWebSocketClient
-
-            log.d(tag = TAG) { "Network recovery reconnection initiated for: $accountKey" }
-
-        } catch (e: Exception) {
-            log.e(tag = TAG) { "Error in network recovery reconnection for $accountKey: ${e.message}" }
-            updateRegistrationState(accountKey, RegistrationState.FAILED)
-
-            // Notificar al servicio de reconexión
-            networkAwareReconnectionService?.notifyRegistrationFailed(accountKey, e.message)
-        }
-    }
-
-    /**
-     * NUEVO: Configura listener para cambios de estado de red
-     */
-    fun setNetworkStatusListener(listener: NetworkStatusListener?) {
-        this.networkStatusListener = listener
-        log.d(tag = TAG) { "Network status listener configured" }
-    }
-
-    /**
-     * NUEVO: Habilita o deshabilita la reconexión automática
-     */
-    fun setAutoReconnectEnabled(enabled: Boolean) {
-        this.autoReconnectEnabled = enabled
-        log.d(tag = TAG) { "Auto-reconnection ${if (enabled) "enabled" else "disabled"}" }
-    }
-
-    /**
-     * NUEVO: Verifica si la reconexión automática está habilitada
-     */
-    fun isAutoReconnectEnabled(): Boolean = autoReconnectEnabled
-
-    /**
-     * NUEVO: Fuerza la verificación de red
-     */
-    fun forceNetworkCheck() {
-        networkAwareReconnectionService?.forceNetworkCheck()
-    }
-
-    /**
-     * NUEVO: Fuerza la reconexión de una cuenta específica
-     */
-    fun forceReconnection(username: String, domain: String) {
-        val accountKey = "$username@$domain"
-        networkAwareReconnectionService?.forceReconnection(accountKey)
-    }
-
-    /**
-     * NUEVO: Fuerza la reconexión de todas las cuentas registradas
-     */
-    fun forceReconnectionAllAccounts() {
-        getAllRegisteredAccountKeys().forEach { accountKey ->
-            networkAwareReconnectionService?.forceReconnection(accountKey)
-        }
-    }
-
-    /**
-     * NUEVO: Fuerza el registro de una cuenta específica
-     */
-    fun forceRegister(username: String, domain: String) {
-        val accountKey = "$username@$domain"
-        val accountInfo = activeAccounts[accountKey] ?: run {
-            log.w(tag = TAG) { "Account not found for forced registration: $accountKey" }
-            return
-        }
-
-        CoroutineScope(Dispatchers.IO).launch {
-            try {
-                log.d(tag = TAG) { "Force registering account: $accountKey" }
-
-                // Resetear estado de auth si es necesario
-                accountInfo.resetAuthState()
-
-                // Actualizar user agent
-                accountInfo.userAgent = userAgent()
-
-                if (accountInfo.webSocketClient?.isConnected() == true) {
-                    // WebSocket conectado, solo re-registrar
-                    messageHandler.sendRegister(accountInfo, isAppInBackground)
-                } else {
-                    // Reconectar WebSocket y registrar
-                    reconnectAccountImproved(accountInfo)
-                }
-
-            } catch (e: Exception) {
-                log.e(tag = TAG) { "Error in forced registration for $accountKey: ${e.message}" }
-                updateRegistrationState(accountKey, RegistrationState.FAILED)
-            }
-        }
-    }
-
-    /**
-     * NUEVO: Fuerza el registro de todas las cuentas
-     */
-    fun forceRegisterAllAccounts() {
-        log.d(tag = TAG) { "Force registering all accounts" }
-
-        activeAccounts.keys.forEach { accountKey ->
-            val parts = accountKey.split("@")
-            if (parts.size == 2) {
-                forceRegister(parts[0], parts[1])
-            }
-        }
-    }
-
-    /**
-     * NUEVO: Obtiene información del estado de red actual
-     */
-    fun getCurrentNetworkInfo(): NetworkMonitor.NetworkInfo? {
-        return networkAwareReconnectionService?.getNetworkInfo()
-    }
-
-    /**
-     * NUEVO: Obtiene el estado de la red (conectada/desconectada)
-     */
-    fun isNetworkConnected(): Boolean {
-        return networkAwareReconnectionService?.isNetworkConnected() ?: false
-    }
-
-    /**
-     * NUEVO: Verifica si hay conectividad a internet
-     */
-    fun hasInternetConnectivity(): Boolean {
-        return networkAwareReconnectionService?.hasInternet() ?: false
-    }
-
-    /**
-     * NUEVO: Verifica si una cuenta está en proceso de reconexión
-     */
-    fun isAccountReconnecting(username: String, domain: String): Boolean {
-        val accountKey = "$username@$domain"
-        return networkAwareReconnectionService?.isAccountReconnecting(accountKey) ?: false
-    }
-
-    /**
-     * NUEVO: Obtiene el número de intentos de reconexión para una cuenta
-     */
-    fun getReconnectionAttempts(username: String, domain: String): Int {
-        val accountKey = "$username@$domain"
-        return networkAwareReconnectionService?.getReconnectionAttempts(accountKey) ?: 0
-    }
-
-    /**
-     * NUEVO: Resetea los intentos de reconexión para una cuenta
-     */
-    fun resetReconnectionAttempts(username: String, domain: String) {
-        val accountKey = "$username@$domain"
-        networkAwareReconnectionService?.resetReconnectionAttempts(accountKey)
-    }
-
-    /**
-     * NUEVO: Obtiene estados de reconexión para todas las cuentas
-     */
-    fun getAllReconnectionStates(): Map<String, ReconnectionManager.ReconnectionState> {
-        return networkAwareReconnectionService?.getReconnectionStates() ?: emptyMap()
-    }
-
-    /**
-     * NUEVO: Obtiene información de diagnóstico completa del sistema
-     */
-    fun getCompleteDiagnosticInfo(): String {
-        return buildString {
-            appendLine("=== COMPLETE SIP CORE DIAGNOSTIC ===")
-            appendLine(getSystemHealthReport())
-
-            if (networkAwareReconnectionService != null) {
-                appendLine("\n${networkAwareReconnectionService!!.getDiagnosticInfo()}")
-            } else {
-                appendLine("\nNetwork Aware Reconnection Service: NOT INITIALIZED")
-            }
-
-            appendLine("\n--- Auto-Reconnection Settings ---")
-            appendLine("Auto-Reconnect Enabled: $autoReconnectEnabled")
-            appendLine("Config Auto-Reconnect: ${config.enableAutoReconnect}")
-            appendLine("Network Status Listener: ${networkStatusListener != null}")
-
-            appendLine("\n--- Reconnection States ---")
-            getAllReconnectionStates().forEach { (accountKey, state) ->
-                appendLine("$accountKey:")
-                appendLine("  Reconnecting: ${state.isReconnecting}")
-                appendLine("  Attempts: ${state.attempts}/${state.maxAttempts}")
-                appendLine("  Last Error: ${state.lastError ?: "None"}")
-                appendLine("  Network Available: ${state.isNetworkAvailable}")
-                appendLine("  Reason: ${state.reason}")
-            }
-        }
-    }
 
     // === MÉTODOS DE HISTORIAL CON BASE DE DATOS ===
 
@@ -2932,15 +2475,10 @@ class SipCoreManager private constructor(
         }
     }
 
-    interface NetworkStatusListener {
-        fun onNetworkConnected(networkInfo: NetworkMonitor.NetworkInfo)
-        fun onNetworkDisconnected(previousNetworkInfo: NetworkMonitor.NetworkInfo)
-        fun onNetworkChanged(
-            oldNetworkInfo: NetworkMonitor.NetworkInfo,
-            newNetworkInfo: NetworkMonitor.NetworkInfo
-        )
-
-        fun onInternetConnectivityChanged(hasInternet: Boolean)
-    }
-
+}
+interface NetworkConnectivityListener {
+    fun onNetworkLost()
+    fun onNetworkRestored()
+    fun onReconnectionStarted()
+    fun onReconnectionCompleted(successful: Boolean)
 }
