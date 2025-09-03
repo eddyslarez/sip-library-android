@@ -18,7 +18,7 @@ import android.util.Log
 
 class MCNTranslatorClient6(
     private val apiKey: String,
-    private val model: String = "gpt-4o-realtime-preview-2025-06-03"
+    private val model: String = "wss://api.openai.com/v1/realtime?model=gpt-realtime"
 ) {
     private val client = OkHttpClient.Builder()
         .readTimeout(0, TimeUnit.SECONDS)
@@ -64,7 +64,7 @@ class MCNTranslatorClient6(
 
     companion object {
         private const val TAG = "MCNTranslatorClient"
-        private const val WEBSOCKET_URL = "wss://api.openai.com/v1/realtime"
+        private const val WEBSOCKET_URL = "wss://api.openai.com/v1/realtime?model=gpt-realtime"
     }
 
     // Buffer para audio reproducible optimizado
@@ -157,9 +157,8 @@ class MCNTranslatorClient6(
             }
 
             val request = Request.Builder()
-                .url("$WEBSOCKET_URL?model=$model")
+                .url(WEBSOCKET_URL)
                 .addHeader("Authorization", "Bearer $apiKey")
-                .addHeader("OpenAI-Beta", "realtime=v1")
                 .addHeader("User-Agent", "MCNTranslator/1.0")
                 .build()
 
@@ -265,45 +264,212 @@ class MCNTranslatorClient6(
             }
         }
     }
-
-    // === INICIALIZACIÓN OPTIMIZADA ===
     private suspend fun initializeTranslatorSession() {
-        Log.d(TAG, "Inicializando sesión optimizada...")
-
         val sessionConfig = JSONObject().apply {
             put("type", "session.update")
-            put("event_id", "translator_init_${System.currentTimeMillis()}")
-
             put("session", JSONObject().apply {
-                put("modalities", JSONArray().apply {
-                    put("text")
+                put("type", "realtime")
+                put("model", "gpt-realtime")
+
+                // CORREGIDO: Solo audio para VoIP
+                put("output_modalities", JSONArray().apply {
                     put("audio")
                 })
+
+                // CORREGIDO: Configuración de audio específica para VoIP
+                put("audio", JSONObject().apply {
+                    put("input", JSONObject().apply {
+                        put("format", JSONObject().apply {
+                            put("type", "audio/pcm")
+                            put("rate", 24000) // OpenAI requiere 24kHz
+                        })
+                        put("turn_detection", JSONObject().apply {
+//                            put("type", "server_vad")
+                            put("type", "semantic_vad")
+
+                            put("create_response", true)
+                            // CORREGIDO: Ajustes para VoIP
+//                            put("silence_duration_ms", 800) // Más tiempo para VoIP
+//                            put("prefix_padding_ms", 300)
+//                            put("threshold", 0.5) // Menos sensible para ruido telefónico
+                        })
+                    })
+                    put("output", JSONObject().apply {
+                        put("format", JSONObject().apply {
+                            put("type", "audio/pcm")
+                            put("rate", 24000) // OpenAI salida en 24kHz
+                        })
+                        put("voice", "cedar") // Voz clara para telefónica
+                        put("speed", 1.0)
+                    })
+                })
+
+                // CORREGIDO: Instrucciones específicas para VoIP
                 put("instructions", translatorInstructions)
-                put("voice", "sage") // Voz más rápida
-                put("input_audio_format", "pcm16")
-                put("output_audio_format", "pcm16")
-                put("input_audio_transcription", JSONObject().apply {
-                    put("model", "whisper-1")
-                })
-                put("turn_detection", JSONObject().apply {
-                    put("type", "server_vad")
-                    put("threshold", 0.3) // Más sensible
-                    put("prefix_padding_ms", 200) // Menos padding
-                    put("silence_duration_ms", 500) // Pausa más corta
-                })
-                put("temperature", 0.6) // Muy conservador para precisión
-                put("max_response_output_tokens", 1024) // Reducido para velocidad
             })
         }
-
         if (sendMessage(sessionConfig)) {
-            Log.d(TAG, "Configuración enviada exitosamente")
+            Log.d(TAG, "Configuración VoIP enviada exitosamente")
         } else {
-            Log.e(TAG, "Error enviando configuración")
-            onError?.invoke("Error enviando configuración de sesión")
+            Log.e(TAG, "Error enviando configuración VoIP")
+            onError?.invoke("Error enviando configuración de sesión VoIP")
         }
     }
+
+
+//    // === MANEJO DE MENSAJES OPTIMIZADO ===
+//    @RequiresApi(Build.VERSION_CODES.O)
+//    private suspend fun handleMessage(text: String) {
+//        try {
+//            val json = JSONObject(text)
+//            val type = json.getString("type")
+//
+//            when (type) {
+//                "session.created" -> {
+//                    Log.d(TAG, "Sesión VoIP creada")
+//                }
+//
+//                "session.updated" -> {
+//                    isSessionInitialized.set(true)
+//                    Log.d(TAG, "Traductor VoIP listo ✓")
+//                }
+//
+//                "response.output_audio.delta" -> {
+//                    lastAudioReceiveTime = System.currentTimeMillis()
+//                    val delta = json.getString("delta")
+//                    try {
+//                        val audioBytes = Base64.getDecoder().decode(delta)
+//
+//                        // CORREGIDO: Convertir de 24kHz PCM16 a 8kHz PCMA para VoIP
+//                        val convertedAudio = convertPCM16ToPCMA(audioBytes, 24000, 8000)
+//
+//                        playbackMutex.withLock {
+//                            playbackBuffer.write(audioBytes)
+//                            val data = playbackBuffer.toByteArray()
+//
+//                            // Enviar chunks más pequeños para menor latencia
+//                            if (data.size >= 160) { // 10ms de audio
+//                                onAudioReceived?.invoke(data.copyOf())
+//                                playbackBuffer.reset()
+//                            }
+//                        }
+//                    } catch (e: Exception) {
+//                        Log.e(TAG, "Error procesando audio VoIP: ${e.message}")
+//                    }
+//                }
+//
+//                "response.audio.done" -> {
+//                    playbackMutex.withLock {
+//                        if (convertedAudioBuffer.size() > 0) {
+//                            val remainingData = convertedAudioBuffer.toByteArray()
+//                            onAudioReceived?.invoke(remainingData)
+//                            convertedAudioBuffer.reset()
+//                        }
+//                    }
+//                    Log.d(TAG, "Audio VoIP completado")
+//                }
+//
+//                "response.audio_transcript.delta" -> {
+//                    val delta = json.getString("delta")
+//                    transcriptionChannel.trySend(delta)
+//                    Log.d(TAG, "Traducción VoIP: $delta")
+//                }
+//
+//                "input_audio_buffer.speech_started" -> {
+//                    Log.d(TAG, "🎤 Detectando voz en VoIP...")
+//                    playbackMutex.withLock {
+//                        convertedAudioBuffer.reset()
+//                    }
+//                }
+//
+//                "input_audio_buffer.speech_stopped" -> {
+//                    Log.d(TAG, "🔄 Procesando audio VoIP...")
+//                }
+//
+//                "conversation.item.input_audio_transcription.completed" -> {
+//                    val transcript = json.getString("transcript")
+//                    inputTranscriptionChannel.trySend(transcript)
+//
+//                    if (isTranslationMode && transcript.isNotBlank()) {
+//                        processTranscriptionForTranslation(transcript)
+//                    }
+//
+//                    Log.d(TAG, "📝 Original VoIP: $transcript")
+//                }
+//
+//                "response.created" -> {
+//                    Log.d(TAG, "⚡ Generando traducción VoIP...")
+//                    lastAudioReceiveTime = System.currentTimeMillis()
+//                }
+//
+//                "response.done" -> {
+//                    Log.d(TAG, "✅ Traducción VoIP completada")
+//                }
+//
+//                "error" -> {
+//                    val error = json.getJSONObject("error")
+//                    val errorMsg = "${error.getString("type")}: ${error.getString("message")}"
+//                    Log.e(TAG, "❌ Error VoIP: $errorMsg")
+//                    onError?.invoke("Error VoIP: $errorMsg")
+//
+//                    // Si es error de rate limit, esperar y reintentar
+//                    if (errorMsg.contains("rate_limit")) {
+//                        coroutineScope.launch {
+//                            delay(5000)
+//                            if (!isConnected.get()) {
+//                                connect()
+//                            }
+//                        }
+//                    }
+//                }
+//
+//                else -> {
+//                    // Log.d(TAG, "Mensaje VoIP: $type") // Comentado para reducir logs
+//                }
+//            }
+//        } catch (e: Exception) {
+//            Log.e(TAG, "Error parseando mensaje VoIP: ${e.message}")
+//        }
+//    }
+
+//    // === INICIALIZACIÓN OPTIMIZADA ===
+//    private suspend fun initializeTranslatorSession() {
+//        Log.d(TAG, "Inicializando sesión optimizada...")
+//
+//        val sessionConfig = JSONObject().apply {
+//            put("type", "session.update")
+//            put("event_id", "translator_init_${System.currentTimeMillis()}")
+//
+//            put("session", JSONObject().apply {
+//                put("modalities", JSONArray().apply {
+//                    put("text")
+//                    put("audio")
+//                })
+//                put("instructions", translatorInstructions)
+//                put("voice", "sage") // Voz más rápida
+//                put("input_audio_format", "pcm16")
+//                put("output_audio_format", "pcm16")
+//                put("input_audio_transcription", JSONObject().apply {
+//                    put("model", "whisper-1")
+//                })
+//                put("turn_detection", JSONObject().apply {
+//                    put("type", "server_vad")
+//                    put("threshold", 0.3) // Más sensible
+//                    put("prefix_padding_ms", 200) // Menos padding
+//                    put("silence_duration_ms", 500) // Pausa más corta
+//                })
+//                put("temperature", 0.6) // Muy conservador para precisión
+//                put("max_response_output_tokens", 1024) // Reducido para velocidad
+//            })
+//        }
+//
+//        if (sendMessage(sessionConfig)) {
+//            Log.d(TAG, "Configuración enviada exitosamente")
+//        } else {
+//            Log.e(TAG, "Error enviando configuración")
+//            onError?.invoke("Error enviando configuración de sesión")
+//        }
+//    }
 
     // === MANEJO DE MENSAJES OPTIMIZADO ===
     @RequiresApi(Build.VERSION_CODES.O)
@@ -322,7 +488,7 @@ class MCNTranslatorClient6(
                     Log.d(TAG, "Traductor listo ✓")
                 }
 
-                "response.audio.delta" -> {
+                "response.output_audio.delta" -> {
                     lastAudioReceiveTime = System.currentTimeMillis()
                     val delta = json.getString("delta")
                     try {

@@ -1381,11 +1381,11 @@ class AndroidWebRtcManager(
     private suspend fun processAudioForOpenAI(audioData: ByteArray, sampleRate: Int) {
         try {
             // Convertir sample rate si es necesario
-            val processedAudio = if (sampleRate != 24000) {
+            val processedAudio =
                 resampleAudio(audioData, sampleRate, 24000)
-            } else {
-                audioData
-            }
+//            } else {
+//                audioData
+//            }
 
             // Enviar a OpenAI
             openAiClient?.addAudioData(processedAudio)
