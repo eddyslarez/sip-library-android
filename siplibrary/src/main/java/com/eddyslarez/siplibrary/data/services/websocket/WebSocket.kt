@@ -37,11 +37,15 @@ class WebSocket(private val uri: String, private val headers: Map<String, String
 
     override fun connect() {
         try {
+            log.d(tag = "WebSocket") { "=== WEBSOCKET CONNECT ATTEMPT ===" }
+            log.d(tag = "WebSocket") { "URI: $uri" }
+            
             val webSocketURI = URI(uri)
 
             webSocketClient = object : WebSocketClient(webSocketURI, headers) {
                 override fun onOpen(handshakedata: ServerHandshake) {
                     isConnectedFlag = true
+                    log.d(tag = "WebSocket") { "✅ WebSocket connected successfully" }
                     listener?.onOpen()
                 }
 
@@ -58,16 +62,19 @@ class WebSocket(private val uri: String, private val headers: Map<String, String
                     isConnectedFlag = false
                     stopPingTimer()
                     stopRegistrationRenewalTimer()
+                    log.w(tag = "WebSocket") { "❌ WebSocket closed: code=$code, reason=$reason, remote=$remote" }
                     listener?.onClose(code, reason)
                 }
 
                 override fun onError(ex: Exception) {
+                    log.e(tag = "WebSocket") { "❌ WebSocket error: ${ex.message}" }
                     listener?.onError(ex)
                 }
 
                 override fun onWebsocketPong(conn: org.java_websocket.WebSocket?, f: Framedata?) {
                     val currentTime = System.currentTimeMillis()
                     val pingLatency = currentTime - lastPingSentTime
+                    log.d(tag = "WebSocket") { "🏓 Pong received, latency: ${pingLatency}ms" }
                     listener?.onPong(pingLatency)
                 }
             }
@@ -76,24 +83,30 @@ class WebSocket(private val uri: String, private val headers: Map<String, String
             if (uri.startsWith("wss")) {
                 val socketFactory = SSLSocketFactory.getDefault() as SSLSocketFactory
                 webSocketClient?.setSocketFactory(socketFactory)
+                log.d(tag = "WebSocket") { "🔒 SSL socket factory configured" }
             }
 
+            log.d(tag = "WebSocket") { "🔄 Starting WebSocket connection..." }
             webSocketClient?.connect()
 
         } catch (e: Exception) {
+            log.e(tag = "WebSocket") { "❌ Error in WebSocket connect: ${e.message}" }
             listener?.onError(e)
         }
     }
 
     override fun send(message: String) {
         if (!isConnectedFlag || webSocketClient == null) {
+            log.e(tag = "WebSocket") { "❌ Cannot send message - WebSocket not connected" }
             listener?.onError(Exception("Cannot send message - WebSocket not connected"))
             return
         }
 
         try {
             webSocketClient?.send(message)
+            log.d(tag = "WebSocket") { "📤 Message sent successfully (${message.length} chars)" }
         } catch (e: Exception) {
+            log.e(tag = "WebSocket") { "❌ Send error: ${e.message}" }
             listener?.onError(Exception("Send error: ${e.message}"))
         }
     }
@@ -103,15 +116,23 @@ class WebSocket(private val uri: String, private val headers: Map<String, String
             isConnectedFlag = false
             stopPingTimer()
             stopRegistrationRenewalTimer()
+            log.d(tag = "WebSocket") { "🔌 Closing WebSocket: code=$code, reason=$reason" }
             webSocketClient?.close(code, reason)
             webSocketClient = null
         } catch (e: Exception) {
+            log.e(tag = "WebSocket") { "❌ Error closing WebSocket: ${e.message}" }
             listener?.onError(e)
         }
     }
 
     override fun isConnected(): Boolean {
-        return isConnectedFlag && webSocketClient?.isOpen == true
+        val connected = isConnectedFlag && webSocketClient?.isOpen == true
+        if (!connected && isConnectedFlag) {
+            // Corregir flag si está desincronizado
+            isConnectedFlag = false
+            log.w(tag = "WebSocket") { "⚠️ WebSocket flag corrected - was true but connection is false" }
+        }
+        return connected
     }
 
     override fun setListener(listener: MultiplatformWebSocket.Listener) {
@@ -120,13 +141,16 @@ class WebSocket(private val uri: String, private val headers: Map<String, String
 
     override fun sendPing() {
         if (!isConnectedFlag || webSocketClient == null) {
+            log.w(tag = "WebSocket") { "⚠️ Cannot send ping - WebSocket not connected" }
             return
         }
 
         try {
             lastPingSentTime = System.currentTimeMillis()
             webSocketClient?.sendPing()
+            log.d(tag = "WebSocket") { "🏓 Ping sent" }
         } catch (e: Exception) {
+            log.e(tag = "WebSocket") { "❌ Ping error: ${e.message}" }
             listener?.onError(Exception("Ping error: ${e.message}"))
         }
     }
@@ -134,17 +158,24 @@ class WebSocket(private val uri: String, private val headers: Map<String, String
     override fun startPingTimer(intervalMs: Long) {
         stopPingTimer()
 
+        log.d(tag = "WebSocket") { "⏰ Starting ping timer with interval: ${intervalMs}ms" }
+        
         pingTimer = Timer("WebSocketPingTimer")
         pingTimer?.schedule(object : TimerTask() {
             override fun run() {
                 if (isConnected()) {
                     sendPing()
+                } else {
+                    log.w(tag = "WebSocket") { "⚠️ Ping timer running but WebSocket not connected" }
                 }
             }
         }, intervalMs, intervalMs)
     }
 
     override fun stopPingTimer() {
+        if (pingTimer != null) {
+            log.d(tag = "WebSocket") { "⏹️ Stopping ping timer" }
+        }
         pingTimer?.cancel()
         pingTimer = null
     }

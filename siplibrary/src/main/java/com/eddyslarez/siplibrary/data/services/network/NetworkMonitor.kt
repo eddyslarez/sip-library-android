@@ -497,25 +497,17 @@ class NetworkMonitor(private val application: Application) {
      */
     private suspend fun verifyInternetConnectivity(network: Network) {
         try {
-            val hasRealInternet = withContext(Dispatchers.IO) {
-                try {
-                    val socket = Socket()
-                    socket.connect(InetSocketAddress("8.8.8.8", 53), 3000)
-                    socket.close()
-                    true
-                } catch (e: Exception) {
-                    false
-                }
-            }
+            // MEJORADO: Verificación más robusta de internet
+            val hasRealInternet = verifyRealInternetConnection()
 
             val currentInfo = _networkInfoFlow.value
             if (currentInfo.hasInternet != hasRealInternet) {
+                log.d(tag = TAG) { "Internet connectivity status changed: ${currentInfo.hasInternet} -> $hasRealInternet" }
+                
                 _networkInfoFlow.value = currentInfo.copy(
                     hasInternet = hasRealInternet,
                     timestamp = Clock.System.now().toEpochMilliseconds()
                 )
-
-                log.d(tag = TAG) { "Internet connectivity verified: $hasRealInternet" }
 
                 // Actualizar timestamp si se confirma internet
                 if (hasRealInternet) {
@@ -529,6 +521,55 @@ class NetworkMonitor(private val application: Application) {
         } catch (e: Exception) {
             log.e(tag = TAG) { "Error verifying internet connectivity: ${e.message}" }
         }
+    }
+
+    /**
+     * NUEVO: Verificación robusta de internet real
+     */
+    private suspend fun verifyRealInternetConnection(): Boolean {
+        return withContext(Dispatchers.IO) {
+            try {
+                // Intentar múltiples servidores para mayor confiabilidad
+                val testServers = listOf(
+                    "8.8.8.8" to 53,      // Google DNS
+                    "1.1.1.1" to 53,      // Cloudflare DNS
+                    "208.67.222.222" to 53 // OpenDNS
+                )
+
+                var successCount = 0
+                val requiredSuccesses = 1 // Al menos 1 servidor debe responder
+
+                for ((host, port) in testServers) {
+                    try {
+                        val socket = Socket()
+                        socket.connect(InetSocketAddress(host, port), 3000)
+                        socket.close()
+                        successCount++
+                        
+                        if (successCount >= requiredSuccesses) {
+                            log.d(tag = TAG) { "Internet verification successful (${successCount}/${testServers.size} servers)" }
+                            return@withContext true
+                        }
+                    } catch (e: Exception) {
+                        log.d(tag = TAG) { "Failed to connect to $host:$port - ${e.message}" }
+                    }
+                }
+
+                log.w(tag = TAG) { "Internet verification failed (${successCount}/${testServers.size} servers responded)" }
+                return@withContext false
+
+            } catch (e: Exception) {
+                log.e(tag = TAG) { "Error in internet verification: ${e.message}" }
+                return@withContext false
+            }
+        }
+    }
+
+    /**
+     * NUEVO: Método público para verificar internet real
+     */
+    suspend fun hasRealInternetConnection(): Boolean {
+        return verifyRealInternetConnection()
     }
 
     // === MÉTODOS PÚBLICOS ===
@@ -562,10 +603,19 @@ class NetworkMonitor(private val application: Application) {
             val networkInfo = _networkInfoFlow.value
             log.d(tag = TAG) { "Force check result: connected=${networkInfo.isConnected}, internet=${networkInfo.hasInternet}" }
 
-            // Verificar conectividad real si parece conectado
+            // MEJORADO: Verificar conectividad real si parece conectado
             if (networkInfo.isConnected) {
                 currentNetwork?.let { network ->
                     verifyInternetConnectivity(network)
+                }
+            } else {
+                // Si no hay red, asegurar que internet está marcado como false
+                if (networkInfo.hasInternet) {
+                    _networkInfoFlow.value = networkInfo.copy(
+                        hasInternet = false,
+                        timestamp = Clock.System.now().toEpochMilliseconds()
+                    )
+                    notifyInternetConnectivityChanged(false)
                 }
             }
         }

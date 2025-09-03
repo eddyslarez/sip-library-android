@@ -101,6 +101,26 @@ object RegistrationStateManager {
         val currentStates = _accountStatesFlow.value
         val currentStateInfo = currentStates[accountKey]
         val currentNetworkState = _networkStateFlow.value
+
+        // NUEVO: Prevenir bucles infinitos de NONE -> FAILED
+        if (currentStateInfo?.state == RegistrationState.NONE && 
+            newState == RegistrationState.FAILED &&
+            !currentNetworkState) {
+            log.w(tag = TAG) { 
+                "Preventing NONE -> FAILED transition for $accountKey without network" 
+            }
+            return false
+        }
+
+        // NUEVO: Prevenir bucles FAILED -> NONE -> FAILED
+        if (currentStateInfo?.state == RegistrationState.FAILED && 
+            newState == RegistrationState.NONE &&
+            currentStateInfo.consecutiveFailures > 2) {
+            log.w(tag = TAG) { 
+                "Preventing FAILED -> NONE transition for $accountKey with ${currentStateInfo.consecutiveFailures} failures" 
+            }
+            return false
+        }
         
         // Validar transición de estado
         if (!isValidStateTransition(currentStateInfo?.state, newState)) {
@@ -316,25 +336,53 @@ object RegistrationStateManager {
     /**
      * Programa reconexión automática con backoff exponencial
      */
-    private fun scheduleReconnection(accountKey: String, failureCount: Int) {
+    private fun scheduleReconnection(
+        accountKey: String, 
+        failureCount: Int,
+        immediateReconnection: Boolean = false
+    ) {
         cancelReconnection(accountKey) // Cancelar reconexión anterior
         
-        val baseDelay = 2000L // 2 segundos base
+        val baseDelay = if (immediateReconnection) 1000L else 3000L // Delay base
         val maxDelay = 60000L // 60 segundos máximo
         val delay = minOf(baseDelay * (1 shl failureCount), maxDelay) // Backoff exponencial
         
-        log.d(tag = TAG) { "Scheduling reconnection for $accountKey in ${delay}ms (attempt ${failureCount + 1})" }
+        log.d(tag = TAG) { 
+            "Scheduling reconnection for $accountKey in ${delay}ms " +
+            "(attempt ${failureCount + 1}, immediate: $immediateReconnection)" 
+        }
         
         reconnectionJobs[accountKey] = scope.launch {
             try {
                 delay(delay)
                 
-                // Verificar que aún necesitamos reconectar
+                // CRÍTICO: Verificar que hay red E internet antes de reconectar
+                if (!_networkStateFlow.value) {
+                    log.w(tag = TAG) { "Network lost during reconnection delay for $accountKey" }
+                    return@launch
+                }
+                
+                // Verificar que aún necesitamos reconectar Y que el estado es válido
                 val currentState = getAccountState(accountKey)
-                if (currentState == RegistrationState.FAILED && _networkStateFlow.value) {
+                val currentStateInfo = getAccountStateInfo(accountKey)
+                
+                if (currentState == RegistrationState.OK) {
+                    log.d(tag = TAG) { "Account $accountKey already registered, cancelling scheduled reconnection" }
+                    return@launch
+                }
+                
+                if (currentState == RegistrationState.FAILED && 
+                    _networkStateFlow.value && 
+                    (currentStateInfo?.consecutiveFailures ?: 0) < 10) {
+                    
                     log.d(tag = TAG) { "Attempting automatic reconnection for $accountKey" }
                     updateAccountState(accountKey, RegistrationState.IN_PROGRESS, "Automatic reconnection")
                     // El SipCoreManager debería detectar este cambio y intentar registrar
+                } else {
+                    log.w(tag = TAG) { 
+                        "Skipping reconnection for $accountKey - state: $currentState, " +
+                        "network: ${_networkStateFlow.value}, failures: ${currentStateInfo?.consecutiveFailures}" 
+                    }
                 }
             } catch (e: Exception) {
                 log.e(tag = TAG) { "Error in reconnection for $accountKey: ${e.message}" }
@@ -379,30 +427,48 @@ object RegistrationStateManager {
      * Maneja reconexión cuando la red se restaura
      */
     private fun handleNetworkReconnection() {
-        log.d(tag = TAG) { "Network reconnected, checking failed registrations" }
+        log.d(tag = TAG) { "=== NETWORK RECONNECTION HANDLER ===" }
         
         val currentStates = _accountStatesFlow.value
-        val failedAccounts = currentStates.filter { (_, stateInfo) ->
-            stateInfo.state == RegistrationState.FAILED || 
-            stateInfo.isExpired() ||
-            !stateInfo.isHealthy()
+        
+        log.d(tag = TAG) { "Checking ${currentStates.size} accounts for reconnection needs" }
+        
+        val accountsNeedingReconnection = currentStates.filter { (accountKey, stateInfo) ->
+            val needsReconnection = stateInfo.state != RegistrationState.OK || 
+                                  stateInfo.isExpired() ||
+                                  !stateInfo.isHealthy()
+            
+            log.d(tag = TAG) { 
+                "Account $accountKey: state=${stateInfo.state}, expired=${stateInfo.isExpired()}, " +
+                "healthy=${stateInfo.isHealthy()}, needsReconnection=$needsReconnection" 
+            }
+            
+            needsReconnection
         }
         
-        failedAccounts.forEach { (accountKey, stateInfo) ->
-            log.d(tag = TAG) { "Attempting to recover registration for $accountKey" }
+        if (accountsNeedingReconnection.isEmpty()) {
+            log.d(tag = TAG) { "No accounts need reconnection" }
+            return
+        }
+        
+        log.d(tag = TAG) { "Found ${accountsNeedingReconnection.size} accounts needing reconnection" }
+        
+        accountsNeedingReconnection.forEach { (accountKey, stateInfo) ->
+            log.d(tag = TAG) { "Preparing recovery for $accountKey (failures: ${stateInfo.consecutiveFailures})" }
             
-            // Resetear contador de fallos consecutivos en reconexión de red
+            // MEJORADO: Resetear contador de fallos solo si la red es estable
             val updatedStateInfo = stateInfo.copy(
-                consecutiveFailures = 0,
-                isNetworkConnected = true
+                consecutiveFailures = if (stateInfo.consecutiveFailures > 5) 0 else stateInfo.consecutiveFailures,
+                isNetworkConnected = true,
+                errorMessage = null // Limpiar error anterior
             )
             
             val updatedStates = _accountStatesFlow.value.toMutableMap()
             updatedStates[accountKey] = updatedStateInfo
             _accountStatesFlow.value = updatedStates
             
-            // Programar reconexión inmediata
-            scheduleReconnection(accountKey, 0)
+            // NUEVO: Programar reconexión con delay mínimo para red estable
+            scheduleReconnection(accountKey, 0, immediateReconnection = true)
         }
     }
     
@@ -410,23 +476,35 @@ object RegistrationStateManager {
      * Maneja desconexión de red
      */
     private fun handleNetworkDisconnection() {
-        log.d(tag = TAG) { "Network disconnected, updating account states" }
+        log.d(tag = TAG) { "=== NETWORK DISCONNECTION HANDLER ===" }
+        log.d(tag = TAG) { "Active reconnection jobs: ${reconnectionJobs.size}" }
+        log.d(tag = TAG) { "Active renewal jobs: ${renewalJobs.size}" }
         
-        // Cancelar todas las reconexiones y renovaciones pendientes
+        // CRÍTICO: Cancelar INMEDIATAMENTE todas las reconexiones y renovaciones
         reconnectionJobs.values.forEach { it.cancel() }
         reconnectionJobs.clear()
         
         renewalJobs.values.forEach { it.cancel() }
         renewalJobs.clear()
         
-        // Marcar todas las cuentas como desconectadas de red
+        log.d(tag = TAG) { "All reconnection and renewal jobs cancelled" }
+        
+        // MEJORADO: Marcar todas las cuentas como desconectadas pero NO cambiar estado de registro
         val currentStates = _accountStatesFlow.value
         val updatedStates = currentStates.mapValues { (_, stateInfo) ->
-            stateInfo.copy(isNetworkConnected = false)
+            log.d(tag = TAG) { "Marking $accountKey as network disconnected (was: ${stateInfo.state})" }
+            
+            stateInfo.copy(
+                isNetworkConnected = false,
+                errorMessage = "Network disconnected"
+                // NO cambiar el estado de registro aquí
+            )
         }
         _accountStatesFlow.value = updatedStates
         
         updateGlobalState(updatedStates)
+        
+        log.d(tag = TAG) { "Network disconnection handling completed" }
     }
     
     /**
