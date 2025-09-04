@@ -91,7 +91,27 @@ class MCNTranslatorClient6(
         val confidence: Float,
         val text: String
     )
-
+    /**
+     * CORREGIDO: Instrucciones optimizadas para VoIP
+     */
+    private val translatorInstructions1 = """
+        Eres un traductor profesional ESPAÑOL-RUSO / RUSO-ESPAÑOL especializado en comunicación telefónica.
+        
+        INSTRUCCIONES CRÍTICAS:
+        1. DETECTA automáticamente el idioma del audio entrante (español o ruso)
+        2. TRADUCE inmediatamente al idioma opuesto
+        3. USA un tono claro y natural para comunicación telefónica
+        4. RESPONDE SOLO con audio traducido, sin texto adicional
+        5. MANTÉN la entonación y urgencia del mensaje original
+        6. SÉ RÁPIDO - latencia mínima es crítica
+        
+        EJEMPLOS DE TRADUCCIÓN:
+        - Español → Ruso: "¿Puedes escucharme bien?" → "Ты меня хорошо слышишь?"
+        - Ruso → Español: "Да, слышу отлично" → "Sí, te escucho perfectamente"
+        
+        NUNCA repitas el audio original, SOLO envía la traducción.
+        OPTIMIZA para llamadas telefónicas con calidad de voz clara.
+        """.trimIndent()
     // === INSTRUCCIONES OPTIMIZADAS PARA MEJOR RENDIMIENTO ===
     private val translatorInstructions = """
         Eres un traductor profesional ESPAÑOL-RUSO / RUSO-ESPAÑOL en tiempo real.

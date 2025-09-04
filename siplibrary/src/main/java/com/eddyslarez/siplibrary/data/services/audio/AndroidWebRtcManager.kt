@@ -68,7 +68,8 @@ class AndroidWebRtcManager(
         private const val AUDIO_FORMAT = android.media.AudioFormat.ENCODING_PCM_16BIT
         private const val BUFFER_SIZE_MS = 100
     }
-
+    private var isRemoteAudioIntercepted = false
+    private var originalRemoteAudioTrack: AudioTrack? = null
     // OpenAI integration
     private val openAiClient = openAiApiKey?.let { MCNTranslatorClient6(it) }
 //    private val openAiClient = openAiApiKey?.let { MCNAssistantClient(it) }
@@ -223,47 +224,100 @@ class AndroidWebRtcManager(
     @RequiresApi(Build.VERSION_CODES.O)
     override fun setOpenAIEnabled(enabled: Boolean) {
         coroutineScope.launch {
+            val wasEnabled = isOpenAiEnabled
             isOpenAiEnabled = enabled
 
+            log.d(TAG) { "OpenAI translation: ${if (enabled) "ACTIVADO" else "DESACTIVADO"}" }
+
             if (enabled && !openAiClient?.isConnected()!!) {
+                log.d(TAG) { "Conectando a OpenAI para traducción..." }
                 val connected = openAiClient.connect()
-//                MCNSampleData.loadTestDataToAssistant(openAiClient, "empresarial")
-                if (!connected) {
-                    log.e(TAG) { "Failed to connect to OpenAI" }
+
+                if (connected) {
+                    log.d(TAG) { "✅ OpenAI conectado - traducción activa" }
+
+                    // Reconfigurar audio remoto si hay una llamada activa
+                    originalRemoteAudioTrack?.let { track ->
+                        configureRemoteAudioForTranslation(track)
+                    }
+
+                } else {
+                    log.e(TAG) { "❌ Error conectando a OpenAI" }
                     isOpenAiEnabled = false
                 }
+
             } else if (!enabled) {
+                log.d(TAG) { "Desconectando OpenAI..." }
                 openAiClient?.disconnect()
                 stopAudioPlayback()
+
+                // Restaurar reproducción normal del audio remoto
+                originalRemoteAudioTrack?.let { track ->
+                    track.setEnabled(true)
+                    isRemoteAudioIntercepted = false
+                    log.d(TAG) { "Audio remoto restaurado a reproducción normal" }
+                }
             }
         }
     }
 
     private fun startAudioResponsePlayback() {
-        if (isPlaybackActive) return
+        if (isPlaybackActive) {
+            log.d(TAG) { "Playback ya está activo" }
+            return
+        }
 
         isPlaybackActive = true
+        log.d(TAG) { "🔊 Iniciando reproducción de traducción OpenAI" }
+
         coroutineScope.launch {
             try {
                 audioTrack?.play()
                 val audioChannel = openAiClient?.getAudioResponseChannel()
 
-                while (isPlaybackActive && audioChannel != null) {
+                while (isPlaybackActive && audioChannel != null && isOpenAiEnabled) {
                     try {
                         val audioData = audioChannel.tryReceive()
                         if (audioData.isSuccess) {
-                            playAudioData(audioData.getOrThrow())
+                            val data = audioData.getOrThrow()
+                            if (data.isNotEmpty()) {
+                                // CRÍTICO: Reproducir SOLO la traducción, no el audio original
+                                playTranslatedAudio(data)
+                            }
                         } else {
                             delay(10)
                         }
                     } catch (e: Exception) {
-                        log.e(TAG) { "Error en playback loop: ${e.message}" }
+                        log.e(TAG) { "Error en playback de traducción: ${e.message}" }
                         break
                     }
                 }
             } catch (e: Exception) {
-                log.e(TAG) { "Error iniciando playback: ${e.message}" }
+                log.e(TAG) { "Error iniciando playback de traducción: ${e.message}" }
+            } finally {
+                isPlaybackActive = false
+                log.d(TAG) { "🔇 Playback de traducción terminado" }
             }
+        }
+    }
+    /**
+     * NUEVO: Reproducir solo audio traducido
+     */
+    private fun playTranslatedAudio(data: ByteArray) {
+        try {
+            if (data.isEmpty() || data.size % 2 != 0) {
+                log.w(TAG) { "Datos de audio traducido inválidos" }
+                return
+            }
+
+            // CRÍTICO: Solo reproducir si el audio original está desactivado
+            if (isRemoteAudioIntercepted && isOpenAiEnabled) {
+                audioTrack?.write(data, 0, data.size)
+                log.d(TAG) { "Reproduciendo traducción (${data.size} bytes)" }
+            }
+
+        } catch (e: Exception) {
+            log.e(TAG) { "Error reproduciendo audio traducido: ${e.message}" }
         }
     }
     fun playAudioData(data: ByteArray) {
@@ -1234,14 +1288,12 @@ class AndroidWebRtcManager(
                             if (track.kind().equals(MediaStreamTrack.AUDIO_TRACK_KIND, ignoreCase = true)) {
                                 val audioTrack = track as AudioTrack
                                 remoteAudioTrack = audioTrack
+                                originalRemoteAudioTrack = audioTrack
 
-                                if (isOpenAiEnabled) {
-                                    // Interceptar audio remoto para OpenAI
-                                    setupAudioInterceptionWithSink(audioTrack)
-                                    audioTrack.setEnabled(false) // Desactivar reproducción directa
-                                } else {
-                                    audioTrack.setEnabled(true) // Reproducción normal
-                                }
+                                // CORRECCIÓN CRÍTICA: Configurar según el estado de OpenAI
+                                configureRemoteAudioForTranslation(audioTrack)
+
+                                webRtcEventListener?.onRemoteAudioTrack()
                             }
                         }
                     }
@@ -1251,7 +1303,32 @@ class AndroidWebRtcManager(
             log.e(TAG) { "Error inicializando PeerConnection: ${e.message}" }
         }
     }
+    /**
+     * NUEVO: Configura el audio remoto para traducción
+     */
+    @RequiresApi(Build.VERSION_CODES.O)
+    private fun configureRemoteAudioForTranslation(audioTrack: AudioTrack) {
+        if (isOpenAiEnabled) {
+            log.d(TAG) { "Configurando audio remoto para traducción OpenAI" }
 
+            // 1. CRÍTICO: Desactivar reproducción directa del audio original
+            audioTrack.setEnabled(false)
+
+            // 2. Configurar interceptación para OpenAI
+            setupAudioInterceptionWithSink(audioTrack)
+
+            // 3. Marcar como interceptado
+            isRemoteAudioIntercepted = true
+
+            log.d(TAG) { "Audio remoto desactivado - solo se reproducirá traducción" }
+        } else {
+            log.d(TAG) { "Configurando audio remoto para reproducción normal" }
+
+            // Reproducción normal sin traducción
+            audioTrack.setEnabled(true)
+            isRemoteAudioIntercepted = false
+        }
+    }
 //    private fun initializePeerConnection() {
 //        log.d(TAG) { "Initializing PeerConnection..." }
 //        cleanupCall()
@@ -1349,6 +1426,9 @@ class AndroidWebRtcManager(
     /**
      * Setup audio interception using Stream WebRTC's AudioTrackSink
      */
+    /**
+     * CORREGIDO: Configuración de audio sink mejorada
+     */
     @RequiresApi(Build.VERSION_CODES.O)
     private fun setupAudioInterceptionWithSink(audioTrack: AudioTrack) {
         val audioSink = object : AudioTrackSink {
@@ -1360,28 +1440,53 @@ class AndroidWebRtcManager(
                 numberOfFrames: Int,
                 absoluteCaptureTimestampMs: Long
             ) {
-                if (isOpenAiEnabled) {
-                    // Convertir ByteBuffer a ByteArray
-                    val data = ByteArray(audioData.remaining())
-                    audioData.get(data)
+                // CRÍTICO: Solo procesar si OpenAI está habilitado
+                if (isOpenAiEnabled && !isPlaybackActive) {
+                    try {
+                        // Convertir ByteBuffer a ByteArray
+                        val data = ByteArray(audioData.remaining())
+                        audioData.get(data)
 
-                    // Enviar a OpenAI
-                    coroutineScope.launch {
-                        processAudioForOpenAI(data, sampleRate)
+                        // CORREGIDO: Enviar a OpenAI en corrutina
+                        coroutineScope.launch {
+                            processRemoteAudioForOpenAI(data, sampleRate)
+                        }
+                    } catch (e: Exception) {
+                        log.e(TAG) { "Error procesando audio remoto: ${e.message}" }
                     }
                 }
             }
         }
 
         audioTrack.addSink(audioSink)
-        log.d(TAG) { "Audio sink configurado para OpenAI" }
+        log.d(TAG) { "Audio sink configurado para interceptar audio remoto" }
     }
+    /**
+     * NUEVO: Procesar audio remoto para OpenAI
+     */
+    @RequiresApi(Build.VERSION_CODES.O)
+    private suspend fun processRemoteAudioForOpenAI(audioData: ByteArray, sampleRate: Int) {
+        try {
+            // Convertir sample rate si es necesario (OpenAI requiere 24kHz)
+            val processedAudio = if (sampleRate != 24000) {
+                resampleAudio(audioData, sampleRate, 24000)
+            } else {
+                audioData
+            }
 
+            // Enviar SOLO el audio remoto a OpenAI para traducción
+            openAiClient?.addAudioData(processedAudio)
+
+            log.d(TAG) { "Audio remoto enviado a OpenAI para traducción (${processedAudio.size} bytes)" }
+        } catch (e: Exception) {
+            log.e(TAG) { "Error procesando audio remoto para OpenAI: ${e.message}" }
+        }
+    }
     @RequiresApi(Build.VERSION_CODES.O)
     private suspend fun processAudioForOpenAI(audioData: ByteArray, sampleRate: Int) {
         try {
             // Convertir sample rate si es necesario
-            val processedAudio =
+            val processedAudio =// if (sampleRate != 24000) {
                 resampleAudio(audioData, sampleRate, 24000)
 //            } else {
 //                audioData
@@ -1512,16 +1617,29 @@ class AndroidWebRtcManager(
 //    }
     private fun cleanupCall() {
         try {
+            log.d(TAG) { "Limpiando recursos de llamada..." }
+
+            // Detener traducción
+            isPlaybackActive = false
+            stopAudioPlayback()
+
+            // Restaurar audio remoto
+            originalRemoteAudioTrack?.setEnabled(false)
+            originalRemoteAudioTrack = null
+            remoteAudioTrack = null
+            isRemoteAudioIntercepted = false
+
+            // Limpiar audio local
             localAudioTrack?.setEnabled(false)
 
+            // Limpiar PeerConnection
             peerConnection?.let { pc ->
-                // CORREGIDO: Remover senders correctamente
                 pc.senders.forEach { sender ->
                     try {
                         pc.removeTrack(sender)
-                        log.d(TAG) { "Removed sender: ${sender.track()?.kind()}" }
+                        log.d(TAG) { "Sender removido: ${sender.track()?.kind()}" }
                     } catch (e: Exception) {
-                        log.e(TAG) { "Error removing sender: ${e.message}" }
+                        log.e(TAG) { "Error removiendo sender: ${e.message}" }
                     }
                 }
             }
@@ -1531,7 +1649,6 @@ class AndroidWebRtcManager(
 
             Thread.sleep(100)
 
-            // No necesitamos limpiar localMediaStream ya que no lo usamos
             localMediaStream?.dispose()
             localMediaStream = null
 
@@ -1541,15 +1658,17 @@ class AndroidWebRtcManager(
             audioSource?.dispose()
             audioSource = null
 
-            remoteAudioTrack = null
             isLocalAudioReady = false
 
             System.gc()
 
+            log.d(TAG) { "✅ Recursos de llamada limpiados" }
+
         } catch (e: Exception) {
-            log.e(TAG) { "Error in cleanupCall: ${e.message}" }
+            log.e(TAG) { "Error en cleanupCall: ${e.message}" }
         }
     }
+
 //    private fun cleanupCall() {
 //        try {
 //            localAudioTrack?.setEnabled(false)

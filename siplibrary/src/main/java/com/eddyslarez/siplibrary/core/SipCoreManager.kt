@@ -944,8 +944,21 @@ class SipCoreManager private constructor(
         }
     }
 
-    fun setOpenAIEnabled(enabled: Boolean) {
-        webRtcManager.setOpenAIEnabled(enabled)
+    fun setOpenAIEnabled(enable: Boolean) {
+        log.d(tag = TAG) { "Translation for call: ${if (enable) "ENABLED" else "DISABLED"}" }
+
+        // CRÍTICO: Activar OpenAI solo cuando hay una llamada activa
+        if (CallStateManager.getCurrentState().isConnected()) {
+            webRtcManager.setOpenAIEnabled(enable)
+
+            if (enable) {
+                log.d(tag = TAG) { "🎯 Traducción activa: cada dispositivo traducirá el audio entrante" }
+            } else {
+                log.d(tag = TAG) { "🔊 Traducción desactivada: reproducción de audio original" }
+            }
+        } else {
+            log.w(tag = TAG) { "No hay llamada activa para activar traducción" }
+        }
     }
 
     fun makeCall(phoneNumber: String, sipName: String, domain: String) {
