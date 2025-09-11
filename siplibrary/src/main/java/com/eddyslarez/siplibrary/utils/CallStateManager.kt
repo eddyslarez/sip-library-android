@@ -48,7 +48,16 @@ object CallStateManager {
             log.d(tag = "CallStateManager") { "CallStateManager initialized" }
         }
     }
+    fun callTransferring(callId: String) {
+        updateCallState( CallState.TRANSFERRING, callId)
+        log.d("CallStateManager") { "Call $callId is being transferred" }
+    }
 
+    fun callTransferCompleted(callId: String, success: Boolean) {
+        val newState = if (success) CallState.TRANSFER_COMPLETED else CallState.TRANSFER_FAILED
+        updateCallState(newState, callId )
+        log.d("CallStateManager") { "Call $callId transfer completed: $success" }
+    }
     /**
      * Actualiza el estado de la llamada con validaciones estrictas
      */

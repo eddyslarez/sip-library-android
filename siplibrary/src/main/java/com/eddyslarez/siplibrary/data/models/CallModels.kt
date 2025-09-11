@@ -23,7 +23,8 @@ enum class CallTypes : Parcelable {
     SUCCESS,
     MISSED,
     DECLINED,
-    ABORTED
+    ABORTED,
+    FORWARDED
 }
 
 @Parcelize

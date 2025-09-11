@@ -38,6 +38,9 @@ class SipMessageHandler(private val sipCoreManager: SipCoreManager) {
                 firstLine.startsWith("SIP/2.0") -> handleSipResponse(firstLine, lines, accountInfo)
 
                 // Requests SIP
+
+                firstLine.startsWith("REFER") -> handleReferRequest(lines, accountInfo)
+                firstLine.startsWith("NOTIFY") -> handleNotifyRequest(lines, accountInfo)
                 firstLine.startsWith("INVITE") -> handleInviteRequest(lines, accountInfo)
                 firstLine.startsWith("BYE") -> handleByeRequest(lines, accountInfo)
                 firstLine.startsWith("CANCEL") -> handleCancelRequest(lines, accountInfo)
@@ -550,7 +553,7 @@ class SipMessageHandler(private val sipCoreManager: SipCoreManager) {
                 accountInfo.webSocketClient?.send(ringingResponse)
 
                 delay(200)
-                sipCoreManager.audioManager.playRingtone()
+//                sipCoreManager.audioManager.playRingtone()
             }
 
             log.d(tag = TAG) { "Incoming call setup completed for ${callData.callId}" }
@@ -1060,6 +1063,153 @@ class SipMessageHandler(private val sipCoreManager: SipCoreManager) {
 
         } catch (e: Exception) {
             log.e(tag = TAG) { "Error sending DTMF INFO: ${e.message}" }
+        }
+    }
+
+    /**
+     * Maneja request REFER (transferencia)
+     */
+    private suspend fun handleReferRequest(lines: List<String>, accountInfo: AccountInfo) {
+        try {
+            log.d(tag = TAG) { "Handling REFER request (call transfer)" }
+
+            val referToHeader = SipMessageParser.extractHeader(lines, "Refer-To")
+            val referredByHeader = SipMessageParser.extractHeader(lines, "Referred-By")
+            val replacesHeader = SipMessageParser.extractHeader(lines, "Replaces")
+            val callIdHeader = SipMessageParser.extractHeader(lines, "Call-ID")
+
+            // Enviar 200 OK para REFER
+            val referOkResponse = SipMessageBuilder.buildReferOkResponse(accountInfo, lines)
+            accountInfo.webSocketClient?.send(referOkResponse)
+
+            // Extraer número de destino del Refer-To header
+            val transferTarget = SipMessageParser.extractUserFromUri(
+                SipMessageParser.extractUriFromHeader(referToHeader)
+            )
+
+            log.d(tag = TAG) { "Call transfer requested to: $transferTarget" }
+
+            // Notificar al callback de transferencia
+            sipCoreManager.sipCallbacks?.onCallTransferRequested(transferTarget, referredByHeader)
+
+            // Enviar NOTIFY con estado "trying"
+            accountInfo.currentCallData?.let { callData ->
+                val notifyTrying = SipMessageBuilder.buildNotifyMessage(
+                    accountInfo, callData, "active", "100 Trying"
+                )
+                accountInfo.webSocketClient?.send(notifyTrying)
+            }
+
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error handling REFER request: ${e.message}" }
+        }
+    }
+
+    /**
+     * Maneja request NOTIFY para estado de transferencia
+     */
+    private fun handleNotifyRequest(lines: List<String>, accountInfo: AccountInfo) {
+        try {
+            log.d(tag = TAG) { "Handling NOTIFY request" }
+
+            val eventHeader = SipMessageParser.extractHeader(lines, "Event")
+            val subscriptionStateHeader = SipMessageParser.extractHeader(lines, "Subscription-State")
+            val contentType = SipMessageParser.extractHeader(lines, "Content-Type")
+
+            // Enviar 200 OK para NOTIFY
+            val notifyOkResponse = SipMessageBuilder.buildGenericOkResponse(lines)
+            accountInfo.webSocketClient?.send(notifyOkResponse)
+
+            if (eventHeader.contains("refer", ignoreCase = true)) {
+                val content = SipMessageParser.extractSdpContent(lines.joinToString("\r\n"))
+                log.d(tag = TAG) { "Transfer status update: $content" }
+
+                // Procesar estado de transferencia
+                when {
+                    content.contains("200", ignoreCase = true) -> {
+                        log.d(tag = TAG) { "Call transfer completed successfully" }
+                        sipCoreManager.sipCallbacks?.onCallTransferCompleted(true)
+                    }
+                    content.contains("4", ignoreCase = true) || content.contains("5", ignoreCase = true) -> {
+                        log.d(tag = TAG) { "Call transfer failed" }
+                        sipCoreManager.sipCallbacks?.onCallTransferCompleted(false)
+                    }
+                }
+            }
+
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error handling NOTIFY request: ${e.message}" }
+        }
+    }
+
+    /**
+     * Envía mensaje REFER para transferencia
+     */
+    suspend fun sendRefer(accountInfo: AccountInfo, callData: CallData, transferTo: String) {
+        try {
+            val referMessage = SipMessageBuilder.buildReferMessage(
+                accountInfo, callData, transferTo, isBlindTransfer = true
+            )
+            accountInfo.webSocketClient?.send(referMessage)
+
+            log.d(tag = TAG) { "REFER sent for call transfer to: $transferTo" }
+
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error sending REFER: ${e.message}" }
+        }
+    }
+
+    /**
+     * Redirige una llamada entrante a otro número (deflection)
+     */
+    fun deflectCall(accountInfo: AccountInfo, callData: CallData, redirectToNumber: String) {
+        try {
+            log.d(tag = TAG) { "Deflecting call ${callData.callId} to $redirectToNumber" }
+
+            // CRÍTICO: Detener ringtone inmediatamente
+            sipCoreManager.audioManager.stopAllRingtones()
+
+            // Opcional: Enviar 181 primero para informar que se está redirigiendo
+            val forwardingResponse = SipMessageBuilder.buildCallForwardingResponse(accountInfo, callData)
+            accountInfo.webSocketClient?.send(forwardingResponse)
+
+            // Esperar un momento antes de enviar el 302
+            CoroutineScope(Dispatchers.IO).launch {
+                delay(100)
+
+                // Enviar 302 Moved Temporarily con Contact hacia el nuevo destino
+                val redirectResponse = SipMessageBuilder.buildCallRedirectResponse(
+                    accountInfo,
+                    callData,
+                    redirectToNumber
+                )
+                accountInfo.webSocketClient?.send(redirectResponse)
+
+                // Actualizar estado de llamada
+                CallStateManager.callEnded(callData.callId, 302, "Call Redirected to $redirectToNumber")
+                sipCoreManager.notifyCallStateChanged(CallState.ENDED)
+
+                // Agregar al historial como redirigida
+                val endTime = Clock.System.now().toEpochMilliseconds()
+                sipCoreManager.callHistoryManager.addCallLog(
+                    callData,
+                    CallTypes.FORWARDED, // Necesitarás agregar este tipo
+                    endTime
+                )
+
+                // Notificar al PushModeManager
+                val accountKey = "${accountInfo.username}@${accountInfo.domain}"
+                sipCoreManager.notifyCallEndedForSpecificAccount(accountKey)
+
+                // Limpiar datos de cuenta
+                accountInfo.resetCallState()
+
+                log.d(tag = TAG) { "Call deflection completed successfully" }
+            }
+
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error deflecting call: ${e.message}" }
+            sipCoreManager.audioManager.stopAllRingtones()
         }
     }
 }

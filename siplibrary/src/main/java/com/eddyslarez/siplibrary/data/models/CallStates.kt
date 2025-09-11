@@ -37,7 +37,11 @@ CallState : Parcelable {
     ENDED,                  // Llamada terminada
     
     // Estados de error
-    ERROR                   // Error en cualquier punto
+    ERROR  ,                 // Error en cualquier punto
+
+    TRANSFERRING,
+    TRANSFER_COMPLETED,
+    TRANSFER_FAILED
 }
 
 @Parcelize

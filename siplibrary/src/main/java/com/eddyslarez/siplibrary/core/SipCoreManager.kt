@@ -23,6 +23,7 @@ import com.eddyslarez.siplibrary.data.services.audio.WebRtcManagerFactory
 import com.eddyslarez.siplibrary.data.services.network.NetworkAwareReconnectionService
 import com.eddyslarez.siplibrary.data.services.network.NetworkMonitor
 import com.eddyslarez.siplibrary.data.services.network.ReconnectionManager
+import com.eddyslarez.siplibrary.data.services.sip.SipMessageBuilder
 import com.eddyslarez.siplibrary.data.services.sip.SipMessageHandler
 import com.eddyslarez.siplibrary.data.services.websocket.MultiplatformWebSocket
 import com.eddyslarez.siplibrary.data.services.websocket.WebSocket
@@ -75,6 +76,8 @@ class SipCoreManager private constructor(
     private var isShuttingDown = false
     val callHistoryManager = CallHistoryManager()
     private var networkConnectivityListener: NetworkConnectivityListener? = null
+    private var transferConfig = TransferConfig()
+    private var deflectionConfig = CallDeflectionConfig()
 
     private var lifecycleCallback: ((String) -> Unit)? = null
 
@@ -2475,6 +2478,268 @@ class SipCoreManager private constructor(
         }
     }
 
+    /**
+     * Configura los ajustes de transferencia
+     */
+    fun configureTransfer(config: TransferConfig) {
+        this.transferConfig = config
+        log.d(tag = TAG) { "Transfer configuration updated: ${config.defaultTransferNumber}" }
+    }
+
+    /**
+     * Obtiene la configuración actual de transferencia
+     */
+    fun getTransferConfig(): TransferConfig = transferConfig
+
+    /**
+     * Transfiere la llamada actual a un número específico
+     */
+    fun transferCall(transferTo: String, callId: String? = null): Boolean {
+        val accountInfo = ensureCurrentAccount() ?: run {
+            log.e(tag = TAG) { "No current account available for transfer" }
+            return false
+        }
+
+        val targetCallData = if (callId != null) {
+            MultiCallManager.getCall(callId)
+        } else {
+            accountInfo.currentCallData
+        } ?: run {
+            log.e(tag = TAG) { "No call data available for transfer" }
+            return false
+        }
+
+        val callState = CallStateManager.getCurrentState()
+        if (!callState.isConnected() && !callState.isActive()) {
+            log.w(tag = TAG) { "Cannot transfer call - no active call" }
+            return false
+        }
+
+        if (transferTo.isEmpty()) {
+            log.w(tag = TAG) { "Cannot transfer - empty transfer number" }
+            return false
+        }
+
+        log.d(tag = TAG) { "Initiating call transfer to: $transferTo" }
+
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                // Actualizar estado de llamada
+                CallStateManager.callTransferring(targetCallData.callId)
+
+                // Enviar REFER
+                messageHandler.sendRefer(accountInfo, targetCallData, transferTo)
+
+                // Notificar callback
+                sipCallbacks?.onCallTransferInitiated(transferTo)
+
+            } catch (e: Exception) {
+                log.e(tag = TAG) { "Error initiating call transfer: ${e.message}" }
+                sipCallbacks?.onCallTransferCompleted(false)
+            }
+        }
+
+        return true
+    }
+
+    /**
+     * Transfiere la llamada actual al número por defecto configurado
+     */
+    fun transferCallToDefault(callId: String? = null): Boolean {
+        if (transferConfig.defaultTransferNumber.isEmpty()) {
+            log.w(tag = TAG) { "No default transfer number configured" }
+            return false
+        }
+
+        return transferCall(transferConfig.defaultTransferNumber, callId)
+    }
+
+    /**
+     * Acepta una transferencia entrante
+     */
+    fun acceptTransfer(callId: String? = null): Boolean {
+        val accountInfo = ensureCurrentAccount() ?: return false
+        val targetCallData = if (callId != null) {
+            MultiCallManager.getCall(callId)
+        } else {
+            accountInfo.currentCallData
+        } ?: return false
+
+        log.d(tag = TAG) { "Accepting call transfer" }
+
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                // Enviar NOTIFY con estado "200 OK"
+                val notifySuccess = SipMessageBuilder.buildNotifyMessage(
+                    accountInfo, targetCallData, "terminated", "200 OK"
+                )
+                accountInfo.webSocketClient?.send(notifySuccess)
+
+                sipCallbacks?.onCallTransferCompleted(true)
+
+            } catch (e: Exception) {
+                log.e(tag = TAG) { "Error accepting transfer: ${e.message}" }
+            }
+        }
+
+        return true
+    }
+
+    /**
+     * Rechaza una transferencia entrante
+     */
+    fun rejectTransfer(callId: String? = null): Boolean {
+        val accountInfo = ensureCurrentAccount() ?: return false
+        val targetCallData = if (callId != null) {
+            MultiCallManager.getCall(callId)
+        } else {
+            accountInfo.currentCallData
+        } ?: return false
+
+        log.d(tag = TAG) { "Rejecting call transfer" }
+
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                // Enviar NOTIFY con estado "403 Forbidden"
+                val notifyReject = SipMessageBuilder.buildNotifyMessage(
+                    accountInfo, targetCallData, "terminated", "403 Forbidden"
+                )
+                accountInfo.webSocketClient?.send(notifyReject)
+
+                sipCallbacks?.onCallTransferCompleted(false)
+
+            } catch (e: Exception) {
+                log.e(tag = TAG) { "Error rejecting transfer: ${e.message}" }
+            }
+        }
+
+        return true
+    }
+    fun transferIncomingCallImmediately(transferTo: String) {
+        val accountInfo = currentAccountInfo ?: return
+        val callData = accountInfo.currentCallData ?: return
+
+        // Asegurarse de que es una llamada entrante y está en estado de ringing
+        if (callData.direction != CallDirections.INCOMING ||
+            CallStateManager.getCurrentState().state != CallState.INCOMING_RECEIVED) {
+            return
+        }
+
+        // 1. Contestar la llamada (200 OK) pero sin activar audio
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                // Crear una respuesta SDP sin audio (o con audio inactivo) si es necesario
+//                val sdp = createInactiveSdp() // Debes implementar este método
+
+//                callData.localSdp = sdp
+                messageHandler.sendInviteOkResponse(accountInfo, callData)
+
+                // Actualizar el estado a conectado (aunque no activamos audio)
+                CallStateManager.callConnected(callData.callId, 200)
+                notifyCallStateChanged(CallState.CONNECTED)
+
+                // 2. Inmediatamente enviar REFER
+                messageHandler.sendRefer(accountInfo, callData, transferTo)
+
+            } catch (e: Exception) {
+                log.e(tag = TAG) { "Error in immediate transfer: ${e.message}" }
+            }
+        }
+    }
+
+    /**
+     * Configura los ajustes de deflection/redirección
+     */
+    fun configureCallDeflection(config: CallDeflectionConfig) {
+        this.deflectionConfig = config
+        log.d(tag = TAG) { "Call deflection configuration updated: ${config.defaultDeflectionNumber}" }
+    }
+
+    /**
+     * Obtiene la configuración actual de deflection
+     */
+    fun getCallDeflectionConfig(): CallDeflectionConfig = deflectionConfig
+
+    /**
+     * Redirige una llamada entrante sin contestarla (Call Deflection)
+     */
+    fun deflectIncomingCall(redirectToNumber: String, callId: String? = null): Boolean {
+        val accountInfo = ensureCurrentAccount() ?: run {
+            log.e(tag = TAG) { "No current account available for call deflection" }
+            return false
+        }
+
+        val targetCallData = if (callId != null) {
+            MultiCallManager.getCall(callId)
+        } else {
+            accountInfo.currentCallData
+        } ?: run {
+            log.e(tag = TAG) { "No call data available for deflection" }
+            return false
+        }
+
+        // Verificar que sea una llamada entrante y no contestada
+        val callState = CallStateManager.getCurrentState()
+        if (targetCallData.direction != CallDirections.INCOMING ||
+            callState.state != CallState.INCOMING_RECEIVED) {
+            log.w(tag = TAG) { "Cannot deflect call - invalid state or direction" }
+            log.w(tag = TAG) { "Current state: ${callState.state}, Direction: ${targetCallData.direction}" }
+            return false
+        }
+
+        if (redirectToNumber.isEmpty()) {
+            log.w(tag = TAG) { "Cannot deflect - empty redirect number" }
+            return false
+        }
+
+        log.d(tag = TAG) { "Deflecting incoming call to: $redirectToNumber" }
+
+        // Realizar la deflection
+        messageHandler.deflectCall(accountInfo, targetCallData, redirectToNumber)
+
+        // Notificar callback
+        sipCallbacks?.onCallDeflected(targetCallData.from, redirectToNumber)
+
+        return true
+    }
+
+    /**
+     * Redirige la llamada entrante al número por defecto configurado
+     */
+    fun deflectIncomingCallToDefault(callId: String? = null): Boolean {
+        if (deflectionConfig.defaultDeflectionNumber.isEmpty()) {
+            log.w(tag = TAG) { "No default deflection number configured" }
+            return false
+        }
+
+        return deflectIncomingCall(deflectionConfig.defaultDeflectionNumber, callId)
+    }
+
+    /**
+     * Auto-deflection basada en reglas configuradas
+     */
+    private fun checkAutoDeflection(callData: CallData): Boolean {
+        if (!deflectionConfig.autoDeflectEnabled) {
+            return false
+        }
+
+        // Verificar reglas específicas por caller
+        val redirectNumber = deflectionConfig.deflectionRules[callData.from]
+        if (redirectNumber != null) {
+            log.d(tag = TAG) { "Auto-deflecting call from ${callData.from} to $redirectNumber" }
+            deflectIncomingCall(redirectNumber, callData.callId)
+            return true
+        }
+
+        // Auto-deflection al número por defecto si está configurado
+        if (deflectionConfig.defaultDeflectionNumber.isNotEmpty()) {
+            log.d(tag = TAG) { "Auto-deflecting call from ${callData.from} to default number" }
+            deflectIncomingCallToDefault(callData.callId)
+            return true
+        }
+
+        return false
+    }
 }
 interface NetworkConnectivityListener {
     fun onNetworkLost()

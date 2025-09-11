@@ -445,8 +445,9 @@ class SipRepository(private val database: SipDatabase) {
 
         when (callType) {
             CallTypes.SUCCESS -> sipAccountDao.incrementSuccessfulCalls(accountId)
-            CallTypes.MISSED, CallTypes.DECLINED, CallTypes.ABORTED ->
+            CallTypes.MISSED, CallTypes.DECLINED, CallTypes.ABORTED , CallTypes.FORWARDED ->
                 sipAccountDao.incrementFailedCalls(accountId)
+
         }
     }
 

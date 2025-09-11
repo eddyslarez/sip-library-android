@@ -111,7 +111,42 @@ object SipMessageParser {
         val uriMatch = Regex("<([^>]+)>").find(contact)
         return uriMatch?.groupValues?.get(1) ?: ""
     }
+    /**
+     * Extrae el usuario de un header Refer-To
+     */
+    fun extractReferToTarget(referToHeader: String): String? {
+        return try {
+            val uri = extractUriFromHeader(referToHeader)
+            extractUserFromUri(uri)
+        } catch (e: Exception) {
+            null
+        }
+    }
 
+    /**
+     * Extrae información del header Replaces
+     */
+    fun parseReplacesHeader(replacesHeader: String): Triple<String, String, String>? {
+        return try {
+            // Format: call-id;from-tag=tag1;to-tag=tag2
+            val parts = replacesHeader.split(";")
+            val callId = parts[0]
+
+            var fromTag = ""
+            var toTag = ""
+
+            parts.forEach { part ->
+                when {
+                    part.startsWith("from-tag=") -> fromTag = part.substringAfter("from-tag=")
+                    part.startsWith("to-tag=") -> toTag = part.substringAfter("to-tag=")
+                }
+            }
+
+            Triple(callId, fromTag, toTag)
+        } catch (e: Exception) {
+            null
+        }
+    }
     /**
      * Extracts the display name from a From or To header
      */

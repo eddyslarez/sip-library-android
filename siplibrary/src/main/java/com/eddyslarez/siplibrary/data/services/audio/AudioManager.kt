@@ -1,11 +1,15 @@
 package com.eddyslarez.siplibrary.data.services.audio
 import android.app.Application
+import android.content.Context
 import android.media.AudioAttributes
 import android.media.AudioManager
 import android.media.MediaPlayer
 import android.media.RingtoneManager
 import android.net.Uri
 import android.os.Build
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
 import com.eddyslarez.siplibrary.R
 import com.eddyslarez.siplibrary.utils.log
 import androidx.core.net.toUri
@@ -16,20 +20,21 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.isActive
-
 /**
-* AudioManager corregido con reproducción continua de ringtones
-* @author Eddys Larez
-*/
+ * AudioManager corregido con reproducción continua de ringtones y vibración
+ * @author Eddys Larez
+ */
 class AudioManager(private val application: Application) {
 
     private var outgoingRingtoneJob: Job? = null
     private var incomingRingtoneJob: Job? = null
+    private var vibrationJob: Job? = null
     private val audioScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     private val TAG = "AudioManager"
     private var incomingRingtone: MediaPlayer? = null
     private var outgoingRingtone: MediaPlayer? = null
+    private var vibrator: Vibrator? = null
 
     private var incomingRingtoneUri: Uri? = null
     private var outgoingRingtoneUri: Uri? = null
@@ -39,10 +44,20 @@ class AudioManager(private val application: Application) {
     @Volatile private var isOutgoingRingtonePlaying = false
     @Volatile private var shouldStopIncoming = false
     @Volatile private var shouldStopOutgoing = false
+    @Volatile private var isVibrating = false
 
     init {
         incomingRingtoneUri = "android.resource://${application.packageName}/${R.raw.call}".toUri()
         outgoingRingtoneUri = "android.resource://${application.packageName}/${R.raw.ringback}".toUri()
+
+        // Inicializar vibrador
+        vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val vibratorManager = application.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager
+            vibratorManager.defaultVibrator
+        } else {
+            @Suppress("DEPRECATION")
+            application.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+        }
     }
 
     fun setIncomingRingtone(uri: Uri) {
@@ -56,7 +71,7 @@ class AudioManager(private val application: Application) {
     }
 
     /**
-     * Reproduce ringtone de entrada con loop continuo mejorado
+     * Reproduce ringtone de entrada con loop continuo mejorado y vibración
      */
     fun playRingtone() {
         log.d(tag = TAG) { "playRingtone() called - Current state: isPlaying=$isIncomingRingtonePlaying" }
@@ -77,6 +92,9 @@ class AudioManager(private val application: Application) {
         shouldStopIncoming = false
 
         log.d(tag = TAG) { "Starting incoming ringtone with URI: $uri" }
+
+        // Iniciar vibración en paralelo
+        startVibration()
 
         incomingRingtoneJob = audioScope.launch {
             try {
@@ -136,6 +154,10 @@ class AudioManager(private val application: Application) {
                 // Limpieza final
                 isIncomingRingtonePlaying = false
                 shouldStopIncoming = false
+
+                // Detener vibración
+                stopVibration()
+
                 incomingRingtone?.let { player ->
                     try {
                         if (player.isPlaying) player.stop()
@@ -147,6 +169,77 @@ class AudioManager(private val application: Application) {
                 incomingRingtone = null
                 log.d(tag = TAG) { "Incoming ringtone completely stopped and cleaned up" }
             }
+        }
+    }
+
+    /**
+     * Inicia el patrón de vibración para llamadas entrantes
+     */
+    private fun startVibration() {
+        if (isVibrating) {
+            log.d(tag = TAG) { "Vibration already active" }
+            return
+        }
+
+        // Verificar permisos de vibración
+        if (application.checkSelfPermission(android.Manifest.permission.VIBRATE) !=
+            android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            log.w(tag = TAG) { "VIBRATE permission not granted" }
+            return
+        }
+
+        if (vibrator == null || !vibrator!!.hasVibrator()) {
+            log.w(tag = TAG) { "Device doesn't support vibration" }
+            return
+        }
+
+        isVibrating = true
+        log.d(tag = TAG) { "Starting vibration pattern" }
+
+        vibrationJob = audioScope.launch {
+            try {
+                while (isVibrating && isIncomingRingtonePlaying && !shouldStopIncoming) {
+                    // Patrón de vibración: vibra 1000ms, pausa 1000ms, vibra 500ms, pausa 500ms
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        vibrator?.vibrate(
+                            VibrationEffect.createWaveform(
+                                longArrayOf(0, 1000, 1000, 500, 500), // delay, vibra, pausa, vibra, pausa
+                                intArrayOf(0, 255, 0, 255, 0), // amplitudes
+                                0 // repetir desde índice 0
+                            )
+                        )
+                        // Esperar el ciclo completo antes de continuar
+                        delay(3000) // 1000 + 1000 + 500 + 500
+                    } else {
+                        @Suppress("DEPRECATION")
+                        vibrator?.vibrate(longArrayOf(0, 1000, 1000, 500, 500), 0)
+                        delay(3000)
+                    }
+                }
+            } catch (e: Exception) {
+                log.e(tag = TAG) { "Error in vibration coroutine: ${e.message}" }
+            } finally {
+                stopVibration()
+            }
+        }
+    }
+
+    /**
+     * Detiene la vibración
+     */
+    private fun stopVibration() {
+        if (!isVibrating) return
+
+        isVibrating = false
+
+        try {
+            vibrationJob?.cancel()
+            vibrationJob = null
+
+            vibrator?.cancel()
+            log.d(tag = TAG) { "Vibration stopped" }
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error stopping vibration: ${e.message}" }
         }
     }
 
@@ -184,7 +277,7 @@ class AudioManager(private val application: Application) {
     }
 
     /**
-     * Reproduce ringtone de salida con loop continuo mejorado
+     * Reproduce ringtone de salida con loop continuo mejorado (sin vibración)
      */
     fun playOutgoingRingtone() {
         log.d(tag = TAG) { "playOutgoingRingtone() called - Current state: isPlaying=$isOutgoingRingtonePlaying" }
@@ -301,14 +394,17 @@ class AudioManager(private val application: Application) {
     }
 
     /**
-     * Detiene ringtone de entrada INMEDIATAMENTE
+     * Detiene ringtone de entrada INMEDIATAMENTE (incluyendo vibración)
      */
     fun stopRingtone() {
-        log.d(tag = TAG) { "stopRingtone() called - Stopping incoming ringtone" }
+        log.d(tag = TAG) { "stopRingtone() called - Stopping incoming ringtone and vibration" }
 
         // Marcar para detener INMEDIATAMENTE
         shouldStopIncoming = true
         isIncomingRingtonePlaying = false
+
+        // Detener vibración inmediatamente
+        stopVibration()
 
         try {
             // Cancelar job
@@ -370,16 +466,19 @@ class AudioManager(private val application: Application) {
     }
 
     /**
-     * Detiene TODOS los ringtones INMEDIATAMENTE
+     * Detiene TODOS los ringtones y vibración INMEDIATAMENTE
      */
     fun stopAllRingtones() {
-        log.d(tag = TAG) { "stopAllRingtones() called - FORCE STOPPING ALL RINGTONES" }
+        log.d(tag = TAG) { "stopAllRingtones() called - FORCE STOPPING ALL RINGTONES AND VIBRATION" }
 
         // Marcar flags inmediatamente
         shouldStopIncoming = true
         shouldStopOutgoing = true
         isIncomingRingtonePlaying = false
         isOutgoingRingtonePlaying = false
+
+        // Detener vibración
+        stopVibration()
 
         try {
             // Cancelar jobs
@@ -411,7 +510,7 @@ class AudioManager(private val application: Application) {
             }
             outgoingRingtone = null
 
-            log.d(tag = TAG) { "ALL ringtones force stopped successfully" }
+            log.d(tag = TAG) { "ALL ringtones and vibration force stopped successfully" }
         } catch (e: Exception) {
             log.e(tag = TAG) { "Error in stopAllRingtones: ${e.message}" }
         }
@@ -432,6 +531,10 @@ class AudioManager(private val application: Application) {
         return isOutgoingRingtonePlaying && !shouldStopOutgoing
     }
 
+    fun isVibrating(): Boolean {
+        return isVibrating
+    }
+
     /**
      * Diagnóstico de estado
      */
@@ -440,17 +543,19 @@ class AudioManager(private val application: Application) {
             appendLine("=== AUDIO MANAGER DIAGNOSTIC ===")
             appendLine("Incoming playing: $isIncomingRingtonePlaying")
             appendLine("Outgoing playing: $isOutgoingRingtonePlaying")
+            appendLine("Vibrating: $isVibrating")
             appendLine("Should stop incoming: $shouldStopIncoming")
             appendLine("Should stop outgoing: $shouldStopOutgoing")
             appendLine("Incoming job active: ${incomingRingtoneJob?.isActive}")
             appendLine("Outgoing job active: ${outgoingRingtoneJob?.isActive}")
+            appendLine("Vibration job active: ${vibrationJob?.isActive}")
             appendLine("Incoming MediaPlayer: ${incomingRingtone != null}")
             appendLine("Outgoing MediaPlayer: ${outgoingRingtone != null}")
+            appendLine("Vibrator available: ${vibrator?.hasVibrator()}")
             appendLine("Audio scope active: ${audioScope.isActive}")
         }
     }
 }
-
 
 //import android.app.Application
 //import android.media.AudioAttributes

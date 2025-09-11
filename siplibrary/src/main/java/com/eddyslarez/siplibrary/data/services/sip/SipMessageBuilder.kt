@@ -460,7 +460,7 @@ object SipMessageBuilder {
     /**
      * Build generic OK responses for requests
      */
-    private fun buildGenericOkResponse(lines: List<String>): String {
+    fun buildGenericOkResponse(lines: List<String>): String {
         val viaHeader = SipMessageParser.extractHeader(lines, "Via")
         val fromHeader = SipMessageParser.extractHeader(lines, "From")
         val toHeader = SipMessageParser.extractHeader(lines, "To")
@@ -622,6 +622,174 @@ object SipMessageBuilder {
             log.e(tag = "SipMessageBuilder") { "Error building DTMF INFO message: ${e.message}" }
             throw e
         }
+    }
+
+    /**
+     * Build REFER message for call transfer
+     */
+    suspend fun buildReferMessage(
+        accountInfo: AccountInfo,
+        callData: CallData,
+        transferTo: String,
+        isBlindTransfer: Boolean = true
+    ): String {
+        val currentCSeq = accountInfo.incrementCSeq()
+
+        val targetUri = getTargetUri(accountInfo, callData)
+        val transferUri = "sip:$transferTo@${accountInfo.domain}"
+
+        return buildString {
+            append("REFER $targetUri $SIP_VERSION\r\n")
+            append("Via: $SIP_VERSION/$SIP_TRANSPORT ${accountInfo.domain};branch=z9hG4bK${generateId()}\r\n")
+            append("Max-Forwards: $MAX_FORWARDS\r\n")
+
+            when (callData.direction) {
+                CallDirections.OUTGOING -> {
+                    append("From: <sip:${accountInfo.username}@${accountInfo.domain}>;tag=${callData.inviteFromTag}\r\n")
+                    append("To: <$targetUri>;tag=${callData.inviteToTag}\r\n")
+                }
+                CallDirections.INCOMING -> {
+                    append("From: <sip:${accountInfo.username}@${accountInfo.domain}>;tag=${callData.toTag}\r\n")
+                    append("To: <sip:${callData.from}@${accountInfo.domain}>;tag=${callData.fromTag}\r\n")
+                }
+            }
+
+            append("Call-ID: ${callData.callId}\r\n")
+            append("CSeq: $currentCSeq REFER\r\n")
+            append("Contact: <sip:${accountInfo.username}@${accountInfo.domain};transport=ws>\r\n")
+
+            // Refer-To header con el destino de la transferencia
+            append("Refer-To: <$transferUri>\r\n")
+
+            // Referred-By header para identificar quién hace la transferencia
+            append("Referred-By: <sip:${accountInfo.username}@${accountInfo.domain}>\r\n")
+
+            if (isBlindTransfer) {
+                // Para blind transfer, incluir Replaces header si es necesario
+                append("Replaces: ${callData.callId};from-tag=${if (callData.direction == CallDirections.OUTGOING) callData.inviteFromTag else callData.toTag};to-tag=${if (callData.direction == CallDirections.OUTGOING) callData.inviteToTag else callData.fromTag}\r\n")
+            }
+
+            append("Content-Length: 0\r\n\r\n")
+        }
+    }
+
+    /**
+     * Build 200 OK response for REFER
+     */
+    fun buildReferOkResponse(accountInfo: AccountInfo, lines: List<String>): String {
+        val viaHeader = SipMessageParser.extractHeader(lines, "Via")
+        val fromHeader = SipMessageParser.extractHeader(lines, "From")
+        val toHeader = SipMessageParser.extractHeader(lines, "To")
+        val callId = SipMessageParser.extractHeader(lines, "Call-ID")
+        val cseqHeader = SipMessageParser.extractHeader(lines, "CSeq")
+
+        return buildString {
+            append("SIP/2.0 200 OK\r\n")
+            append("Via: $viaHeader\r\n")
+            append("From: $fromHeader\r\n")
+            append("To: $toHeader\r\n")
+            append("Call-ID: $callId\r\n")
+            append("CSeq: $cseqHeader\r\n")
+            append("Contact: <sip:${accountInfo.username}@${accountInfo.domain};transport=ws>\r\n")
+            append("Content-Length: 0\r\n\r\n")
+        }
+    }
+    /**
+     * Build NOTIFY message for transfer status
+     */
+    suspend fun buildNotifyMessage(
+        accountInfo: AccountInfo,
+        callData: CallData,
+        subscriptionState: String,
+        sipfrag: String
+    ): String {
+        val currentCSeq = accountInfo.incrementCSeq()
+        val targetUri = getTargetUri(accountInfo, callData)
+
+        val notifyContent = buildString {
+            append("SIP/2.0 $sipfrag\r\n")
+        }
+
+        return buildString {
+            append("NOTIFY $targetUri $SIP_VERSION\r\n")
+            append("Via: $SIP_VERSION/$SIP_TRANSPORT ${accountInfo.domain};branch=z9hG4bK${generateId()}\r\n")
+            append("Max-Forwards: $MAX_FORWARDS\r\n")
+
+            when (callData.direction) {
+                CallDirections.OUTGOING -> {
+                    append("From: <sip:${accountInfo.username}@${accountInfo.domain}>;tag=${callData.inviteFromTag}\r\n")
+                    append("To: <$targetUri>;tag=${callData.inviteToTag}\r\n")
+                }
+                CallDirections.INCOMING -> {
+                    append("From: <sip:${accountInfo.username}@${accountInfo.domain}>;tag=${callData.toTag}\r\n")
+                    append("To: <sip:${callData.from}@${accountInfo.domain}>;tag=${callData.fromTag}\r\n")
+                }
+            }
+
+            append("Call-ID: ${callData.callId}\r\n")
+            append("CSeq: $currentCSeq NOTIFY\r\n")
+            append("Contact: <sip:${accountInfo.username}@${accountInfo.domain};transport=ws>\r\n")
+            append("Event: refer\r\n")
+            append("Subscription-State: $subscriptionState\r\n")
+            append("Content-Type: message/sipfrag;version=2.0\r\n")
+            append("Content-Length: ${notifyContent.length}\r\n\r\n")
+            append(notifyContent)
+        }
+    }
+
+    /**
+     * Build 302 Moved Temporarily response for call deflection/redirection
+     */
+    fun buildCallRedirectResponse(
+        accountInfo: AccountInfo,
+        callData: CallData,
+        redirectToNumber: String
+    ): String {
+        val redirectUri = "sip:$redirectToNumber@${accountInfo.domain}"
+
+        return buildString {
+            append("SIP/2.0 302 Moved Temporarily\r\n")
+
+            // CRÍTICO: Via header exactamente como vino
+            append("Via: ${callData.via}\r\n")
+
+            // CRÍTICO: From header exactamente como vino (incluyendo tag)
+            append("From: <sip:${callData.from}@${accountInfo.domain}>;tag=${callData.fromTag}\r\n")
+
+            // To header con nuestro tag
+            append("To: <sip:${accountInfo.username}@${accountInfo.domain}>")
+            if (callData.toTag?.isNotEmpty() == true) {
+                append(";tag=${callData.toTag}")
+            }
+            append("\r\n")
+
+            append("Call-ID: ${callData.callId}\r\n")
+
+            // CRÍTICO: CSeq debe coincidir con el request
+            append("CSeq: ${callData.lastCSeqValue} INVITE\r\n")
+
+            // Contact header - el destino de la redirección
+            append("Contact: <$redirectUri>\r\n")
+
+            // Reason header (opcional) para indicar el motivo
+            append("Reason: SIP;cause=302;text=\"Call Forwarded\"\r\n")
+
+            append("Content-Length: 0\r\n\r\n")
+        }
+    }
+
+    /**
+     * Build 181 Call Is Being Forwarded response (informational)
+     */
+    fun buildCallForwardingResponse(accountInfo: AccountInfo, callData: CallData): String {
+        return buildSipResponse(
+            statusCode = 181,
+            reasonPhrase = "Call Is Being Forwarded",
+            accountInfo = accountInfo,
+            callData = callData,
+            includeToTag = true,
+            includeContact = false
+        )
     }
 }
 //

@@ -141,6 +141,7 @@ class EddysSipLibrary private constructor() {
         fun onReconnectionCompleted(successful: Boolean)
         fun onConnectionHealthCheckFailed()
     }
+
     private var networkStateCallbacks: NetworkStateCallbacks? = null
     fun setNetworkStateCallbacks(callbacks: NetworkStateCallbacks?) {
         this.networkStateCallbacks = callbacks
@@ -164,7 +165,8 @@ class EddysSipLibrary private constructor() {
             }
         })
     }
-        /**
+
+    /**
      * Listener específico para estados de llamada
      */
     interface CallListener {
@@ -615,6 +617,21 @@ class EddysSipLibrary private constructor() {
                 override fun onCallEndedForAccount(accountKey: String) {
                     log.d(tag = TAG) { "Internal callback: onCallEndedForAccount - $accountKey" }
                     pushModeManager?.onCallEndedForAccount(accountKey, setOf(accountKey))
+                }
+
+                override fun onCallTransferRequested(
+                    transferTo: String,
+                    referredBy: String
+                ) {
+                    log.d(tag = TAG) { "Internal callback: onCallTransferRequested - transferTo $transferTo   referredBy $referredBy" }
+                }
+
+                override fun onCallTransferInitiated(transferTo: String) {
+                    log.d(tag = TAG) { "Internal callback: onCallTransferInitiated - transferTo $transferTo" }
+                }
+
+                override fun onCallTransferCompleted(success: Boolean) {
+                    log.d(tag = TAG) { "Internal callback: onCallTransferCompleted -  success $success" }
                 }
             })
 
@@ -1150,180 +1167,580 @@ class EddysSipLibrary private constructor() {
             }
         }
     }
-        private fun notifyCallInitiated(callInfo: CallInfo) {
-            log.d(tag = TAG) { "Notifying call initiated to ${listeners.size} listeners" }
 
+    private fun notifyCallInitiated(callInfo: CallInfo) {
+        log.d(tag = TAG) { "Notifying call initiated to ${listeners.size} listeners" }
+
+        try {
+            callListener?.onCallInitiated(callInfo)
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error in CallListener onCallInitiated: ${e.message}" }
+        }
+    }
+
+    private fun notifyCallConnected(callInfo: CallInfo) {
+        log.d(tag = TAG) { "Notifying call connected to ${listeners.size} listeners" }
+
+        listeners.forEach { listener ->
             try {
-                callListener?.onCallInitiated(callInfo)
+                listener.onCallConnected(callInfo)
             } catch (e: Exception) {
-                log.e(tag = TAG) { "Error in CallListener onCallInitiated: ${e.message}" }
+                log.e(tag = TAG) { "Error in listener onCallConnected: ${e.message}" }
             }
         }
 
-        private fun notifyCallConnected(callInfo: CallInfo) {
-            log.d(tag = TAG) { "Notifying call connected to ${listeners.size} listeners" }
+        try {
+            callListener?.onCallConnected(callInfo)
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error in CallListener onCallConnected: ${e.message}" }
+        }
+    }
+
+    private fun notifyCallRinging(callInfo: CallInfo) {
+        log.d(tag = TAG) { "Notifying call ringing" }
+
+        try {
+            callListener?.onCallRinging(callInfo)
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error in CallListener onCallRinging: ${e.message}" }
+        }
+    }
+
+    private fun notifyCallHeld(callInfo: CallInfo) {
+        log.d(tag = TAG) { "Notifying call held" }
+
+        try {
+            callListener?.onCallHeld(callInfo)
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error in CallListener onCallHeld: ${e.message}" }
+        }
+    }
+
+    private fun notifyCallResumed(callInfo: CallInfo) {
+        log.d(tag = TAG) { "Notifying call resumed" }
+
+        try {
+            callListener?.onCallResumed(callInfo)
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error in CallListener onCallResumed: ${e.message}" }
+        }
+    }
+
+    private fun notifyCallEnded(callInfo: CallInfo?, reason: CallEndReason) {
+        callInfo?.let { info ->
+            log.d(tag = TAG) { "Notifying call ended to ${listeners.size} listeners" }
 
             listeners.forEach { listener ->
                 try {
-                    listener.onCallConnected(callInfo)
+                    listener.onCallEnded(info, reason)
                 } catch (e: Exception) {
-                    log.e(tag = TAG) { "Error in listener onCallConnected: ${e.message}" }
+                    log.e(tag = TAG) { "Error in listener onCallEnded: ${e.message}" }
                 }
             }
 
             try {
-                callListener?.onCallConnected(callInfo)
+                callListener?.onCallEnded(info, reason)
             } catch (e: Exception) {
-                log.e(tag = TAG) { "Error in CallListener onCallConnected: ${e.message}" }
+                log.e(tag = TAG) { "Error in CallListener onCallEnded: ${e.message}" }
             }
         }
+    }
 
-        private fun notifyCallRinging(callInfo: CallInfo) {
-            log.d(tag = TAG) { "Notifying call ringing" }
+    private fun notifyIncomingCall(callInfo: IncomingCallInfo) {
+        log.d(tag = TAG) { "Notifying incoming call to ${listeners.size} listeners" }
 
+        listeners.forEach { listener ->
             try {
-                callListener?.onCallRinging(callInfo)
+                listener.onIncomingCall(callInfo)
             } catch (e: Exception) {
-                log.e(tag = TAG) { "Error in CallListener onCallRinging: ${e.message}" }
+                log.e(tag = TAG) { "Error in listener onIncomingCall: ${e.message}" }
             }
         }
 
-        private fun notifyCallHeld(callInfo: CallInfo) {
-            log.d(tag = TAG) { "Notifying call held" }
+        try {
+            incomingCallListener?.onIncomingCall(callInfo)
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error in IncomingCallListener: ${e.message}" }
+        }
+    }
 
+    private fun notifyCallFailed(error: String, callInfo: CallInfo?) {
+        log.d(tag = TAG) { "Notifying call failed to ${listeners.size} listeners" }
+
+        listeners.forEach { listener ->
             try {
-                callListener?.onCallHeld(callInfo)
+                listener.onCallFailed(error, callInfo)
             } catch (e: Exception) {
-                log.e(tag = TAG) { "Error in CallListener onCallHeld: ${e.message}" }
+                log.e(tag = TAG) { "Error in listener onCallFailed: ${e.message}" }
             }
         }
+    }
 
-        private fun notifyCallResumed(callInfo: CallInfo) {
-            log.d(tag = TAG) { "Notifying call resumed" }
+    private fun handleIncomingCall() {
+        // Crear información de llamada entrante desde el core manager
+        val manager = sipCoreManager ?: return
+        val account = manager.currentAccountInfo ?: return
+        val callData = account.currentCallData ?: return
 
-            try {
-                callListener?.onCallResumed(callInfo)
-            } catch (e: Exception) {
-                log.e(tag = TAG) { "Error in CallListener onCallResumed: ${e.message}" }
-            }
-        }
+        val callInfo = IncomingCallInfo(
+            callId = callData.callId,
+            callerNumber = callData.from,
+            callerName = callData.remoteDisplayName.takeIf { it.isNotEmpty() },
+            targetAccount = account.username,
+            timestamp = callData.startTime
+        )
 
-        private fun notifyCallEnded(callInfo: CallInfo?, reason: CallEndReason) {
-            callInfo?.let { info ->
-                log.d(tag = TAG) { "Notifying call ended to ${listeners.size} listeners" }
+        notifyIncomingCall(callInfo)
+    }
 
-                listeners.forEach { listener ->
-                    try {
-                        listener.onCallEnded(info, reason)
-                    } catch (e: Exception) {
-                        log.e(tag = TAG) { "Error in listener onCallEnded: ${e.message}" }
-                    }
-                }
+    /**
+     * Crear IncomingCallInfo desde los datos actuales de la llamada
+     */
+    private fun createIncomingCallInfoFromCurrentCall(
+        callerNumber: String,
+        callerName: String?
+    ): IncomingCallInfo {
+        val manager = sipCoreManager ?: return IncomingCallInfo(
+            callId = generateCallId(),
+            callerNumber = callerNumber,
+            callerName = callerName,
+            targetAccount = "",
+            timestamp = System.currentTimeMillis()
+        )
 
-                try {
-                    callListener?.onCallEnded(info, reason)
-                } catch (e: Exception) {
-                    log.e(tag = TAG) { "Error in CallListener onCallEnded: ${e.message}" }
-                }
-            }
-        }
+        val account = manager.currentAccountInfo
+        val callData = account?.currentCallData
 
-        private fun notifyIncomingCall(callInfo: IncomingCallInfo) {
-            log.d(tag = TAG) { "Notifying incoming call to ${listeners.size} listeners" }
+        return IncomingCallInfo(
+            callId = callData?.callId ?: generateCallId(),
+            callerNumber = callerNumber,
+            callerName = callerName,
+            targetAccount = account?.username ?: "",
+            timestamp = callData?.startTime ?: System.currentTimeMillis()
+        )
+    }
 
-            listeners.forEach { listener ->
-                try {
-                    listener.onIncomingCall(callInfo)
-                } catch (e: Exception) {
-                    log.e(tag = TAG) { "Error in listener onIncomingCall: ${e.message}" }
-                }
-            }
+    // === MÉTODOS AUXILIARES ===
 
-            try {
-                incomingCallListener?.onIncomingCall(callInfo)
-            } catch (e: Exception) {
-                log.e(tag = TAG) { "Error in IncomingCallListener: ${e.message}" }
-            }
-        }
+    /**
+     * Obtiene información de llamada para un estado específico
+     */
+    private fun getCallInfoForState(stateInfo: CallStateInfo): CallInfo? {
+        val manager = sipCoreManager ?: return null
+        val calls = MultiCallManager.getAllCalls()
 
-        private fun notifyCallFailed(error: String, callInfo: CallInfo?) {
-            log.d(tag = TAG) { "Notifying call failed to ${listeners.size} listeners" }
+        // Buscar la llamada específica por callId
+        val callData = calls.find { it.callId == stateInfo.callId }
+            ?: manager.currentAccountInfo?.currentCallData
+            ?: return null
 
-            listeners.forEach { listener ->
-                try {
-                    listener.onCallFailed(error, callInfo)
-                } catch (e: Exception) {
-                    log.e(tag = TAG) { "Error in listener onCallFailed: ${e.message}" }
-                }
-            }
-        }
+        val account = manager.currentAccountInfo ?: return null
+        val currentCall1 = calls.size == 1 &&
+                stateInfo.state != CallState.ENDED &&
+                stateInfo.state != CallState.ERROR &&
+                stateInfo.state != CallState.ENDING &&
+                stateInfo.state != CallState.IDLE
 
-        private fun handleIncomingCall() {
-            // Crear información de llamada entrante desde el core manager
-            val manager = sipCoreManager ?: return
-            val account = manager.currentAccountInfo ?: return
-            val callData = account.currentCallData ?: return
-
-            val callInfo = IncomingCallInfo(
+        return try {
+            CallInfo(
                 callId = callData.callId,
-                callerNumber = callData.from,
-                callerName = callData.remoteDisplayName.takeIf { it.isNotEmpty() },
-                targetAccount = account.username,
-                timestamp = callData.startTime
+                phoneNumber = if (callData.direction == CallDirections.INCOMING) callData.from else callData.to,
+                displayName = callData.remoteDisplayName.takeIf { it.isNotEmpty() },
+                direction = if (callData.direction == CallDirections.INCOMING) CallDirection.INCOMING else CallDirection.OUTGOING,
+                startTime = callData.startTime,
+                duration = if (callData.startTime > 0) System.currentTimeMillis() - callData.startTime else 0,
+                isOnHold = callData.isOnHold ?: false,
+                isMuted = manager.webRtcManager.isMuted(),
+                localAccount = account.username,
+                codec = null,
+                state = stateInfo.state,
+                isCurrentCall = currentCall1
             )
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error creating CallInfo: ${e.message}" }
+            null
+        }
+    }
 
-            notifyIncomingCall(callInfo)
+    /**
+     * Método getCurrentCallInfo() actualizado
+     */
+    private fun getCurrentCallInfo(): CallInfo? {
+        val manager = sipCoreManager ?: return null
+        val account = manager.currentAccountInfo ?: return null
+        val calls = MultiCallManager.getAllCalls()
+        val callData = calls.firstOrNull() ?: account.currentCallData ?: return null
+
+        val currentCall1 = calls.size == 1 &&
+                CallStateManager.getCurrentState().let { state ->
+                    state.state != CallState.ENDED &&
+                            state.state != CallState.ERROR &&
+                            state.state != CallState.ENDING &&
+                            state.state != CallState.IDLE
+                }
+
+        return try {
+            // Obtener estado actual
+            val currentState = CallStateManager.getCurrentState()
+
+            CallInfo(
+                callId = callData.callId,
+                phoneNumber = if (callData.direction == CallDirections.INCOMING) callData.from else callData.to,
+                displayName = callData.remoteDisplayName.takeIf { it.isNotEmpty() },
+                direction = if (callData.direction == CallDirections.INCOMING) CallDirection.INCOMING else CallDirection.OUTGOING,
+                startTime = manager.callStartTimeMillis,
+                duration = if (manager.callStartTimeMillis > 0) System.currentTimeMillis() - manager.callStartTimeMillis else 0,
+                isOnHold = callData.isOnHold ?: false,
+                isMuted = manager.webRtcManager.isMuted(),
+                localAccount = account.username,
+                codec = null,
+                state = currentState.state,
+                isCurrentCall = currentCall1
+            )
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error creating CallInfo: ${e.message}" }
+            null
+        }
+    }
+
+    private fun mapErrorReasonToCallEndReason(errorReason: CallErrorReason): CallEndReason {
+        return when (errorReason) {
+            CallErrorReason.BUSY -> CallEndReason.BUSY
+            CallErrorReason.NO_ANSWER -> CallEndReason.NO_ANSWER
+            CallErrorReason.REJECTED -> CallEndReason.REJECTED
+            CallErrorReason.NETWORK_ERROR -> CallEndReason.NETWORK_ERROR
+            else -> CallEndReason.ERROR
+        }
+    }
+
+    private fun generateCallId(): String {
+        return "call_${System.currentTimeMillis()}_${(1000..9999).random()}"
+    }
+
+    // === MÉTODOS PÚBLICOS DE LA API ===
+
+    /**
+     * Registra una cuenta SIP
+     */
+    suspend fun registerAccount(
+        username: String,
+        password: String,
+        domain: String? = null,
+        pushToken: String? = null,
+        pushProvider: String = "fcm"
+    ) {
+        checkInitialized()
+
+        val finalDomain = domain ?: sipCoreManager?.getDefaultDomain() ?: "mcn.ru"
+        val finalToken = pushToken ?: ""
+
+        log.d(tag = TAG) { "Registering account: $username@$finalDomain" }
+
+        sipCoreManager?.register(
+            username = username,
+            password = password,
+            domain = finalDomain,
+            provider = pushProvider,
+            token = finalToken
+        )
+    }
+
+    /**
+     * Desregistra una cuenta SIP específica
+     */
+//  suspend  fun unregisterAccount(username: String, domain: String) {
+//        checkInitialized()
+//        log.d(tag = TAG) { "Unregistering account: $username@$domain" }
+//        sipCoreManager?.unregister(username, domain)
+//    }
+    suspend fun unregisterAccount(username: String, domain: String) {
+        checkInitialized()
+        val accountKey = "$username@$domain"
+        log.d(tag = TAG) { "Unregistering account: $accountKey" }
+
+        // Limpiar del cache
+        lastNotifiedRegistrationStates.remove(accountKey)
+
+        sipCoreManager?.unregister(username, domain)
+    }
+
+
+    /**
+     * NUEVO: Método para limpiar todos los caches
+     */
+    suspend fun unregisterAllAccounts() {
+        checkInitialized()
+        log.d(tag = TAG) { "Unregistering all accounts" }
+
+        // Limpiar todos los caches
+        lastNotifiedRegistrationStates.clear()
+        lastNotifiedCallState.set(null)
+
+        sipCoreManager?.unregisterAllAccounts()
+    }
+
+    /**
+     * Desregistra todas las cuentas
+     */
+// suspend   fun unregisterAllAccounts() {
+//        checkInitialized()
+//        log.d(tag = TAG) { "Unregistering all accounts" }
+//        sipCoreManager?.unregisterAllAccounts()
+//    }
+
+    /**
+     * Obtiene el estado de registro para una cuenta específica
+     */
+    fun getRegistrationState(username: String, domain: String): RegistrationState {
+        checkInitialized()
+        val accountKey = "$username@$domain"
+        return sipCoreManager?.getRegistrationState(accountKey) ?: RegistrationState.NONE
+    }
+
+    /**
+     * Obtiene todos los estados de registro
+     */
+    fun getAllRegistrationStates(): Map<String, RegistrationState> {
+        checkInitialized()
+        return sipCoreManager?.getAllRegistrationStates() ?: emptyMap()
+    }
+
+    /**
+     * Flow para observar estados de registro de todas las cuentas
+     */
+    fun getRegistrationStatesFlow(): Flow<Map<String, RegistrationState>> {
+        checkInitialized()
+        return sipCoreManager?.registrationStatesFlow ?: flowOf(emptyMap())
+    }
+
+    /**
+     * Flow para observar estados de llamada
+     */
+    fun getCallStateFlow(): Flow<CallStateInfo> {
+        checkInitialized()
+        return CallStateManager.callStateFlow
+    }
+
+    /**
+     * Obtener estado actual
+     */
+    fun getCurrentCallState(): CallStateInfo {
+        checkInitialized()
+        return CallStateManager.getCurrentState()
+    }
+
+    /**
+     * Obtener historial de estados de llamada
+     */
+    fun getCallStateHistory(): List<CallStateInfo> {
+        checkInitialized()
+        return CallStateManager.getStateHistory()
+    }
+
+    /**
+     * Limpiar historial de estados
+     */
+    fun clearCallStateHistory() {
+        checkInitialized()
+        CallStateManager.clearHistory()
+    }
+
+    /**
+     * Cambia el dispositivo de audio (entrada o salida) durante una llamada.
+     */
+    fun changeAudioDevice(device: AudioDevice) {
+        checkInitialized()
+        sipCoreManager?.changeAudioDevice(device)
+    }
+
+    /**
+     * Refresca la lista de dispositivos de audio disponibles.
+     */
+    fun refreshAudioDevices() {
+        checkInitialized()
+        sipCoreManager?.refreshAudioDevices()
+    }
+
+    /**
+     * Devuelve el par de dispositivos de audio actuales (input, output).
+     */
+    fun getCurrentAudioDevices(): Pair<AudioDevice?, AudioDevice?> {
+        checkInitialized()
+        return sipCoreManager?.getCurrentDevices() ?: Pair(null, null)
+    }
+
+    /**
+     * Devuelve todos los dispositivos de audio disponibles (inputs, outputs).
+     */
+    fun getAvailableAudioDevices(): Pair<List<AudioDevice>, List<AudioDevice>> {
+        checkInitialized()
+        return sipCoreManager?.getAudioDevices() ?: Pair(emptyList(), emptyList())
+    }
+
+    /**
+     * Realiza una llamada
+     */
+    fun makeCall(
+        phoneNumber: String,
+        username: String? = null,
+        domain: String? = null
+    ) {
+        checkInitialized()
+
+        val finalUsername = username ?: sipCoreManager?.getCurrentUsername() ?: run {
+            log.e(tag = TAG) { "No username provided and no current account available" }
+            throw SipLibraryException("No username available for making call")
         }
 
-        /**
-         * Crear IncomingCallInfo desde los datos actuales de la llamada
-         */
-        private fun createIncomingCallInfoFromCurrentCall(
-            callerNumber: String,
-            callerName: String?
-        ): IncomingCallInfo {
-            val manager = sipCoreManager ?: return IncomingCallInfo(
-                callId = generateCallId(),
-                callerNumber = callerNumber,
-                callerName = callerName,
-                targetAccount = "",
-                timestamp = System.currentTimeMillis()
-            )
-
-            val account = manager.currentAccountInfo
-            val callData = account?.currentCallData
-
-            return IncomingCallInfo(
-                callId = callData?.callId ?: generateCallId(),
-                callerNumber = callerNumber,
-                callerName = callerName,
-                targetAccount = account?.username ?: "",
-                timestamp = callData?.startTime ?: System.currentTimeMillis()
-            )
+        val finalDomain = domain ?: sipCoreManager?.getDefaultDomain() ?: run {
+            log.e(tag = TAG) { "No domain provided and no current account available" }
+            throw SipLibraryException("No domain available for making call")
         }
 
-        // === MÉTODOS AUXILIARES ===
+        log.d(tag = TAG) { "Making call to $phoneNumber from $finalUsername@$finalDomain" }
 
-        /**
-         * Obtiene información de llamada para un estado específico
-         */
-        private fun getCallInfoForState(stateInfo: CallStateInfo): CallInfo? {
-            val manager = sipCoreManager ?: return null
-            val calls = MultiCallManager.getAllCalls()
+        sipCoreManager?.makeCall(phoneNumber, finalUsername, finalDomain)
+    }
 
-            // Buscar la llamada específica por callId
-            val callData = calls.find { it.callId == stateInfo.callId }
-                ?: manager.currentAccountInfo?.currentCallData
-                ?: return null
+    /**
+     * Acepta una llamada (con soporte para múltiples llamadas)
+     */
+    fun acceptCall(callId: String? = null) {
+        checkInitialized()
 
-            val account = manager.currentAccountInfo ?: return null
-            val currentCall1 = calls.size == 1 &&
-                    stateInfo.state != CallState.ENDED &&
-                    stateInfo.state != CallState.ERROR &&
-                    stateInfo.state != CallState.ENDING &&
-                    stateInfo.state != CallState.IDLE
+        val calls = MultiCallManager.getAllCalls()
+        val targetCallId = if (callId == null && calls.size == 1) {
+            // Llamada única, usar sin callId
+            log.d(tag = TAG) { "Accepting single call" }
+            sipCoreManager?.acceptCall()
+            return
+        } else {
+            callId ?: calls.firstOrNull()?.callId
+        }
 
-            return try {
+        if (targetCallId != null) {
+            log.d(tag = TAG) { "Accepting call: $targetCallId" }
+            sipCoreManager?.acceptCall(targetCallId)
+        } else {
+            log.w(tag = TAG) { "No call to accept" }
+        }
+    }
+
+    /**
+     * Rechaza una llamada (con soporte para múltiples llamadas)
+     */
+    fun declineCall(callId: String? = null) {
+        checkInitialized()
+
+        val calls = MultiCallManager.getAllCalls()
+        val targetCallId = if (callId == null && calls.size == 1) {
+            // Llamada única, usar sin callId
+            log.d(tag = TAG) { "Declining single call" }
+            sipCoreManager?.declineCall()
+            return
+        } else {
+            callId ?: calls.firstOrNull()?.callId
+        }
+
+        if (targetCallId != null) {
+            log.d(tag = TAG) { "Declining call: $targetCallId" }
+            sipCoreManager?.declineCall(targetCallId)
+        } else {
+            log.w(tag = TAG) { "No call to decline" }
+        }
+    }
+
+    /**
+     * Termina una llamada (con soporte para múltiples llamadas)
+     */
+    fun endCall(callId: String? = null) {
+        checkInitialized()
+
+        val calls = MultiCallManager.getAllCalls()
+        val targetCallId = if (callId == null && calls.size == 1) {
+            // Llamada única, usar sin callId
+            log.d(tag = TAG) { "Ending single call" }
+            sipCoreManager?.endCall()
+            return
+        } else {
+            callId ?: calls.firstOrNull()?.callId
+        }
+
+        if (targetCallId != null) {
+            log.d(tag = TAG) { "Ending call: $targetCallId" }
+            sipCoreManager?.endCall(targetCallId)
+        } else {
+            log.w(tag = TAG) { "No call to end" }
+        }
+    }
+
+    /**
+     * Pone una llamada en espera (con soporte para múltiples llamadas)
+     */
+    fun holdCall(callId: String? = null) {
+        checkInitialized()
+
+        val calls = MultiCallManager.getAllCalls()
+        val targetCallId = if (callId == null && calls.size == 1) {
+            // Llamada única, usar sin callId
+            log.d(tag = TAG) { "Holding single call" }
+            sipCoreManager?.holdCall()
+            return
+        } else {
+            callId ?: calls.firstOrNull()?.callId
+        }
+
+        if (targetCallId != null) {
+            log.d(tag = TAG) { "Holding call: $targetCallId" }
+            sipCoreManager?.holdCall(targetCallId)
+        } else {
+            log.w(tag = TAG) { "No call to hold" }
+        }
+    }
+
+    /**
+     * Reanuda una llamada (con soporte para múltiples llamadas)
+     */
+    fun resumeCall(callId: String? = null) {
+        checkInitialized()
+
+        val calls = MultiCallManager.getAllCalls()
+        val targetCallId = if (callId == null && calls.size == 1) {
+            // Llamada única, usar sin callId
+            log.d(tag = TAG) { "Resuming single call" }
+            sipCoreManager?.resumeCall()
+            return
+        } else {
+            callId ?: calls.firstOrNull()?.callId
+        }
+
+        if (targetCallId != null) {
+            log.d(tag = TAG) { "Resuming call: $targetCallId" }
+            sipCoreManager?.resumeCall(targetCallId)
+        } else {
+            log.w(tag = TAG) { "No call to resume" }
+        }
+    }
+
+    /**
+     * Alias para resumeCall para compatibilidad
+     */
+    fun unholdCall(callId: String? = null) = resumeCall(callId)
+
+    /**
+     * Obtiene todas las llamadas activas
+     */
+    fun getAllCalls(): List<CallInfo> {
+        checkInitialized()
+        return MultiCallManager.getAllCalls().mapNotNull { callData ->
+            try {
+                val account = sipCoreManager?.currentAccountInfo ?: return@mapNotNull null
+                val allActiveCalls = MultiCallManager.getActiveCalls()
+
+                // Determinar si es la llamada actual
+                val isCurrentCall = allActiveCalls.size == 1 &&
+                        allActiveCalls.first().callId == callData.callId
+
                 CallInfo(
                     callId = callData.callId,
                     phoneNumber = if (callData.direction == CallDirections.INCOMING) callData.from else callData.to,
@@ -1332,452 +1749,53 @@ class EddysSipLibrary private constructor() {
                     startTime = callData.startTime,
                     duration = if (callData.startTime > 0) System.currentTimeMillis() - callData.startTime else 0,
                     isOnHold = callData.isOnHold ?: false,
-                    isMuted = manager.webRtcManager.isMuted(),
+                    isMuted = sipCoreManager?.webRtcManager?.isMuted() ?: false,
                     localAccount = account.username,
                     codec = null,
-                    state = stateInfo.state,
-                    isCurrentCall = currentCall1
+                    state = CallStateManager.getStateForCall(callData.callId)?.state,
+                    isCurrentCall = isCurrentCall
                 )
             } catch (e: Exception) {
-                log.e(tag = TAG) { "Error creating CallInfo: ${e.message}" }
+                log.e(tag = TAG) { "Error creating CallInfo for ${callData.callId}: ${e.message}" }
                 null
             }
         }
+    }
 
-        /**
-         * Método getCurrentCallInfo() actualizado
-         */
-        private fun getCurrentCallInfo(): CallInfo? {
-            val manager = sipCoreManager ?: return null
-            val account = manager.currentAccountInfo ?: return null
-            val calls = MultiCallManager.getAllCalls()
-            val callData = calls.firstOrNull() ?: account.currentCallData ?: return null
+    /**
+     * Fuerza la limpieza de llamadas terminadas
+     */
+    fun cleanupTerminatedCalls() {
+        checkInitialized()
+        sipCoreManager?.cleanupTerminatedCalls()
+    }
 
-            val currentCall1 = calls.size == 1 &&
-                    CallStateManager.getCurrentState().let { state ->
-                        state.state != CallState.ENDED &&
-                                state.state != CallState.ERROR &&
-                                state.state != CallState.ENDING &&
-                                state.state != CallState.IDLE
-                    }
+    /**
+     * Obtiene información detallada sobre las llamadas
+     */
+    fun getCallsDiagnostic(): String {
+        checkInitialized()
+        return sipCoreManager?.getCallsInfo() ?: "No call information available"
+    }
 
-            return try {
-                // Obtener estado actual
-                val currentState = CallStateManager.getCurrentState()
+    fun toggleMute() {
+        checkInitialized()
+        log.d(tag = TAG) { "Toggling mute" }
+        sipCoreManager?.mute()
 
-                CallInfo(
-                    callId = callData.callId,
-                    phoneNumber = if (callData.direction == CallDirections.INCOMING) callData.from else callData.to,
-                    displayName = callData.remoteDisplayName.takeIf { it.isNotEmpty() },
-                    direction = if (callData.direction == CallDirections.INCOMING) CallDirection.INCOMING else CallDirection.OUTGOING,
-                    startTime = manager.callStartTimeMillis,
-                    duration = if (manager.callStartTimeMillis > 0) System.currentTimeMillis() - manager.callStartTimeMillis else 0,
-                    isOnHold = callData.isOnHold ?: false,
-                    isMuted = manager.webRtcManager.isMuted(),
-                    localAccount = account.username,
-                    codec = null,
-                    state = currentState.state,
-                    isCurrentCall = currentCall1
-                )
+        getCurrentCallInfo()?.let { callInfo ->
+            val isMuted = sipCoreManager?.webRtcManager?.isMuted() ?: false
+            val mutedCallInfo = callInfo.copy(isMuted = isMuted)
+            try {
+                callListener?.onMuteStateChanged(isMuted, mutedCallInfo)
             } catch (e: Exception) {
-                log.e(tag = TAG) { "Error creating CallInfo: ${e.message}" }
-                null
+                log.e(tag = TAG) { "Error in CallListener onMuteStateChanged: ${e.message}" }
             }
         }
-
-        private fun mapErrorReasonToCallEndReason(errorReason: CallErrorReason): CallEndReason {
-            return when (errorReason) {
-                CallErrorReason.BUSY -> CallEndReason.BUSY
-                CallErrorReason.NO_ANSWER -> CallEndReason.NO_ANSWER
-                CallErrorReason.REJECTED -> CallEndReason.REJECTED
-                CallErrorReason.NETWORK_ERROR -> CallEndReason.NETWORK_ERROR
-                else -> CallEndReason.ERROR
-            }
-        }
-
-        private fun generateCallId(): String {
-            return "call_${System.currentTimeMillis()}_${(1000..9999).random()}"
-        }
-
-        // === MÉTODOS PÚBLICOS DE LA API ===
-
-        /**
-         * Registra una cuenta SIP
-         */
-        suspend fun registerAccount(
-            username: String,
-            password: String,
-            domain: String? = null,
-            pushToken: String? = null,
-            pushProvider: String = "fcm"
-        ) {
-            checkInitialized()
-
-            val finalDomain = domain ?: sipCoreManager?.getDefaultDomain() ?: "mcn.ru"
-            val finalToken = pushToken ?: ""
-
-            log.d(tag = TAG) { "Registering account: $username@$finalDomain" }
-
-            sipCoreManager?.register(
-                username = username,
-                password = password,
-                domain = finalDomain,
-                provider = pushProvider,
-                token = finalToken
-            )
-        }
-
-        /**
-         * Desregistra una cuenta SIP específica
-         */
-//  suspend  fun unregisterAccount(username: String, domain: String) {
-//        checkInitialized()
-//        log.d(tag = TAG) { "Unregistering account: $username@$domain" }
-//        sipCoreManager?.unregister(username, domain)
-//    }
-        suspend fun unregisterAccount(username: String, domain: String) {
-            checkInitialized()
-            val accountKey = "$username@$domain"
-            log.d(tag = TAG) { "Unregistering account: $accountKey" }
-
-            // Limpiar del cache
-            lastNotifiedRegistrationStates.remove(accountKey)
-
-            sipCoreManager?.unregister(username, domain)
-        }
-
-
-        /**
-         * NUEVO: Método para limpiar todos los caches
-         */
-        suspend fun unregisterAllAccounts() {
-            checkInitialized()
-            log.d(tag = TAG) { "Unregistering all accounts" }
-
-            // Limpiar todos los caches
-            lastNotifiedRegistrationStates.clear()
-            lastNotifiedCallState.set(null)
-
-            sipCoreManager?.unregisterAllAccounts()
-        }
-
-        /**
-         * Desregistra todas las cuentas
-         */
-// suspend   fun unregisterAllAccounts() {
-//        checkInitialized()
-//        log.d(tag = TAG) { "Unregistering all accounts" }
-//        sipCoreManager?.unregisterAllAccounts()
-//    }
-
-        /**
-         * Obtiene el estado de registro para una cuenta específica
-         */
-        fun getRegistrationState(username: String, domain: String): RegistrationState {
-            checkInitialized()
-            val accountKey = "$username@$domain"
-            return sipCoreManager?.getRegistrationState(accountKey) ?: RegistrationState.NONE
-        }
-
-        /**
-         * Obtiene todos los estados de registro
-         */
-        fun getAllRegistrationStates(): Map<String, RegistrationState> {
-            checkInitialized()
-            return sipCoreManager?.getAllRegistrationStates() ?: emptyMap()
-        }
-
-        /**
-         * Flow para observar estados de registro de todas las cuentas
-         */
-        fun getRegistrationStatesFlow(): Flow<Map<String, RegistrationState>> {
-            checkInitialized()
-            return sipCoreManager?.registrationStatesFlow ?: flowOf(emptyMap())
-        }
-
-        /**
-         * Flow para observar estados de llamada
-         */
-        fun getCallStateFlow(): Flow<CallStateInfo> {
-            checkInitialized()
-            return CallStateManager.callStateFlow
-        }
-
-        /**
-         * Obtener estado actual
-         */
-        fun getCurrentCallState(): CallStateInfo {
-            checkInitialized()
-            return CallStateManager.getCurrentState()
-        }
-
-        /**
-         * Obtener historial de estados de llamada
-         */
-        fun getCallStateHistory(): List<CallStateInfo> {
-            checkInitialized()
-            return CallStateManager.getStateHistory()
-        }
-
-        /**
-         * Limpiar historial de estados
-         */
-        fun clearCallStateHistory() {
-            checkInitialized()
-            CallStateManager.clearHistory()
-        }
-
-        /**
-         * Cambia el dispositivo de audio (entrada o salida) durante una llamada.
-         */
-        fun changeAudioDevice(device: AudioDevice) {
-            checkInitialized()
-            sipCoreManager?.changeAudioDevice(device)
-        }
-
-        /**
-         * Refresca la lista de dispositivos de audio disponibles.
-         */
-        fun refreshAudioDevices() {
-            checkInitialized()
-            sipCoreManager?.refreshAudioDevices()
-        }
-
-        /**
-         * Devuelve el par de dispositivos de audio actuales (input, output).
-         */
-        fun getCurrentAudioDevices(): Pair<AudioDevice?, AudioDevice?> {
-            checkInitialized()
-            return sipCoreManager?.getCurrentDevices() ?: Pair(null, null)
-        }
-
-        /**
-         * Devuelve todos los dispositivos de audio disponibles (inputs, outputs).
-         */
-        fun getAvailableAudioDevices(): Pair<List<AudioDevice>, List<AudioDevice>> {
-            checkInitialized()
-            return sipCoreManager?.getAudioDevices() ?: Pair(emptyList(), emptyList())
-        }
-
-        /**
-         * Realiza una llamada
-         */
-        fun makeCall(
-            phoneNumber: String,
-            username: String? = null,
-            domain: String? = null
-        ) {
-            checkInitialized()
-
-            val finalUsername = username ?: sipCoreManager?.getCurrentUsername() ?: run {
-                log.e(tag = TAG) { "No username provided and no current account available" }
-                throw SipLibraryException("No username available for making call")
-            }
-
-            val finalDomain = domain ?: sipCoreManager?.getDefaultDomain() ?: run {
-                log.e(tag = TAG) { "No domain provided and no current account available" }
-                throw SipLibraryException("No domain available for making call")
-            }
-
-            log.d(tag = TAG) { "Making call to $phoneNumber from $finalUsername@$finalDomain" }
-
-            sipCoreManager?.makeCall(phoneNumber, finalUsername, finalDomain)
-        }
-
-        /**
-         * Acepta una llamada (con soporte para múltiples llamadas)
-         */
-        fun acceptCall(callId: String? = null) {
-            checkInitialized()
-
-            val calls = MultiCallManager.getAllCalls()
-            val targetCallId = if (callId == null && calls.size == 1) {
-                // Llamada única, usar sin callId
-                log.d(tag = TAG) { "Accepting single call" }
-                sipCoreManager?.acceptCall()
-                return
-            } else {
-                callId ?: calls.firstOrNull()?.callId
-            }
-
-            if (targetCallId != null) {
-                log.d(tag = TAG) { "Accepting call: $targetCallId" }
-                sipCoreManager?.acceptCall(targetCallId)
-            } else {
-                log.w(tag = TAG) { "No call to accept" }
-            }
-        }
-
-        /**
-         * Rechaza una llamada (con soporte para múltiples llamadas)
-         */
-        fun declineCall(callId: String? = null) {
-            checkInitialized()
-
-            val calls = MultiCallManager.getAllCalls()
-            val targetCallId = if (callId == null && calls.size == 1) {
-                // Llamada única, usar sin callId
-                log.d(tag = TAG) { "Declining single call" }
-                sipCoreManager?.declineCall()
-                return
-            } else {
-                callId ?: calls.firstOrNull()?.callId
-            }
-
-            if (targetCallId != null) {
-                log.d(tag = TAG) { "Declining call: $targetCallId" }
-                sipCoreManager?.declineCall(targetCallId)
-            } else {
-                log.w(tag = TAG) { "No call to decline" }
-            }
-        }
-
-        /**
-         * Termina una llamada (con soporte para múltiples llamadas)
-         */
-        fun endCall(callId: String? = null) {
-            checkInitialized()
-
-            val calls = MultiCallManager.getAllCalls()
-            val targetCallId = if (callId == null && calls.size == 1) {
-                // Llamada única, usar sin callId
-                log.d(tag = TAG) { "Ending single call" }
-                sipCoreManager?.endCall()
-                return
-            } else {
-                callId ?: calls.firstOrNull()?.callId
-            }
-
-            if (targetCallId != null) {
-                log.d(tag = TAG) { "Ending call: $targetCallId" }
-                sipCoreManager?.endCall(targetCallId)
-            } else {
-                log.w(tag = TAG) { "No call to end" }
-            }
-        }
-
-        /**
-         * Pone una llamada en espera (con soporte para múltiples llamadas)
-         */
-        fun holdCall(callId: String? = null) {
-            checkInitialized()
-
-            val calls = MultiCallManager.getAllCalls()
-            val targetCallId = if (callId == null && calls.size == 1) {
-                // Llamada única, usar sin callId
-                log.d(tag = TAG) { "Holding single call" }
-                sipCoreManager?.holdCall()
-                return
-            } else {
-                callId ?: calls.firstOrNull()?.callId
-            }
-
-            if (targetCallId != null) {
-                log.d(tag = TAG) { "Holding call: $targetCallId" }
-                sipCoreManager?.holdCall(targetCallId)
-            } else {
-                log.w(tag = TAG) { "No call to hold" }
-            }
-        }
-
-        /**
-         * Reanuda una llamada (con soporte para múltiples llamadas)
-         */
-        fun resumeCall(callId: String? = null) {
-            checkInitialized()
-
-            val calls = MultiCallManager.getAllCalls()
-            val targetCallId = if (callId == null && calls.size == 1) {
-                // Llamada única, usar sin callId
-                log.d(tag = TAG) { "Resuming single call" }
-                sipCoreManager?.resumeCall()
-                return
-            } else {
-                callId ?: calls.firstOrNull()?.callId
-            }
-
-            if (targetCallId != null) {
-                log.d(tag = TAG) { "Resuming call: $targetCallId" }
-                sipCoreManager?.resumeCall(targetCallId)
-            } else {
-                log.w(tag = TAG) { "No call to resume" }
-            }
-        }
-
-        /**
-         * Alias para resumeCall para compatibilidad
-         */
-        fun unholdCall(callId: String? = null) = resumeCall(callId)
-
-        /**
-         * Obtiene todas las llamadas activas
-         */
-        fun getAllCalls(): List<CallInfo> {
-            checkInitialized()
-            return MultiCallManager.getAllCalls().mapNotNull { callData ->
-                try {
-                    val account = sipCoreManager?.currentAccountInfo ?: return@mapNotNull null
-                    val allActiveCalls = MultiCallManager.getActiveCalls()
-
-                    // Determinar si es la llamada actual
-                    val isCurrentCall = allActiveCalls.size == 1 &&
-                            allActiveCalls.first().callId == callData.callId
-
-                    CallInfo(
-                        callId = callData.callId,
-                        phoneNumber = if (callData.direction == CallDirections.INCOMING) callData.from else callData.to,
-                        displayName = callData.remoteDisplayName.takeIf { it.isNotEmpty() },
-                        direction = if (callData.direction == CallDirections.INCOMING) CallDirection.INCOMING else CallDirection.OUTGOING,
-                        startTime = callData.startTime,
-                        duration = if (callData.startTime > 0) System.currentTimeMillis() - callData.startTime else 0,
-                        isOnHold = callData.isOnHold ?: false,
-                        isMuted = sipCoreManager?.webRtcManager?.isMuted() ?: false,
-                        localAccount = account.username,
-                        codec = null,
-                        state = CallStateManager.getStateForCall(callData.callId)?.state,
-                        isCurrentCall = isCurrentCall
-                    )
-                } catch (e: Exception) {
-                    log.e(tag = TAG) { "Error creating CallInfo for ${callData.callId}: ${e.message}" }
-                    null
-                }
-            }
-        }
-
-        /**
-         * Fuerza la limpieza de llamadas terminadas
-         */
-        fun cleanupTerminatedCalls() {
-            checkInitialized()
-            sipCoreManager?.cleanupTerminatedCalls()
-        }
-
-        /**
-         * Obtiene información detallada sobre las llamadas
-         */
-        fun getCallsDiagnostic(): String {
-            checkInitialized()
-            return sipCoreManager?.getCallsInfo() ?: "No call information available"
-        }
-
-        fun toggleMute() {
-            checkInitialized()
-            log.d(tag = TAG) { "Toggling mute" }
-            sipCoreManager?.mute()
-
-            getCurrentCallInfo()?.let { callInfo ->
-                val isMuted = sipCoreManager?.webRtcManager?.isMuted() ?: false
-                val mutedCallInfo = callInfo.copy(isMuted = isMuted)
-                try {
-                    callListener?.onMuteStateChanged(isMuted, mutedCallInfo)
-                } catch (e: Exception) {
-                    log.e(tag = TAG) { "Error in CallListener onMuteStateChanged: ${e.message}" }
-                }
-            }
-        }
+    }
     // === MÉTODOS DE CAMBIO RINGTONE ACTUALIZADOS ===
 
-     fun setIncomingRingtone(uri: Uri) {
+    fun setIncomingRingtone(uri: Uri) {
         checkInitialized()
         try {
             // Guardar en base de datos Y configurar en AudioManager
@@ -1788,7 +1806,7 @@ class EddysSipLibrary private constructor() {
         }
     }
 
-     fun setOutgoingRingtone(uri: Uri) {
+    fun setOutgoingRingtone(uri: Uri) {
         checkInitialized()
         try {
             // Guardar en base de datos Y configurar en AudioManager
@@ -1879,265 +1897,265 @@ class EddysSipLibrary private constructor() {
 //        // === MÉTODOS DE CAMBIO RINGTONE ===
 
 
-        // === MÉTODOS DE INFORMACIÓN ===
+    // === MÉTODOS DE INFORMACIÓN ===
 
-        fun hasActiveCall(): Boolean {
-            checkInitialized()
-            return MultiCallManager.hasActiveCalls()
-        }
+    fun hasActiveCall(): Boolean {
+        checkInitialized()
+        return MultiCallManager.hasActiveCalls()
+    }
 
-        // === MÉTODOS ADICIONALES ===
+    // === MÉTODOS ADICIONALES ===
 
-        fun sendDtmf(digit: Char, duration: Int = 160): Boolean {
-            checkInitialized()
-            return sipCoreManager?.sendDtmf(digit, duration) ?: false
-        }
+    fun sendDtmf(digit: Char, duration: Int = 160): Boolean {
+        checkInitialized()
+        return sipCoreManager?.sendDtmf(digit, duration) ?: false
+    }
 
-        fun sendDtmfSequence(digits: String, duration: Int = 160): Boolean {
-            checkInitialized()
-            return sipCoreManager?.sendDtmfSequence(digits, duration) ?: false
-        }
+    fun sendDtmfSequence(digits: String, duration: Int = 160): Boolean {
+        checkInitialized()
+        return sipCoreManager?.sendDtmfSequence(digits, duration) ?: false
+    }
 
-        fun isMuted(): Boolean {
-            checkInitialized()
-            return sipCoreManager?.webRtcManager?.isMuted() ?: false
-        }
+    fun isMuted(): Boolean {
+        checkInitialized()
+        return sipCoreManager?.webRtcManager?.isMuted() ?: false
+    }
 
-        fun getAudioDevices(): Pair<List<AudioDevice>, List<AudioDevice>> {
-            checkInitialized()
-            return sipCoreManager?.webRtcManager?.getAllAudioDevices() ?: Pair(
-                emptyList(),
-                emptyList()
-            )
-        }
+    fun getAudioDevices(): Pair<List<AudioDevice>, List<AudioDevice>> {
+        checkInitialized()
+        return sipCoreManager?.webRtcManager?.getAllAudioDevices() ?: Pair(
+            emptyList(),
+            emptyList()
+        )
+    }
 
-        fun changeAudioOutput(device: AudioDevice): Boolean {
-            checkInitialized()
-            return sipCoreManager?.webRtcManager?.changeAudioOutputDeviceDuringCall(device) ?: false
-        }
+    fun changeAudioOutput(device: AudioDevice): Boolean {
+        checkInitialized()
+        return sipCoreManager?.webRtcManager?.changeAudioOutputDeviceDuringCall(device) ?: false
+    }
 
-        fun getCallLogs(limit: Int = 50): List<CallLog> {
-            checkInitialized()
-            return sipCoreManager?.callLogs(limit) ?: emptyList()
-        }
+    fun getCallLogs(limit: Int = 50): List<CallLog> {
+        checkInitialized()
+        return sipCoreManager?.callLogs(limit) ?: emptyList()
+    }
 
-        fun getMissedCalls(): List<CallLog> {
-            checkInitialized()
-            return sipCoreManager?.getMissedCalls() ?: emptyList()
-        }
+    fun getMissedCalls(): List<CallLog> {
+        checkInitialized()
+        return sipCoreManager?.getMissedCalls() ?: emptyList()
+    }
 
-        fun getCallLogsForNumber(phoneNumber: String): List<CallLog> {
-            checkInitialized()
-            return sipCoreManager?.getCallLogsForNumber(phoneNumber) ?: emptyList()
-        }
+    fun getCallLogsForNumber(phoneNumber: String): List<CallLog> {
+        checkInitialized()
+        return sipCoreManager?.getCallLogsForNumber(phoneNumber) ?: emptyList()
+    }
 
-        fun clearCallLogs() {
-            checkInitialized()
-            sipCoreManager?.clearCallLogs()
-        }
+    fun clearCallLogs() {
+        checkInitialized()
+        sipCoreManager?.clearCallLogs()
+    }
 
-        // === MÉTODOS DE GESTIÓN DE MODO PUSH ===
+    // === MÉTODOS DE GESTIÓN DE MODO PUSH ===
 
-        /**
-         * Cambia manualmente a modo push para cuentas específicas
-         */
-        fun switchToPushMode(accounts: Set<String>? = null) {
-            checkInitialized()
+    /**
+     * Cambia manualmente a modo push para cuentas específicas
+     */
+    fun switchToPushMode(accounts: Set<String>? = null) {
+        checkInitialized()
 
-            val accountsToSwitch =
-                accounts ?: sipCoreManager?.getAllRegisteredAccountKeys() ?: emptySet()
-            pushModeManager?.switchToPushMode(accountsToSwitch)
+        val accountsToSwitch =
+            accounts ?: sipCoreManager?.getAllRegisteredAccountKeys() ?: emptySet()
+        pushModeManager?.switchToPushMode(accountsToSwitch)
 
-            log.d(tag = TAG) { "Manual switch to push mode for ${accountsToSwitch.size} accounts" }
-        }
+        log.d(tag = TAG) { "Manual switch to push mode for ${accountsToSwitch.size} accounts" }
+    }
 
-        /**
-         * NUEVO: Sincroniza datos de memoria a BD
-         */
-        fun syncCallLogsToDB() {
-            checkInitialized()
-            sipCoreManager?.syncMemoryCallLogsToDB()
-        }
+    /**
+     * NUEVO: Sincroniza datos de memoria a BD
+     */
+    fun syncCallLogsToDB() {
+        checkInitialized()
+        sipCoreManager?.syncMemoryCallLogsToDB()
+    }
 
-        /**
-         * NUEVO: Flow para observar cambios en call logs desde BD
-         */
-        fun getCallLogsFlow(limit: Int = 50): Flow<List<CallLog>>? {
-            checkInitialized()
-            return try {
-                databaseManager?.getRecentCallLogs(limit)?.map { callLogsWithContact ->
-                    callLogsWithContact.toCallLogs()
-                }
-            } catch (e: Exception) {
-                log.e(tag = TAG) { "Error getting call logs flow: ${e.message}" }
-                null
+    /**
+     * NUEVO: Flow para observar cambios en call logs desde BD
+     */
+    fun getCallLogsFlow(limit: Int = 50): Flow<List<CallLog>>? {
+        checkInitialized()
+        return try {
+            databaseManager?.getRecentCallLogs(limit)?.map { callLogsWithContact ->
+                callLogsWithContact.toCallLogs()
             }
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error getting call logs flow: ${e.message}" }
+            null
         }
+    }
 
-        /**
-         * NUEVO: Flow para observar missed calls desde BD
-         */
-        fun getMissedCallsFlow(): Flow<List<CallLog>>? {
-            checkInitialized()
-            return try {
-                databaseManager?.getMissedCallLogs()?.map { callLogsWithContact ->
-                    callLogsWithContact.toCallLogs()
-                }
-            } catch (e: Exception) {
-                log.e(tag = TAG) { "Error getting missed calls flow: ${e.message}" }
-                null
+    /**
+     * NUEVO: Flow para observar missed calls desde BD
+     */
+    fun getMissedCallsFlow(): Flow<List<CallLog>>? {
+        checkInitialized()
+        return try {
+            databaseManager?.getMissedCallLogs()?.map { callLogsWithContact ->
+                callLogsWithContact.toCallLogs()
             }
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error getting missed calls flow: ${e.message}" }
+            null
         }
+    }
 
-        /**
-         * NUEVO: Método para obtener estadísticas de llamadas desde BD
-         */
-        suspend fun getCallStatisticsFromDB(): CallHistoryManager.CallStatistics? {
-            checkInitialized()
-            return try {
-                val stats = databaseManager?.getGeneralStatistics()
-                stats?.let {
-                    CallHistoryManager.CallStatistics(
-                        totalCalls = it.totalCalls,
-                        missedCalls = it.missedCalls,
-                        successfulCalls = it.totalCalls - it.missedCalls, // aproximación
-                        declinedCalls = 0, // se puede calcular si se agrega a GeneralStatistics
-                        abortedCalls = 0,  // se puede calcular si se agrega a GeneralStatistics
-                        incomingCalls = 0, // se puede calcular si se agrega a GeneralStatistics
-                        outgoingCalls = 0, // se puede calcular si se agrega a GeneralStatistics
-                        totalDuration = 0  // se puede calcular si se agrega a GeneralStatistics
+    /**
+     * NUEVO: Método para obtener estadísticas de llamadas desde BD
+     */
+    suspend fun getCallStatisticsFromDB(): CallHistoryManager.CallStatistics? {
+        checkInitialized()
+        return try {
+            val stats = databaseManager?.getGeneralStatistics()
+            stats?.let {
+                CallHistoryManager.CallStatistics(
+                    totalCalls = it.totalCalls,
+                    missedCalls = it.missedCalls,
+                    successfulCalls = it.totalCalls - it.missedCalls, // aproximación
+                    declinedCalls = 0, // se puede calcular si se agrega a GeneralStatistics
+                    abortedCalls = 0,  // se puede calcular si se agrega a GeneralStatistics
+                    incomingCalls = 0, // se puede calcular si se agrega a GeneralStatistics
+                    outgoingCalls = 0, // se puede calcular si se agrega a GeneralStatistics
+                    totalDuration = 0  // se puede calcular si se agrega a GeneralStatistics
+                )
+            }
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error getting call statistics from DB: ${e.message}" }
+            null
+        }
+    }
+
+    /**
+     * Cambia manualmente a modo foreground para cuentas específicas
+     */
+    fun switchToForegroundMode(accounts: Set<String>? = null) {
+        checkInitialized()
+
+        val accountsToSwitch =
+            accounts ?: sipCoreManager?.getAllRegisteredAccountKeys() ?: emptySet()
+        pushModeManager?.switchToForegroundMode(accountsToSwitch)
+
+        log.d(tag = TAG) { "Manual switch to foreground mode for ${accountsToSwitch.size} accounts" }
+    }
+
+    /**
+     * Obtiene el modo push actual
+     */
+    fun getCurrentPushMode(): PushMode {
+        checkInitialized()
+        return pushModeManager?.getCurrentMode() ?: PushMode.FOREGROUND
+    }
+
+    /**
+     * Verifica si está en modo push
+     */
+    fun isInPushMode(): Boolean {
+        checkInitialized()
+        return pushModeManager?.isInPushMode() ?: false
+    }
+
+    /**
+     * Obtiene el estado completo del modo push
+     */
+    fun getPushModeState(): PushModeState {
+        checkInitialized()
+        return pushModeManager?.getCurrentState() ?: PushModeState(
+            currentMode = PushMode.FOREGROUND,
+            previousMode = null,
+            timestamp = System.currentTimeMillis(),
+            reason = "Not initialized"
+        )
+    }
+
+    /**
+     * Flow para observar cambios de modo push
+     */
+    fun getPushModeStateFlow(): Flow<PushModeState> {
+        checkInitialized()
+        return pushModeManager?.pushModeStateFlow ?: flowOf(getPushModeState())
+    }
+
+    /**
+     * Notifica que se recibió una notificación push (para uso interno o externo)
+     */
+    fun onPushNotificationReceived(data: Map<String, Any>? = null) {
+        log.d(tag = TAG1) { "onPushNotificationReceived: inicio data : $data" }
+
+        checkInitialized()
+
+        if (data != null && data.containsKey("sipName")) {
+            // Notificación push específica para una cuenta
+            val sipName = data["sipName"] as? String
+            val phoneNumber = data["phoneNumber"] as? String
+            val callId = data["callId"] as? String
+
+            log.d(tag = TAG1) {
+                "Push notification for specific account: sipName=$sipName, phoneNumber=$phoneNumber, callId=$callId"
+            }
+
+            if (sipName != null) {
+                // Buscar la cuenta completa (sipName@domain)
+                val registeredAccounts =
+                    sipCoreManager?.getAllRegisteredAccountKeys() ?: emptySet()
+                val specificAccount = registeredAccounts.find { it.startsWith("$sipName@") }
+
+                if (specificAccount != null) {
+                    log.d(tag = TAG1) { "Found specific account for push: $specificAccount" }
+                    pushModeManager?.onPushNotificationReceived(
+                        specificAccount = specificAccount,
+                        allRegisteredAccounts = registeredAccounts
                     )
-                }
-            } catch (e: Exception) {
-                log.e(tag = TAG) { "Error getting call statistics from DB: ${e.message}" }
-                null
-            }
-        }
-
-        /**
-         * Cambia manualmente a modo foreground para cuentas específicas
-         */
-        fun switchToForegroundMode(accounts: Set<String>? = null) {
-            checkInitialized()
-
-            val accountsToSwitch =
-                accounts ?: sipCoreManager?.getAllRegisteredAccountKeys() ?: emptySet()
-            pushModeManager?.switchToForegroundMode(accountsToSwitch)
-
-            log.d(tag = TAG) { "Manual switch to foreground mode for ${accountsToSwitch.size} accounts" }
-        }
-
-        /**
-         * Obtiene el modo push actual
-         */
-        fun getCurrentPushMode(): PushMode {
-            checkInitialized()
-            return pushModeManager?.getCurrentMode() ?: PushMode.FOREGROUND
-        }
-
-        /**
-         * Verifica si está en modo push
-         */
-        fun isInPushMode(): Boolean {
-            checkInitialized()
-            return pushModeManager?.isInPushMode() ?: false
-        }
-
-        /**
-         * Obtiene el estado completo del modo push
-         */
-        fun getPushModeState(): PushModeState {
-            checkInitialized()
-            return pushModeManager?.getCurrentState() ?: PushModeState(
-                currentMode = PushMode.FOREGROUND,
-                previousMode = null,
-                timestamp = System.currentTimeMillis(),
-                reason = "Not initialized"
-            )
-        }
-
-        /**
-         * Flow para observar cambios de modo push
-         */
-        fun getPushModeStateFlow(): Flow<PushModeState> {
-            checkInitialized()
-            return pushModeManager?.pushModeStateFlow ?: flowOf(getPushModeState())
-        }
-
-        /**
-         * Notifica que se recibió una notificación push (para uso interno o externo)
-         */
-        fun onPushNotificationReceived(data: Map<String, Any>? = null) {
-            log.d(tag = TAG1) { "onPushNotificationReceived: inicio data : $data" }
-
-            checkInitialized()
-
-            if (data != null && data.containsKey("sipName")) {
-                // Notificación push específica para una cuenta
-                val sipName = data["sipName"] as? String
-                val phoneNumber = data["phoneNumber"] as? String
-                val callId = data["callId"] as? String
-
-                log.d(tag = TAG1) {
-                    "Push notification for specific account: sipName=$sipName, phoneNumber=$phoneNumber, callId=$callId"
-                }
-
-                if (sipName != null) {
-                    // Buscar la cuenta completa (sipName@domain)
-                    val registeredAccounts =
-                        sipCoreManager?.getAllRegisteredAccountKeys() ?: emptySet()
-                    val specificAccount = registeredAccounts.find { it.startsWith("$sipName@") }
-
-                    if (specificAccount != null) {
-                        log.d(tag = TAG1) { "Found specific account for push: $specificAccount" }
-                        pushModeManager?.onPushNotificationReceived(
-                            specificAccount = specificAccount,
-                            allRegisteredAccounts = registeredAccounts
-                        )
 
 //                    // Preparar para la llamada entrante específica
 //                    prepareForIncomingCall(specificAccount, phoneNumber, callId)
-                    } else {
-                        log.w(tag = TAG1) { "Account not found for sipName: $sipName" }
-                        // Fallback: cambiar todas las cuentas
-                        val allAccounts =
-                            sipCoreManager?.getAllRegisteredAccountKeys() ?: emptySet()
-                        pushModeManager?.onPushNotificationReceived(allRegisteredAccounts = allAccounts)
-                    }
-                }
-            } else {
-                // Notificación push genérica (comportamiento anterior)
-                val registeredAccounts = sipCoreManager?.getAllRegisteredAccountKeys() ?: emptySet()
-                pushModeManager?.onPushNotificationReceived(allRegisteredAccounts = registeredAccounts)
-            }
-
-            log.d(tag = TAG1) { "Push notification processed, managing mode transition" }
-        }
-
-        fun diagnosePushMode(): String {
-            return buildString {
-                appendLine("=== PUSH MODE DIAGNOSTIC ===")
-                appendLine("Push Mode Manager: ${pushModeManager != null}")
-                appendLine("SipCore Manager: ${sipCoreManager != null}")
-
-                pushModeManager?.let { pm ->
-                    appendLine("\n--- Push Mode State ---")
-                    appendLine(pm.getDiagnosticInfo())
-                }
-
-                sipCoreManager?.let { sm ->
-                    appendLine("\n--- Registered Accounts ---")
-                    val accounts = sm.getAllRegisteredAccountKeys()
-                    appendLine("Count: ${accounts.size}")
-                    accounts.forEach { account ->
-                        appendLine("- $account")
-                    }
-
-                    appendLine("\n--- App State ---")
-                    appendLine("Is in background: ${sm.isAppInBackground}")
+                } else {
+                    log.w(tag = TAG1) { "Account not found for sipName: $sipName" }
+                    // Fallback: cambiar todas las cuentas
+                    val allAccounts =
+                        sipCoreManager?.getAllRegisteredAccountKeys() ?: emptySet()
+                    pushModeManager?.onPushNotificationReceived(allRegisteredAccounts = allAccounts)
                 }
             }
+        } else {
+            // Notificación push genérica (comportamiento anterior)
+            val registeredAccounts = sipCoreManager?.getAllRegisteredAccountKeys() ?: emptySet()
+            pushModeManager?.onPushNotificationReceived(allRegisteredAccounts = registeredAccounts)
         }
+
+        log.d(tag = TAG1) { "Push notification processed, managing mode transition" }
+    }
+
+    fun diagnosePushMode(): String {
+        return buildString {
+            appendLine("=== PUSH MODE DIAGNOSTIC ===")
+            appendLine("Push Mode Manager: ${pushModeManager != null}")
+            appendLine("SipCore Manager: ${sipCoreManager != null}")
+
+            pushModeManager?.let { pm ->
+                appendLine("\n--- Push Mode State ---")
+                appendLine(pm.getDiagnosticInfo())
+            }
+
+            sipCoreManager?.let { sm ->
+                appendLine("\n--- Registered Accounts ---")
+                val accounts = sm.getAllRegisteredAccountKeys()
+                appendLine("Count: ${accounts.size}")
+                accounts.forEach { account ->
+                    appendLine("- $account")
+                }
+
+                appendLine("\n--- App State ---")
+                appendLine("Is in background: ${sm.isAppInBackground}")
+            }
+        }
+    }
 
 //    /**
 //     * Prepara el sistema para una llamada entrante específica
@@ -2148,553 +2166,566 @@ class EddysSipLibrary private constructor() {
 //        sipCoreManager?.prepareForIncomingCall(accountKey, phoneNumber, callId)
 //    }
 
-        fun updatePushToken(token: String, provider: String = "fcm") {
-            checkInitialized()
-            sipCoreManager?.enterPushMode(token)
+    fun updatePushToken(token: String, provider: String = "fcm") {
+        checkInitialized()
+        sipCoreManager?.enterPushMode(token)
+    }
+
+    fun getSystemHealthReport(): String {
+        checkInitialized()
+        return sipCoreManager?.getSystemHealthReport() ?: "Library not initialized"
+    }
+
+    fun isSystemHealthy(): Boolean {
+        checkInitialized()
+        return sipCoreManager?.isSipCoreManagerHealthy() ?: false
+    }
+
+    private fun checkInitialized() {
+        if (!isInitialized || sipCoreManager == null) {
+            throw SipLibraryException("Library not initialized. Call initialize() first.")
+        }
+    }
+
+    fun diagnoseListeners(): String {
+
+        return buildString {
+            appendLine("=== LISTENERS DIAGNOSTIC ===")
+            appendLine("Library initialized: $isInitialized")
+            appendLine("SipCoreManager: ${sipCoreManager != null}")
+            appendLine("General listeners count: ${listeners.size}")
+            appendLine("Registration listener: ${registrationListener != null}")
+            appendLine("Call listener: ${callListener != null}")
+            appendLine("Incoming call listener: ${incomingCallListener != null}")
+
+            appendLine("\n--- Current States ---")
+            appendLine("Current call state: ${getCurrentCallState()}")
+            appendLine("Registration states: ${getAllRegistrationStates()}")
+
+            appendLine("\n--- Active Accounts ---")
+            appendLine("Push Mode: ${getCurrentPushMode()}")
+            appendLine("Push Mode State: ${getPushModeState()}")
+            sipCoreManager?.let { manager ->
+                appendLine("Current account: ${manager.getCurrentUsername()}")
+                appendLine("Core manager healthy: ${manager.isSipCoreManagerHealthy()}")
+            }
+
+            appendLine("\n--- Call State History ---")
+            val history = getCallStateHistory()
+            appendLine("History entries: ${history.size}")
+            history.takeLast(5).forEach { state ->
+                appendLine("${state.timestamp}: ${state.previousState} -> ${state.state}")
+            }
+        }
+    }
+
+    fun dispose() {
+        if (isInitialized) {
+            log.d(tag = TAG) { "Disposing EddysSipLibrary" }
+
+            // Limpiar integración de base de datos primero
+            databaseIntegration?.dispose()
+            databaseIntegration = null
+
+            // Cerrar base de datos de forma segura
+            databaseManager?.closeDatabase()
+            databaseManager = null
+
+            // Resto del cleanup
+            sipCoreManager?.dispose()
+            sipCoreManager = null
+            pushModeManager?.dispose()
+            pushModeManager = null
+            listeners.clear()
+
+            registrationListener = null
+            callListener = null
+            incomingCallListener = null
+            networkStatusListener = null
+            autoReconnectionListener = null
+
+            isInitialized = false
+            log.d(tag = TAG) { "EddysSipLibrary disposed completely" }
+        }
+    }
+
+    // === INTERFAZ INTERNA DE CALLBACKS ===
+
+    internal interface SipCallbacks {
+        fun onCallTerminated() {}
+        fun onRegistrationStateChanged(state: RegistrationState) {}
+        fun onAccountRegistrationStateChanged(
+            username: String,
+            domain: String,
+            state: RegistrationState
+        ) {
         }
 
-        fun getSystemHealthReport(): String {
-            checkInitialized()
-            return sipCoreManager?.getSystemHealthReport() ?: "Library not initialized"
+        fun onIncomingCall(callerNumber: String, callerName: String?) {}
+        fun onCallConnected() {}
+        fun onCallFailed(error: String) {}
+        fun onCallEndedForAccount(accountKey: String) {}
+        fun onCallTransferRequested(transferTo: String, referredBy: String)
+        fun onCallTransferInitiated(transferTo: String)
+        fun onCallTransferCompleted(success: Boolean)
+        fun onCallDeflected(originalCaller: String, redirectedTo: String) {}
+
+    }
+
+    class SipLibraryException(message: String, cause: Throwable? = null) :
+        Exception(message, cause)
+
+
+    ////// métodos de debugging ///////
+
+    /**
+     * SOLO PARA DEBUGGING: Simula recibir una notificación push de llamada entrante
+     */
+    fun simulateIncomingCallPush(
+        sipName: String,
+        phoneNumber: String,
+        callId: String? = null,
+    ): String {
+        checkInitialized()
+
+        log.d(tag = TAG) {
+            "=== DEBUGGING: SIMULATING INCOMING CALL PUSH ===" +
+                    "\nSIP Name: $sipName" +
+                    "\nPhone Number: $phoneNumber" +
+                    "\nCall ID: $callId"
         }
 
-        fun isSystemHealthy(): Boolean {
-            checkInitialized()
-            return sipCoreManager?.isSipCoreManagerHealthy() ?: false
-        }
+        // Generar datos de push simulados
+        val pushData = pushSimulator.simulateIncomingCallPush(
+            sipName = sipName,
+            phoneNumber = phoneNumber,
+            callId = callId
 
-        private fun checkInitialized() {
-            if (!isInitialized || sipCoreManager == null) {
-                throw SipLibraryException("Library not initialized. Call initialize() first.")
+        )
+
+        // Procesar la notificación push simulada
+        onPushNotificationReceived(pushData)
+
+        val result = buildString {
+            appendLine("=== PUSH SIMULATION COMPLETED ===")
+            appendLine("Generated Push Data:")
+            pushData.forEach { (key, value) ->
+                appendLine("  $key: $value")
+            }
+            appendLine("\nPush Mode State After Processing:")
+            appendLine(getPushModeState().toString())
+            appendLine("\nRegistered Accounts:")
+            getAllRegistrationStates().forEach { (account, state) ->
+                appendLine("  $account: $state")
             }
         }
 
-        fun diagnoseListeners(): String {
+        log.d(tag = TAG) { result }
+        return result
+    }
 
-            return buildString {
-                appendLine("=== LISTENERS DIAGNOSTIC ===")
-                appendLine("Library initialized: $isInitialized")
-                appendLine("SipCoreManager: ${sipCoreManager != null}")
-                appendLine("General listeners count: ${listeners.size}")
-                appendLine("Registration listener: ${registrationListener != null}")
-                appendLine("Call listener: ${callListener != null}")
-                appendLine("Incoming call listener: ${incomingCallListener != null}")
+    /**
+     * SOLO PARA DEBUGGING: Simula recibir una notificación push genérica
+     */
+    fun simulateGenericPush(
+        type: String = "generic",
+        additionalData: Map<String, Any> = emptyMap()
+    ): String {
+        checkInitialized()
 
-                appendLine("\n--- Current States ---")
-                appendLine("Current call state: ${getCurrentCallState()}")
-                appendLine("Registration states: ${getAllRegistrationStates()}")
-
-                appendLine("\n--- Active Accounts ---")
-                appendLine("Push Mode: ${getCurrentPushMode()}")
-                appendLine("Push Mode State: ${getPushModeState()}")
-                sipCoreManager?.let { manager ->
-                    appendLine("Current account: ${manager.getCurrentUsername()}")
-                    appendLine("Core manager healthy: ${manager.isSipCoreManagerHealthy()}")
-                }
-
-                appendLine("\n--- Call State History ---")
-                val history = getCallStateHistory()
-                appendLine("History entries: ${history.size}")
-                history.takeLast(5).forEach { state ->
-                    appendLine("${state.timestamp}: ${state.previousState} -> ${state.state}")
-                }
-            }
+        log.d(tag = TAG) {
+            "=== DEBUGGING: SIMULATING GENERIC PUSH ===" +
+                    "\nType: $type" +
+                    "\nAdditional Data: $additionalData"
         }
 
-        fun dispose() {
-            if (isInitialized) {
-                log.d(tag = TAG) { "Disposing EddysSipLibrary" }
+        val pushData = pushSimulator.simulateGenericPush(type, additionalData)
 
-                // Limpiar integración de base de datos primero
-                databaseIntegration?.dispose()
-                databaseIntegration = null
+        // Procesar la notificación push simulada
+        onPushNotificationReceived(pushData)
 
-                // Cerrar base de datos de forma segura
-                databaseManager?.closeDatabase()
-                databaseManager = null
-
-                // Resto del cleanup
-                sipCoreManager?.dispose()
-                sipCoreManager = null
-                pushModeManager?.dispose()
-                pushModeManager = null
-                listeners.clear()
-
-                registrationListener = null
-                callListener = null
-                incomingCallListener = null
-                networkStatusListener = null
-                autoReconnectionListener = null
-
-                isInitialized = false
-                log.d(tag = TAG) { "EddysSipLibrary disposed completely" }
+        val result = buildString {
+            appendLine("=== GENERIC PUSH SIMULATION COMPLETED ===")
+            appendLine("Generated Push Data:")
+            pushData.forEach { (key, value) ->
+                appendLine("  $key: $value")
             }
+            appendLine("\nPush Mode State After Processing:")
+            appendLine(getPushModeState().toString())
         }
 
-        // === INTERFAZ INTERNA DE CALLBACKS ===
+        log.d(tag = TAG) { result }
+        return result
+    }
 
-        internal interface SipCallbacks {
-            fun onCallTerminated() {}
-            fun onRegistrationStateChanged(state: RegistrationState) {}
-            fun onAccountRegistrationStateChanged(
-                username: String,
-                domain: String,
-                state: RegistrationState
-            ) {
-            }
+    /**
+     * SOLO PARA DEBUGGING: Simula el flujo completo de una llamada entrante via push
+     */
+    fun simulateCompleteIncomingCallFlow(
+        sipName: String,
+        phoneNumber: String,
+        domain: String = "mcn.ru"
+    ): String {
+        checkInitialized()
 
-            fun onIncomingCall(callerNumber: String, callerName: String?) {}
-            fun onCallConnected() {}
-            fun onCallFailed(error: String) {}
-            fun onCallEndedForAccount(accountKey: String) {}
+        val accountKey = "$sipName@$domain"
+        val callId = generateCallId()
+
+        log.d(tag = TAG) {
+            "=== DEBUGGING: SIMULATING COMPLETE INCOMING CALL FLOW ===" +
+                    "\nAccount: $accountKey" +
+                    "\nPhone Number: $phoneNumber" +
+                    "\nCall ID: $callId"
         }
 
-        class SipLibraryException(message: String, cause: Throwable? = null) :
-            Exception(message, cause)
+        val steps = mutableListOf<String>()
 
+        try {
+            // Paso 1: Verificar que la cuenta esté registrada
+            val registrationState = getRegistrationState(sipName, domain)
+            steps.add("Step 1: Account registration check - $registrationState")
 
-        ////// métodos de debugging ///////
-
-        /**
-         * SOLO PARA DEBUGGING: Simula recibir una notificación push de llamada entrante
-         */
-        fun simulateIncomingCallPush(
-            sipName: String,
-            phoneNumber: String,
-            callId: String? = null,
-        ): String {
-            checkInitialized()
-
-            log.d(tag = TAG) {
-                "=== DEBUGGING: SIMULATING INCOMING CALL PUSH ===" +
-                        "\nSIP Name: $sipName" +
-                        "\nPhone Number: $phoneNumber" +
-                        "\nCall ID: $callId"
+            if (registrationState != RegistrationState.OK) {
+                steps.add("ERROR: Account not registered, cannot simulate call")
+                return steps.joinToString("\n")
             }
 
-            // Generar datos de push simulados
+            // Paso 2: Verificar modo push actual
+            val currentMode = getCurrentPushMode()
+            steps.add("Step 2: Current push mode - $currentMode")
+
+            // Paso 3: Simular notificación push
+            steps.add("Step 3: Simulating push notification...")
             val pushData = pushSimulator.simulateIncomingCallPush(
                 sipName = sipName,
                 phoneNumber = phoneNumber,
-                callId = callId
-
+                callId = callId,
             )
 
-            // Procesar la notificación push simulada
+            // Paso 4: Procesar push notification
+            steps.add("Step 4: Processing push notification...")
             onPushNotificationReceived(pushData)
 
-            val result = buildString {
-                appendLine("=== PUSH SIMULATION COMPLETED ===")
-                appendLine("Generated Push Data:")
-                pushData.forEach { (key, value) ->
-                    appendLine("  $key: $value")
-                }
-                appendLine("\nPush Mode State After Processing:")
-                appendLine(getPushModeState().toString())
-                appendLine("\nRegistered Accounts:")
-                getAllRegistrationStates().forEach { (account, state) ->
-                    appendLine("  $account: $state")
-                }
-            }
+            // Paso 5: Verificar cambio de modo
+            val newMode = getCurrentPushMode()
+            steps.add("Step 5: Push mode after notification - $newMode")
 
-            log.d(tag = TAG) { result }
-            return result
+            // Paso 6: Simular llamada entrante real (opcional)
+            steps.add("Step 6: Ready to receive actual incoming call")
+            steps.add("  - Account switched to foreground mode: ${newMode == PushMode.FOREGROUND}")
+            steps.add("  - SIP registration refreshed for account: $accountKey")
+
+            // Información final
+            steps.add("\n=== SIMULATION SUMMARY ===")
+            steps.add("Account: $accountKey")
+            steps.add("Phone Number: $phoneNumber")
+            steps.add("Call ID: $callId")
+            steps.add("Mode Transition: $currentMode -> $newMode")
+            steps.add("Ready for incoming call: ${newMode == PushMode.FOREGROUND}")
+
+        } catch (e: Exception) {
+            steps.add("ERROR in simulation: ${e.message}")
+            log.e(tag = TAG) { "Error in complete call flow simulation: ${e.message}" }
         }
 
-        /**
-         * SOLO PARA DEBUGGING: Simula recibir una notificación push genérica
-         */
-        fun simulateGenericPush(
-            type: String = "generic",
-            additionalData: Map<String, Any> = emptyMap()
-        ): String {
-            checkInitialized()
+        val result = steps.joinToString("\n")
+        log.d(tag = TAG) { result }
+        return result
+    }
 
-            log.d(tag = TAG) {
-                "=== DEBUGGING: SIMULATING GENERIC PUSH ===" +
-                        "\nType: $type" +
-                        "\nAdditional Data: $additionalData"
+    /**
+     * SOLO PARA DEBUGGING: Obtiene información detallada del estado de push
+     */
+    fun getDetailedPushState(): String {
+        checkInitialized()
+
+        return buildString {
+            appendLine("=== DETAILED PUSH STATE ===")
+            appendLine("Current Push Mode: ${getCurrentPushMode()}")
+            appendLine("Is In Push Mode: ${isInPushMode()}")
+
+            val pushState = getPushModeState()
+            appendLine("\n--- Push Mode State Details ---")
+            appendLine("Current Mode: ${pushState.currentMode}")
+            appendLine("Previous Mode: ${pushState.previousMode}")
+            appendLine("Reason: ${pushState.reason}")
+            appendLine("Timestamp: ${pushState.timestamp}")
+            appendLine("Accounts In Push: ${pushState.accountsInPushMode}")
+            appendLine("Was In Push Before Call: ${pushState.wasInPushBeforeCall}")
+            appendLine("Specific Account In Foreground: ${pushState.specificAccountInForeground}")
+
+            appendLine("\n--- Registered Accounts ---")
+            getAllRegistrationStates().forEach { (account, state) ->
+                appendLine("$account: $state")
             }
 
-            val pushData = pushSimulator.simulateGenericPush(type, additionalData)
-
-            // Procesar la notificación push simulada
-            onPushNotificationReceived(pushData)
-
-            val result = buildString {
-                appendLine("=== GENERIC PUSH SIMULATION COMPLETED ===")
-                appendLine("Generated Push Data:")
-                pushData.forEach { (key, value) ->
-                    appendLine("  $key: $value")
-                }
-                appendLine("\nPush Mode State After Processing:")
-                appendLine(getPushModeState().toString())
-            }
-
-            log.d(tag = TAG) { result }
-            return result
+            appendLine("\n--- Push Mode Manager Diagnostic ---")
+            pushModeManager?.let { pm ->
+                appendLine(pm.getDiagnosticInfo())
+            } ?: appendLine("Push Mode Manager not initialized")
         }
+    }
 
-        /**
-         * SOLO PARA DEBUGGING: Simula el flujo completo de una llamada entrante via push
-         */
-        fun simulateCompleteIncomingCallFlow(
-            sipName: String,
-            phoneNumber: String,
-            domain: String = "mcn.ru"
-        ): String {
-            checkInitialized()
 
-            val accountKey = "$sipName@$domain"
-            val callId = generateCallId()
+    /**
+     * NUEVO: Data class para estadísticas de conectividad
+     */
+    data class ConnectivityStatistics(
+        val totalAccounts: Int,
+        val registeredAccounts: Int,
+        val reconnectingAccounts: Int,
+        val totalReconnectionAttempts: Int,
+        val networkConnected: Boolean,
+        val hasInternet: Boolean,
+        val networkType: String,
+        val autoReconnectEnabled: Boolean
+    )
 
-            log.d(tag = TAG) {
-                "=== DEBUGGING: SIMULATING COMPLETE INCOMING CALL FLOW ===" +
-                        "\nAccount: $accountKey" +
-                        "\nPhone Number: $phoneNumber" +
-                        "\nCall ID: $callId"
+    ///////////base de datos //////
+
+    private fun setupDatabaseIntegration(application: Application) {
+        try {
+            log.d(tag = TAG) { "Setting up database integration" }
+
+            // Verificar si la base de datos está disponible
+            if (!SipDatabase.isDatabaseAvailable(application)) {
+                log.d(tag = TAG) { "Database not found, will be created" }
             }
 
-            val steps = mutableListOf<String>()
+            databaseManager = DatabaseManager.getInstance(application)
 
-            try {
-                // Paso 1: Verificar que la cuenta esté registrada
-                val registrationState = getRegistrationState(sipName, domain)
-                steps.add("Step 1: Account registration check - $registrationState")
-
-                if (registrationState != RegistrationState.OK) {
-                    steps.add("ERROR: Account not registered, cannot simulate call")
-                    return steps.joinToString("\n")
-                }
-
-                // Paso 2: Verificar modo push actual
-                val currentMode = getCurrentPushMode()
-                steps.add("Step 2: Current push mode - $currentMode")
-
-                // Paso 3: Simular notificación push
-                steps.add("Step 3: Simulating push notification...")
-                val pushData = pushSimulator.simulateIncomingCallPush(
-                    sipName = sipName,
-                    phoneNumber = phoneNumber,
-                    callId = callId,
-                )
-
-                // Paso 4: Procesar push notification
-                steps.add("Step 4: Processing push notification...")
-                onPushNotificationReceived(pushData)
-
-                // Paso 5: Verificar cambio de modo
-                val newMode = getCurrentPushMode()
-                steps.add("Step 5: Push mode after notification - $newMode")
-
-                // Paso 6: Simular llamada entrante real (opcional)
-                steps.add("Step 6: Ready to receive actual incoming call")
-                steps.add("  - Account switched to foreground mode: ${newMode == PushMode.FOREGROUND}")
-                steps.add("  - SIP registration refreshed for account: $accountKey")
-
-                // Información final
-                steps.add("\n=== SIMULATION SUMMARY ===")
-                steps.add("Account: $accountKey")
-                steps.add("Phone Number: $phoneNumber")
-                steps.add("Call ID: $callId")
-                steps.add("Mode Transition: $currentMode -> $newMode")
-                steps.add("Ready for incoming call: ${newMode == PushMode.FOREGROUND}")
-
-            } catch (e: Exception) {
-                steps.add("ERROR in simulation: ${e.message}")
-                log.e(tag = TAG) { "Error in complete call flow simulation: ${e.message}" }
-            }
-
-            val result = steps.joinToString("\n")
-            log.d(tag = TAG) { result }
-            return result
-        }
-
-        /**
-         * SOLO PARA DEBUGGING: Obtiene información detallada del estado de push
-         */
-        fun getDetailedPushState(): String {
-            checkInitialized()
-
-            return buildString {
-                appendLine("=== DETAILED PUSH STATE ===")
-                appendLine("Current Push Mode: ${getCurrentPushMode()}")
-                appendLine("Is In Push Mode: ${isInPushMode()}")
-
-                val pushState = getPushModeState()
-                appendLine("\n--- Push Mode State Details ---")
-                appendLine("Current Mode: ${pushState.currentMode}")
-                appendLine("Previous Mode: ${pushState.previousMode}")
-                appendLine("Reason: ${pushState.reason}")
-                appendLine("Timestamp: ${pushState.timestamp}")
-                appendLine("Accounts In Push: ${pushState.accountsInPushMode}")
-                appendLine("Was In Push Before Call: ${pushState.wasInPushBeforeCall}")
-                appendLine("Specific Account In Foreground: ${pushState.specificAccountInForeground}")
-
-                appendLine("\n--- Registered Accounts ---")
-                getAllRegistrationStates().forEach { (account, state) ->
-                    appendLine("$account: $state")
-                }
-
-                appendLine("\n--- Push Mode Manager Diagnostic ---")
-                pushModeManager?.let { pm ->
-                    appendLine(pm.getDiagnosticInfo())
-                } ?: appendLine("Push Mode Manager not initialized")
-            }
-        }
-
-
-
-
-        /**
-         * NUEVO: Data class para estadísticas de conectividad
-         */
-        data class ConnectivityStatistics(
-            val totalAccounts: Int,
-            val registeredAccounts: Int,
-            val reconnectingAccounts: Int,
-            val totalReconnectionAttempts: Int,
-            val networkConnected: Boolean,
-            val hasInternet: Boolean,
-            val networkType: String,
-            val autoReconnectEnabled: Boolean
-        )
-
-        ///////////base de datos //////
-
-        private fun setupDatabaseIntegration(application: Application) {
-            try {
-                log.d(tag = TAG) { "Setting up database integration" }
-
-                // Verificar si la base de datos está disponible
-                if (!SipDatabase.isDatabaseAvailable(application)) {
-                    log.d(tag = TAG) { "Database not found, will be created" }
-                }
-
-                databaseManager = DatabaseManager.getInstance(application)
-
-                sipCoreManager?.let { coreManager ->
-                    databaseIntegration =
-                        DatabaseAutoIntegration.getInstance(application, coreManager).apply {
-                            initialize()
-                        }
-                    log.d(tag = TAG) { "Database integration initialized successfully" }
-                }
-
-            } catch (e: Exception) {
-                log.e(tag = TAG) { "Error setting up database integration: ${e.message}" }
-                // Continuar sin base de datos si falla
-                databaseManager = null
-                databaseIntegration = null
-            }
-        }
-
-        fun verifyAndRestoreDatabase(application: Application): String {
-            return try {
-                checkInitialized()
-                val dbAvailable = SipDatabase.isDatabaseAvailable(application)
-                val managerExists = DatabaseManager.hasInstance()
-
-                buildString {
-                    appendLine("=== DATABASE VERIFICATION ===")
-                    appendLine("Database file exists: $dbAvailable")
-                    appendLine("Manager instance exists: $managerExists")
-
-                    if (!managerExists && dbAvailable) {
-                        appendLine("Attempting to restore database manager...")
-                        try {
-                            setupDatabaseIntegration(application)
-                            appendLine("✅ Database manager restored successfully")
-                        } catch (e: Exception) {
-                            appendLine("❌ Failed to restore database manager: ${e.message}")
-                        }
+            sipCoreManager?.let { coreManager ->
+                databaseIntegration =
+                    DatabaseAutoIntegration.getInstance(application, coreManager).apply {
+                        initialize()
                     }
-
-                    databaseManager?.let { manager ->
-                        appendLine("\n--- Database Statistics ---")
-                        runBlocking {
-                            try {
-                                val stats = manager.getGeneralStatistics()
-                                appendLine("Total Accounts: ${stats.totalAccounts}")
-                                appendLine("Total Calls: ${stats.totalCalls}")
-                                appendLine("Total Contacts: ${stats.totalContacts}")
-                                appendLine("Active Calls: ${stats.activeCalls}")
-                                appendLine("✅ Database is functional")
-                            } catch (e: Exception) {
-                                appendLine("❌ Database error: ${e.message}")
-                            }
-                        }
-                    } ?: appendLine("Database manager not available")
-                }
-
-            } catch (e: Exception) {
-                "Error verifying database: ${e.message}"
+                log.d(tag = TAG) { "Database integration initialized successfully" }
             }
-        }
-        // === NUEVOS MÉTODOS PÚBLICOS PARA BD ===
 
-        /**
-         * Obtiene el manager de base de datos (si está habilitado)
-         */
-        fun getDatabaseManager(): DatabaseManager? {
-            checkInitialized()
-            return databaseManager
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error setting up database integration: ${e.message}" }
+            // Continuar sin base de datos si falla
+            databaseManager = null
+            databaseIntegration = null
         }
+    }
 
-        /**
-         * Obtiene historial de llamadas desde la base de datos
-         */
-        fun getCallHistoryFromDB(limit: Int = 50): Flow<List<CallLogWithContact>>? {
+    fun verifyAndRestoreDatabase(application: Application): String {
+        return try {
             checkInitialized()
-            return databaseManager?.getRecentCallLogs(limit)
-        }
+            val dbAvailable = SipDatabase.isDatabaseAvailable(application)
+            val managerExists = DatabaseManager.hasInstance()
 
-        /**
-         * Busca en historial de llamadas
-         */
-        fun searchCallHistoryFromDB(query: String): Flow<List<CallLogWithContact>>? {
-            checkInitialized()
-            return databaseManager?.searchCallLogs(query)
-        }
+            buildString {
+                appendLine("=== DATABASE VERIFICATION ===")
+                appendLine("Database file exists: $dbAvailable")
+                appendLine("Manager instance exists: $managerExists")
 
-        /**
-         * Busca en el historial de llamadas
-         */
-        suspend fun searchCallLogs(query: String): List<CallLog> {
-            checkInitialized()
-            return sipCoreManager?.searchCallLogsInDatabase(query) ?: emptyList()
-        }
-
-        /**
-         * Obtiene contactos desde la base de datos
-         */
-        fun getContactsFromDB(): Flow<List<ContactEntity>>? {
-            checkInitialized()
-            return databaseManager?.getAllContacts()
-        }
-
-        /**
-         * Busca contactos en la base de datos
-         */
-        fun searchContactsFromDB(query: String): Flow<List<ContactEntity>>? {
-            checkInitialized()
-            return databaseManager?.searchContacts(query)
-        }
-
-        /**
-         * Obtiene cuentas SIP desde la base de datos
-         */
-        fun getSipAccountsFromDB(): Flow<List<SipAccountEntity>>? {
-            checkInitialized()
-            return databaseManager?.getActiveSipAccounts()
-        }
-
-        /**
-         * Obtiene estadísticas generales desde la base de datos
-         */
-        suspend fun getStatisticsFromDB(): GeneralStatistics? {
-            checkInitialized()
-            return try {
-                databaseManager?.getGeneralStatistics()
-            } catch (e: Exception) {
-                log.e(tag = TAG) { "Error getting statistics: ${e.message}" }
-                null
-            }
-        }
-
-        /**
-         * Crea o actualiza un contacto en la base de datos
-         */
-        suspend fun createOrUpdateContactInDB(
-            phoneNumber: String,
-            displayName: String,
-            firstName: String? = null,
-            lastName: String? = null,
-            email: String? = null,
-            company: String? = null
-        ): ContactEntity? {
-            checkInitialized()
-            return try {
-                databaseManager?.createOrUpdateContact(
-                    phoneNumber = phoneNumber,
-                    displayName = displayName,
-                    firstName = firstName,
-                    lastName = lastName,
-                    email = email,
-                    company = company
-                )
-            } catch (e: Exception) {
-                log.e(tag = TAG) { "Error creating/updating contact: ${e.message}" }
-                null
-            }
-        }
-
-        /**
-         * Verifica si un número está bloqueado
-         */
-        suspend fun isPhoneNumberBlocked(phoneNumber: String): Boolean {
-            checkInitialized()
-            return try {
-                databaseManager?.isPhoneNumberBlocked(phoneNumber) ?: false
-            } catch (e: Exception) {
-                log.e(tag = TAG) { "Error checking if number is blocked: ${e.message}" }
-                false
-            }
-        }
-
-        /**
-         * Limpia historial de llamadas
-         */
-        suspend fun clearCallHistoryFromDB(): Boolean {
-            checkInitialized()
-            return try {
-                databaseManager?.clearAllCallLogs()
-                true
-            } catch (e: Exception) {
-                log.e(tag = TAG) { "Error clearing call history: ${e.message}" }
-                false
-            }
-        }
-
-        /**
-         * Fuerza la sincronización de todas las cuentas con la BD
-         */
-        fun forceDatabaseSync() {
-            checkInitialized()
-            databaseIntegration?.forceSyncAllAccounts()
-        }
-
-        /**
-         * Obtiene información de diagnóstico de la base de datos
-         */
-        suspend fun getDatabaseDiagnostic(): String {
-            checkInitialized()
-            return try {
-                databaseIntegration?.getDiagnosticInfo() ?: "Database integration not available"
-            } catch (e: Exception) {
-                "Error getting database diagnostic: ${e.message}"
-            }
-        }
-
-        /**
-         * Configura limpieza automática de la base de datos
-         */
-        fun configureDatabaseMaintenance(
-            daysToKeepLogs: Int = 30,
-            maxCallLogs: Int = 1000,
-            maxStateHistory: Int = 5000
-        ) {
-            checkInitialized()
-            databaseManager?.let { dbManager ->
-                CoroutineScope(Dispatchers.IO).launch {
+                if (!managerExists && dbAvailable) {
+                    appendLine("Attempting to restore database manager...")
                     try {
-                        dbManager.cleanupOldData(daysToKeepLogs)
-                        dbManager.keepOnlyRecentData(maxCallLogs, maxStateHistory)
-                        log.d(tag = TAG) { "Database maintenance configured and executed" }
+                        setupDatabaseIntegration(application)
+                        appendLine("✅ Database manager restored successfully")
                     } catch (e: Exception) {
-                        log.e(tag = TAG) { "Error in database maintenance: ${e.message}" }
+                        appendLine("❌ Failed to restore database manager: ${e.message}")
                     }
+                }
+
+                databaseManager?.let { manager ->
+                    appendLine("\n--- Database Statistics ---")
+                    runBlocking {
+                        try {
+                            val stats = manager.getGeneralStatistics()
+                            appendLine("Total Accounts: ${stats.totalAccounts}")
+                            appendLine("Total Calls: ${stats.totalCalls}")
+                            appendLine("Total Contacts: ${stats.totalContacts}")
+                            appendLine("Active Calls: ${stats.activeCalls}")
+                            appendLine("✅ Database is functional")
+                        } catch (e: Exception) {
+                            appendLine("❌ Database error: ${e.message}")
+                        }
+                    }
+                } ?: appendLine("Database manager not available")
+            }
+
+        } catch (e: Exception) {
+            "Error verifying database: ${e.message}"
+        }
+    }
+    // === NUEVOS MÉTODOS PÚBLICOS PARA BD ===
+
+    /**
+     * Obtiene el manager de base de datos (si está habilitado)
+     */
+    fun getDatabaseManager(): DatabaseManager? {
+        checkInitialized()
+        return databaseManager
+    }
+
+    /**
+     * Obtiene historial de llamadas desde la base de datos
+     */
+    fun getCallHistoryFromDB(limit: Int = 50): Flow<List<CallLogWithContact>>? {
+        checkInitialized()
+        return databaseManager?.getRecentCallLogs(limit)
+    }
+
+    /**
+     * Busca en historial de llamadas
+     */
+    fun searchCallHistoryFromDB(query: String): Flow<List<CallLogWithContact>>? {
+        checkInitialized()
+        return databaseManager?.searchCallLogs(query)
+    }
+
+    /**
+     * Busca en el historial de llamadas
+     */
+    suspend fun searchCallLogs(query: String): List<CallLog> {
+        checkInitialized()
+        return sipCoreManager?.searchCallLogsInDatabase(query) ?: emptyList()
+    }
+
+    /**
+     * Obtiene contactos desde la base de datos
+     */
+    fun getContactsFromDB(): Flow<List<ContactEntity>>? {
+        checkInitialized()
+        return databaseManager?.getAllContacts()
+    }
+
+    /**
+     * Busca contactos en la base de datos
+     */
+    fun searchContactsFromDB(query: String): Flow<List<ContactEntity>>? {
+        checkInitialized()
+        return databaseManager?.searchContacts(query)
+    }
+
+    /**
+     * Obtiene cuentas SIP desde la base de datos
+     */
+    fun getSipAccountsFromDB(): Flow<List<SipAccountEntity>>? {
+        checkInitialized()
+        return databaseManager?.getActiveSipAccounts()
+    }
+
+    /**
+     * Obtiene estadísticas generales desde la base de datos
+     */
+    suspend fun getStatisticsFromDB(): GeneralStatistics? {
+        checkInitialized()
+        return try {
+            databaseManager?.getGeneralStatistics()
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error getting statistics: ${e.message}" }
+            null
+        }
+    }
+
+    /**
+     * Crea o actualiza un contacto en la base de datos
+     */
+    suspend fun createOrUpdateContactInDB(
+        phoneNumber: String,
+        displayName: String,
+        firstName: String? = null,
+        lastName: String? = null,
+        email: String? = null,
+        company: String? = null
+    ): ContactEntity? {
+        checkInitialized()
+        return try {
+            databaseManager?.createOrUpdateContact(
+                phoneNumber = phoneNumber,
+                displayName = displayName,
+                firstName = firstName,
+                lastName = lastName,
+                email = email,
+                company = company
+            )
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error creating/updating contact: ${e.message}" }
+            null
+        }
+    }
+
+    /**
+     * Verifica si un número está bloqueado
+     */
+    suspend fun isPhoneNumberBlocked(phoneNumber: String): Boolean {
+        checkInitialized()
+        return try {
+            databaseManager?.isPhoneNumberBlocked(phoneNumber) ?: false
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error checking if number is blocked: ${e.message}" }
+            false
+        }
+    }
+
+    /**
+     * Limpia historial de llamadas
+     */
+    suspend fun clearCallHistoryFromDB(): Boolean {
+        checkInitialized()
+        return try {
+            databaseManager?.clearAllCallLogs()
+            true
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error clearing call history: ${e.message}" }
+            false
+        }
+    }
+
+    /**
+     * Fuerza la sincronización de todas las cuentas con la BD
+     */
+    fun forceDatabaseSync() {
+        checkInitialized()
+        databaseIntegration?.forceSyncAllAccounts()
+    }
+
+    /**
+     * Obtiene información de diagnóstico de la base de datos
+     */
+    suspend fun getDatabaseDiagnostic(): String {
+        checkInitialized()
+        return try {
+            databaseIntegration?.getDiagnosticInfo() ?: "Database integration not available"
+        } catch (e: Exception) {
+            "Error getting database diagnostic: ${e.message}"
+        }
+    }
+
+    /**
+     * Configura limpieza automática de la base de datos
+     */
+    fun configureDatabaseMaintenance(
+        daysToKeepLogs: Int = 30,
+        maxCallLogs: Int = 1000,
+        maxStateHistory: Int = 5000
+    ) {
+        checkInitialized()
+        databaseManager?.let { dbManager ->
+            CoroutineScope(Dispatchers.IO).launch {
+                try {
+                    dbManager.cleanupOldData(daysToKeepLogs)
+                    dbManager.keepOnlyRecentData(maxCallLogs, maxStateHistory)
+                    log.d(tag = TAG) { "Database maintenance configured and executed" }
+                } catch (e: Exception) {
+                    log.e(tag = TAG) { "Error in database maintenance: ${e.message}" }
                 }
             }
         }
     }
+    fun deflectIncomingCall(redirectToNumber: String, callId: String? = null) {
+    sipCoreManager?.deflectIncomingCall(redirectToNumber, callId)
+    }
+    fun transferIncomingCallImmediately(transferTo: String) {
+        sipCoreManager?.transferIncomingCallImmediately(transferTo)
+    }
+
+    fun transferCall(transferTo: String, callId: String? = null) {
+        sipCoreManager?.transferCall(transferTo, callId)
+    }
+}
