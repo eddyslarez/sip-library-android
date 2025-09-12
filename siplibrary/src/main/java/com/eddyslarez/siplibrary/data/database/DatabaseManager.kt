@@ -486,4 +486,166 @@ class DatabaseManager private constructor(application: Application) {
     suspend fun loadOrCreateDefaultConfig(): AppConfigEntity {
         return getAppConfig() ?: createOrUpdateAppConfig()
     }
+    
+    // === OPERACIONES DEL ASISTENTE ===
+    
+    /**
+     * Crea o actualiza configuración del asistente
+     */
+    suspend fun createOrUpdateAssistantConfig(
+        accountId: String,
+        accountKey: String,
+        isEnabled: Boolean,
+        mode: AssistantMode,
+        action: AssistantAction,
+        assistantNumber: String
+    ): AssistantConfigEntity {
+        return repository.createOrUpdateAssistantConfig(
+            accountId = accountId,
+            accountKey = accountKey,
+            isEnabled = isEnabled,
+            mode = mode,
+            action = action,
+            assistantNumber = assistantNumber
+        )
+    }
+    
+    /**
+     * Obtiene configuración del asistente por accountKey
+     */
+    suspend fun getAssistantConfig(accountKey: String): AssistantConfigEntity? {
+        return repository.getAssistantConfig(accountKey)
+    }
+    
+    /**
+     * Obtiene entidad de configuración del asistente
+     */
+    suspend fun getAssistantConfigEntity(accountKey: String): AssistantConfigEntity? {
+        return database.assistantConfigDao().getConfigByAccountKey(accountKey)
+    }
+    
+    /**
+     * Obtiene configuraciones activas del asistente
+     */
+    fun getActiveAssistantConfigs(): Flow<List<AssistantConfig>> {
+        return repository.getActiveAssistantConfigs()
+    }
+    
+    /**
+     * Obtiene lista de configuraciones activas (no Flow)
+     */
+    suspend fun getActiveAssistantConfigsList(): List<AssistantConfigEntity> {
+        return repository.getActiveAssistantConfigsList()
+    }
+    
+    /**
+     * Desactiva asistente para una cuenta
+     */
+    suspend fun disableAssistant(accountKey: String) {
+        repository.disableAssistant(accountKey)
+    }
+    
+    /**
+     * Actualiza modo del asistente
+     */
+    suspend fun updateAssistantMode(accountKey: String, mode: AssistantMode) {
+        repository.updateAssistantMode(accountKey, mode)
+    }
+    
+    /**
+     * Actualiza acción del asistente
+     */
+    suspend fun updateAssistantAction(accountKey: String, action: AssistantAction) {
+        repository.updateAssistantAction(accountKey, action)
+    }
+    
+    /**
+     * Actualiza número del asistente
+     */
+    suspend fun updateAssistantNumber(accountKey: String, assistantNumber: String) {
+        repository.updateAssistantNumber(accountKey, assistantNumber)
+    }
+    
+    // === OPERACIONES DE LISTA NEGRA ===
+    
+    /**
+     * Añade número a la lista negra
+     */
+    suspend fun addToBlacklist(
+        assistantConfigId: String,
+        phoneNumber: String,
+        displayName: String? = null,
+        reason: String? = null
+    ): BlacklistEntity {
+        return repository.addToBlacklist(assistantConfigId, phoneNumber, displayName, reason)
+    }
+    
+    /**
+     * Remueve número de la lista negra
+     */
+    suspend fun removeFromBlacklist(assistantConfigId: String, phoneNumber: String) {
+        repository.removeFromBlacklist(assistantConfigId, phoneNumber)
+    }
+    
+    /**
+     * Obtiene lista negra para una cuenta
+     */
+    fun getBlacklistForAccount(accountKey: String): Flow<List<BlacklistEntry>> {
+        return repository.getBlacklistForAccount(accountKey)
+    }
+    
+    /**
+     * Obtiene lista negra como lista (no Flow)
+     */
+    suspend fun getBlacklistForConfigList(configId: String): List<BlacklistEntity> {
+        return repository.getBlacklistForConfigList(configId)
+    }
+    
+    /**
+     * Verifica si un número está en la lista negra
+     */
+    suspend fun isPhoneNumberBlacklisted(assistantConfigId: String, phoneNumber: String): Boolean {
+        return repository.isPhoneNumberBlacklisted(assistantConfigId, phoneNumber)
+    }
+    
+    // === OPERACIONES DE HISTORIAL DEL ASISTENTE ===
+    
+    /**
+     * Inserta log de acción del asistente
+     */
+    suspend fun insertAssistantCallLog(callLog: AssistantCallLogEntity) {
+        repository.insertAssistantCallLog(callLog)
+    }
+    
+    /**
+     * Obtiene historial de llamadas del asistente para una cuenta
+     */
+    fun getAssistantCallLogsForAccount(accountKey: String): Flow<List<AssistantCallLog>> {
+        return repository.getAssistantCallLogsForAccount(accountKey)
+    }
+    
+    /**
+     * Obtiene log reciente del asistente para un número
+     */
+    suspend fun getRecentAssistantCallLogForNumber(phoneNumber: String): AssistantCallLogEntity? {
+        return repository.getRecentAssistantCallLogForNumber(phoneNumber)
+    }
+    
+    /**
+     * Actualiza resultado de deflección
+     */
+    suspend fun updateDeflectionResult(
+        logId: String,
+        success: Boolean,
+        errorMessage: String? = null
+    ) {
+        repository.updateDeflectionResult(logId, success, errorMessage)
+    }
+    
+    /**
+     * Obtiene estadísticas del asistente
+     */
+    suspend fun getAssistantStatistics(accountKey: String): AssistantStatistics? {
+        return repository.getAssistantStatistics(accountKey)
+    }
 }

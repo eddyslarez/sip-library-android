@@ -96,6 +96,7 @@ dependencies {
     // Room Database - Cambia kapt por ksp
     implementation("androidx.room:room-runtime:2.6.1")
     implementation("androidx.room:room-ktx:2.6.1")
+    implementation("androidx.lifecycle:lifecycle-livedata-ktx:2.9.3")
     ksp("androidx.room:room-compiler:2.6.1") // ← Cambio aquí
 
     testImplementation("junit:junit:4.13.2")

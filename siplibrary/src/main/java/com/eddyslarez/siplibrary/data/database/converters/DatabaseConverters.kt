@@ -91,6 +91,70 @@ class DatabaseConverters {
         }
     }
     
+    // === ASSISTANT MODE ===
+    
+    @TypeConverter
+    fun fromAssistantMode(mode: AssistantMode): String {
+        return mode.name
+    }
+    
+    @TypeConverter
+    fun toAssistantMode(mode: String): AssistantMode {
+        return try {
+            AssistantMode.valueOf(mode)
+        } catch (e: IllegalArgumentException) {
+            AssistantMode.DISABLED
+        }
+    }
+    
+    // === ASSISTANT ACTION ===
+    
+    @TypeConverter
+    fun fromAssistantAction(action: AssistantAction): String {
+        return action.name
+    }
+    
+    @TypeConverter
+    fun toAssistantAction(action: String): AssistantAction {
+        return try {
+            AssistantAction.valueOf(action)
+        } catch (e: IllegalArgumentException) {
+            AssistantAction.REJECT_IMMEDIATELY
+        }
+    }
+    
+    // === CONTACT SOURCES ===
+    
+    @TypeConverter
+    fun fromContactSources(source: ContactSources): String {
+        return source.name
+    }
+    
+    @TypeConverter
+    fun toContactSources(source: String): ContactSources {
+        return try {
+            ContactSources.valueOf(source)
+        } catch (e: IllegalArgumentException) {
+            ContactSources.MANUAL
+        }
+    }
+    
+    // === LINKED HASH SET (para teléfonos de contactos) ===
+    
+    @TypeConverter
+    fun fromLinkedHashSet(set: LinkedHashSet<String>?): String? {
+        return set?.joinToString(",")
+    }
+    
+    @TypeConverter
+    fun toLinkedHashSet(data: String?): LinkedHashSet<String> {
+        return if (data.isNullOrEmpty()) {
+            linkedSetOf()
+        } else {
+            LinkedHashSet(data.split(",").map { it.trim() })
+        }
+    }
+    
     // === STRING MAPS (para parámetros adicionales) ===
     
     @TypeConverter

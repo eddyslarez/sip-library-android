@@ -27,9 +27,12 @@ import java.util.concurrent.Executors
         CallDataEntity::class,
         ContactEntity::class,
         CallStateHistoryEntity::class,
-        AppConfigEntity::class
+        AppConfigEntity::class,
+        AssistantConfigEntity::class,
+        BlacklistEntity::class,
+        AssistantCallLogEntity::class
     ],
-    version = 2, // INCREMENTAR VERSION
+    version = 3, // INCREMENTAR VERSION PARA NUEVAS TABLAS
     exportSchema = false
 )
 @TypeConverters(DatabaseConverters::class)
@@ -40,7 +43,10 @@ abstract class SipDatabase : RoomDatabase() {
     abstract fun callDataDao(): CallDataDao
     abstract fun contactDao(): ContactDao
     abstract fun callStateDao(): CallHistoryDao
-    abstract fun appConfigDao(): AppConfigDao  // NUEVO DAO
+    abstract fun appConfigDao(): AppConfigDao
+    abstract fun assistantConfigDao(): AssistantConfigDao  // NUEVO DAO
+    abstract fun blacklistDao(): BlacklistDao              // NUEVO DAO
+    abstract fun assistantCallLogDao(): AssistantCallLogDao // NUEVO DAO
 
     companion object {
         @Volatile

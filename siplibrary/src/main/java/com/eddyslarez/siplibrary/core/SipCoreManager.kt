@@ -33,6 +33,8 @@ import com.eddyslarez.siplibrary.platform.PlatformRegistration
 import com.eddyslarez.siplibrary.platform.WindowManager
 import com.eddyslarez.siplibrary.utils.*
 import com.eddyslarez.siplibrary.utils.MultiCallManager
+import com.eddyslarez.siplibrary.utils.MultiCallManager.getCall
+import com.eddyslarez.siplibrary.utils.MultiCallManager.getCallState
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -2739,6 +2741,10 @@ class SipCoreManager private constructor(
         }
 
         return false
+    }
+
+    fun getCallData(callId: String): CallData? {
+        return getCall(callId)
     }
 }
 interface NetworkConnectivityListener {

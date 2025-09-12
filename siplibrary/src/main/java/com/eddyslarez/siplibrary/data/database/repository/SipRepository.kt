@@ -9,6 +9,10 @@ import com.eddyslarez.siplibrary.data.database.dao.*
 import com.eddyslarez.siplibrary.data.models.*
 import com.eddyslarez.siplibrary.utils.generateId
 import com.eddyslarez.siplibrary.utils.log
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
 
 /**
  * Repositorio principal para operaciones de base de datos SIP
@@ -23,6 +27,9 @@ class SipRepository(private val database: SipDatabase) {
     private val callDataDao = database.callDataDao()
     private val contactDao = database.contactDao()
     private val callStateHistoryDao = database.callStateDao()
+    private val assistantConfigDao = database.assistantConfigDao()
+    private val blacklistDao = database.blacklistDao()
+    private val assistantCallLogDao = database.assistantCallLogDao()
 
     private val TAG = "SipRepository"
 
@@ -572,6 +579,235 @@ class SipRepository(private val database: SipDatabase) {
 
         appConfigDao.insertConfig(updatedConfig)
         log.d(tag = TAG) { "Both ringtone URIs updated - Incoming: $incomingUri, Outgoing: $outgoingUri" }
+    }
+    
+    // === OPERACIONES DEL ASISTENTE ===
+    
+    /**
+     * Crea o actualiza configuración del asistente
+     */
+    suspend fun createOrUpdateAssistantConfig(
+        accountId: String,
+        accountKey: String,
+        isEnabled: Boolean,
+        mode: AssistantMode,
+        action: AssistantAction,
+        assistantNumber: String
+    ): AssistantConfigEntity {
+        val existingConfig = assistantConfigDao.getConfigByAccountKey(accountKey)
+        
+        val config = if (existingConfig != null) {
+            existingConfig.copy(
+                isEnabled = isEnabled,
+                mode = mode,
+                action = action,
+                assistantNumber = assistantNumber,
+                enabledAt = if (isEnabled && !existingConfig.isEnabled) System.currentTimeMillis() else existingConfig.enabledAt,
+                updatedAt = System.currentTimeMillis()
+            )
+        } else {
+            AssistantConfigEntity(
+                id = generateId(),
+                accountId = accountId,
+                accountKey = accountKey,
+                isEnabled = isEnabled,
+                mode = mode,
+                action = action,
+                assistantNumber = assistantNumber,
+                enabledAt = if (isEnabled) System.currentTimeMillis() else 0L
+            )
+        }
+        
+        assistantConfigDao.insertConfig(config)
+        log.d(tag = TAG) { "Assistant config created/updated for $accountKey" }
+        
+        return config
+    }
+    
+    /**
+     * Obtiene configuración del asistente
+     */
+    suspend fun getAssistantConfig(accountKey: String): AssistantConfigEntity? {
+        return assistantConfigDao.getConfigByAccountKey(accountKey)
+    }
+    
+    /**
+     * Obtiene configuraciones activas del asistente
+     */
+    fun getActiveAssistantConfigs(): Flow<List<AssistantConfig>> {
+        return assistantConfigDao.getActiveConfigs().map { configs ->
+            configs.map { it.toAssistantConfig() }
+        }
+    }
+    
+    /**
+     * Obtiene lista de configuraciones activas (no Flow)
+     */
+    suspend fun getActiveAssistantConfigsList(): List<AssistantConfigEntity> {
+        return assistantConfigDao.getActiveConfigs().first()
+    }
+    
+    /**
+     * Desactiva asistente
+     */
+    suspend fun disableAssistant(accountKey: String) {
+        assistantConfigDao.setEnabled(accountKey, false)
+        log.d(tag = TAG) { "Assistant disabled for $accountKey" }
+    }
+    
+    /**
+     * Actualiza modo del asistente
+     */
+    suspend fun updateAssistantMode(accountKey: String, mode: AssistantMode) {
+        assistantConfigDao.updateMode(accountKey, mode)
+        log.d(tag = TAG) { "Assistant mode updated for $accountKey: $mode" }
+    }
+    
+    /**
+     * Actualiza acción del asistente
+     */
+    suspend fun updateAssistantAction(accountKey: String, action: AssistantAction) {
+        assistantConfigDao.updateAction(accountKey, action)
+        log.d(tag = TAG) { "Assistant action updated for $accountKey: $action" }
+    }
+    
+    /**
+     * Actualiza número del asistente
+     */
+    suspend fun updateAssistantNumber(accountKey: String, assistantNumber: String) {
+        assistantConfigDao.updateAssistantNumber(accountKey, assistantNumber)
+        log.d(tag = TAG) { "Assistant number updated for $accountKey: $assistantNumber" }
+    }
+    
+    // === OPERACIONES DE LISTA NEGRA ===
+    
+    /**
+     * Añade número a la lista negra
+     */
+    suspend fun addToBlacklist(
+        assistantConfigId: String,
+        phoneNumber: String,
+        displayName: String? = null,
+        reason: String? = null
+    ): BlacklistEntity {
+        val entry = BlacklistEntity(
+            id = generateId(),
+            assistantConfigId = assistantConfigId,
+            phoneNumber = phoneNumber,
+            displayName = displayName,
+            reason = reason
+        )
+        
+        blacklistDao.insertBlacklistEntry(entry)
+        log.d(tag = TAG) { "Added to blacklist: $phoneNumber" }
+        
+        return entry
+    }
+    
+    /**
+     * Remueve número de la lista negra
+     */
+    suspend fun removeFromBlacklist(assistantConfigId: String, phoneNumber: String) {
+        val entry = blacklistDao.getBlacklistEntryByPhone(assistantConfigId, phoneNumber)
+        if (entry != null) {
+            blacklistDao.setActive(entry.id, false)
+            log.d(tag = TAG) { "Removed from blacklist: $phoneNumber" }
+        }
+    }
+    
+    /**
+     * Obtiene lista negra para una cuenta
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun getBlacklistForAccount(accountKey: String): Flow<List<BlacklistEntry>> {
+        return assistantConfigDao.getConfigByAccountKeyFlow(accountKey).flatMapLatest { config ->
+            if (config != null) {
+                blacklistDao.getActiveBlacklistForConfig(config.id).map { entities ->
+                    entities.map { it.toBlacklistEntry() }
+                }
+            } else {
+                flowOf(emptyList())
+            }
+        }
+    }
+    
+    /**
+     * Obtiene lista negra como lista (no Flow)
+     */
+    suspend fun getBlacklistForConfigList(configId: String): List<BlacklistEntity> {
+        return blacklistDao.getActiveBlacklistForConfig(configId).first()
+    }
+    
+    /**
+     * Verifica si un número está en la lista negra
+     */
+    suspend fun isPhoneNumberBlacklisted(assistantConfigId: String, phoneNumber: String): Boolean {
+        return blacklistDao.isPhoneNumberBlacklisted(assistantConfigId, phoneNumber)
+    }
+    
+    // === OPERACIONES DE HISTORIAL DEL ASISTENTE ===
+    
+    /**
+     * Inserta log de acción del asistente
+     */
+    suspend fun insertAssistantCallLog(callLog: AssistantCallLogEntity) {
+        assistantCallLogDao.insertCallLog(callLog)
+        log.d(tag = TAG) { "Assistant call log inserted: ${callLog.callerNumber}" }
+    }
+    
+    /**
+     * Obtiene historial de llamadas del asistente para una cuenta
+     */
+    fun getAssistantCallLogsForAccount(accountKey: String): Flow<List<AssistantCallLog>> {
+        return assistantCallLogDao.getCallLogsForAccount(accountKey).map { entities ->
+            entities.map { it.toAssistantCallLog() }
+        }
+    }
+    
+    /**
+     * Obtiene log reciente del asistente para un número
+     */
+    suspend fun getRecentAssistantCallLogForNumber(phoneNumber: String): AssistantCallLogEntity? {
+        return assistantCallLogDao.getCallLogsForPhoneNumber(phoneNumber).first().firstOrNull()
+    }
+    
+    /**
+     * Actualiza resultado de deflección
+     */
+    suspend fun updateDeflectionResult(
+        logId: String,
+        success: Boolean,
+        errorMessage: String? = null
+    ) {
+        val existingLog = assistantCallLogDao.getCallLogById(logId)
+        if (existingLog != null) {
+            val updatedLog = existingLog.copy(
+                deflectionSuccess = success,
+                errorMessage = errorMessage
+            )
+            assistantCallLogDao.updateCallLog(updatedLog)
+            log.d(tag = TAG) { "Deflection result updated: $logId -> success=$success" }
+        }
+    }
+    
+    /**
+     * Obtiene estadísticas del asistente
+     */
+    suspend fun getAssistantStatistics(accountKey: String): AssistantStatistics? {
+        val config = assistantConfigDao.getConfigByAccountKey(accountKey) ?: return null
+        val stats = assistantCallLogDao.getStatisticsForConfig(config.id) ?: return null
+        
+        return AssistantStatistics(
+            accountKey = accountKey,
+            totalProcessedCalls = stats.totalCalls,
+            rejectedCalls = stats.rejectedCalls,
+            deflectedCalls = stats.deflectedCalls,
+            successfulDeflections = stats.successfulDeflections,
+            failedDeflections = stats.failedDeflections,
+            blacklistedCalls = stats.blacklistedCalls,
+            nonContactCalls = stats.nonContactCalls,
+            lastActivity = stats.lastActivity
+        )
     }
 }
 
