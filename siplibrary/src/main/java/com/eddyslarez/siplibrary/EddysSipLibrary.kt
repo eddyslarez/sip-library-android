@@ -29,10 +29,14 @@ import com.eddyslarez.siplibrary.data.database.entities.SipAccountEntity
 import com.eddyslarez.siplibrary.data.database.repository.CallLogWithContact
 import com.eddyslarez.siplibrary.data.database.repository.GeneralStatistics
 import com.eddyslarez.siplibrary.data.database.setupDatabaseIntegration
+import com.eddyslarez.siplibrary.data.services.assistant.AssistantManager
+import com.eddyslarez.siplibrary.utils.CallStateManager.callId
 import com.eddyslarez.siplibrary.utils.PushNotificationSimulator
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import java.util.concurrent.atomic.AtomicReference
 
 /**
@@ -54,6 +58,7 @@ class EddysSipLibrary private constructor() {
     private val pushSimulator = PushNotificationSimulator()
     private var databaseIntegration: DatabaseAutoIntegration? = null
     private var databaseManager: DatabaseManager? = null
+    private var assistantManager: AssistantManager? = null
 
     // Push Mode Manager
     private var pushModeManager: PushModeManager? = null
@@ -67,6 +72,7 @@ class EddysSipLibrary private constructor() {
         private var INSTANCE: EddysSipLibrary? = null
         private const val TAG = "EddysSipLibrary"
         private const val TAG1 = "ProcesoPush"
+        private const val TAG2 = "Assiatnate"
 
         fun getInstance(): EddysSipLibrary {
             return INSTANCE ?: synchronized(this) {
@@ -597,9 +603,9 @@ class EddysSipLibrary private constructor() {
                 }
 
                 override fun onIncomingCall(callerNumber: String, callerName: String?) {
-                    log.d(tag = TAG) { "Internal callback: onIncomingCall from $callerNumber" }
-
-                    val callInfo = createIncomingCallInfoFromCurrentCall(callerNumber, callerName)
+                    log.d(tag = TAG2) { "Internal callback: onIncomingCall from $callerNumber" }
+                    processIncomingCallThroughAssistant(callerNumber, callerName)
+                   val callInfo= createIncomingCallInfoFromCurrentCall(callerNumber, callerName)
                     notifyIncomingCall(callInfo)
                 }
 
@@ -706,7 +712,68 @@ class EddysSipLibrary private constructor() {
             }
         }
     }
+    private fun proceedWithNormalCallProcessing(callerNumber: String, callerName: String?) {
+        log.d(tag = TAG2) { "📱 Proceeding with normal call processing for $callerNumber" }
+        val callInfo = createIncomingCallInfoFromCurrentCall(callerNumber, callerName)
+        notifyIncomingCall(callInfo)
+    }
 
+    fun processIncomingCallThroughAssistant(callerNumber: String, callerName: String?) {
+        if (assistantManager == null) {
+            log.d(tag = TAG2) { "🔄 No assistant manager configured, proceeding with normal call processing" }
+            proceedWithNormalCallProcessing(callerNumber, callerName)
+            return
+        }
+
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                // Obtener información de la cuenta actual
+                val currentAccount = sipCoreManager?.currentAccountInfo
+                if (currentAccount == null) {
+                    log.w(tag = TAG2) { "⚠️ No current account available for assistant processing" }
+                    proceedWithNormalCallProcessing(callerNumber, callerName)
+                    return@launch
+                }
+
+                val accountKey = "${currentAccount.username}@${currentAccount.domain}"
+//                CallStateManager.incomingCallReceived(callId, callerNumber)
+
+                val account = sipCoreManager!!.currentAccountInfo
+                val callData = account?.currentCallData
+                log.d(tag = TAG2) { "🤖 Processing incoming call through assistant: account=$accountKey, caller=$callerNumber" }
+                account?.currentCallData
+                // Procesar la llamada a través del AssistantManager
+                val result = assistantManager!!.processIncomingCall(
+                    accountKey = accountKey,
+                    callId = callData?.callId ?: "",
+                    callerNumber = callerNumber,
+                    callerDisplayName = callerName
+                )
+
+                log.d(tag = TAG2) {
+                    "🎯 Assistant processing result: shouldProcess=${result.shouldProcess}, " +
+                            "action=${result.action}, reason=${result.reason}"
+                }
+
+                // Si el asistente no procesó la llamada, continuar normalmente
+                if (!result.shouldProcess) {
+                    log.d(tag = TAG2) { "✅ Assistant allowed call, proceeding with normal flow" }
+                    withContext(Dispatchers.Main) {
+                        proceedWithNormalCallProcessing(callerNumber, callerName)
+                    }
+                }
+                // Si el asistente procesó la llamada, la acción ya fue ejecutada
+                // a través de los callbacks configurados en setupAssistantManager
+
+            } catch (e: Exception) {
+                log.e(tag = TAG2) { "❌ Error in assistant processing: ${e.message}" }
+                // En caso de error, continuar con el procesamiento normal
+                withContext(Dispatchers.Main) {
+                    proceedWithNormalCallProcessing(callerNumber, callerName)
+                }
+            }
+        }
+    }
 
     /**
      * NUEVO: Determina el accountKey desde CallInfo
@@ -2219,36 +2286,6 @@ class EddysSipLibrary private constructor() {
         }
     }
 
-    fun dispose() {
-        if (isInitialized) {
-            log.d(tag = TAG) { "Disposing EddysSipLibrary" }
-
-            // Limpiar integración de base de datos primero
-            databaseIntegration?.dispose()
-            databaseIntegration = null
-
-            // Cerrar base de datos de forma segura
-            databaseManager?.closeDatabase()
-            databaseManager = null
-
-            // Resto del cleanup
-            sipCoreManager?.dispose()
-            sipCoreManager = null
-            pushModeManager?.dispose()
-            pushModeManager = null
-            listeners.clear()
-
-            registrationListener = null
-            callListener = null
-            incomingCallListener = null
-            networkStatusListener = null
-            autoReconnectionListener = null
-
-            isInitialized = false
-            log.d(tag = TAG) { "EddysSipLibrary disposed completely" }
-        }
-    }
-
     // === INTERFAZ INTERNA DE CALLBACKS ===
 
     internal interface SipCallbacks {
@@ -2729,5 +2766,431 @@ class EddysSipLibrary private constructor() {
         sipCoreManager?.transferCall(transferTo, callId)
     }
 
+    // === MÉTODOS PÚBLICOS DEL ASISTENTE ===
+
+    /**
+     * Inicializa el Assistant Manager bajo demanda
+     * Debe llamarse antes de usar cualquier funcionalidad del asistente
+     */
+    fun initializeAssistant(application: Application): Boolean {
+        checkInitialized()
+
+        if (assistantManager != null) {
+            log.w(tag = TAG) { "Assistant already initialized" }
+            return true
+        }
+
+        if (databaseManager == null) {
+            log.e(tag = TAG) { "Cannot initialize assistant: database not available" }
+            return false
+        }
+
+        return try {
+            setupAssistantManager(application)
+            assistantManager != null
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error initializing assistant: ${e.message}" }
+            false
+        }
+    }
+    private fun setupAssistantManager(application: Application) {
+        try {
+            databaseManager?.let { dbManager ->
+                assistantManager = AssistantManager(application, dbManager)
+
+                // Configurar callbacks para integrar con SipCoreManager
+                assistantManager?.setCallbacks(
+                    onCallShouldBeRejected = { callId, reason ->
+                        log.d(tag = TAG2) { "Assistant requests call rejection: $callId (reason: $reason)" }
+                        sipCoreManager?.declineCall()
+                    },
+                    onCallShouldBeDeflected = { callId, assistantNumber, reason ->
+                        log.d(tag = TAG2) { "Assistant requests call deflection: $callId -> $assistantNumber (reason: $reason)" }
+
+                        // Usar el método de deflección del SipCoreManager
+                        val success = sipCoreManager?.deflectIncomingCall(assistantNumber) ?: false
+
+                        // Notificar el resultado al AssistantManager
+                        CoroutineScope(Dispatchers.IO).launch {
+                            try {
+                                val callerNumber = getCurrentCallInfo()?.phoneNumber ?: ""
+                                assistantManager?.notifyDeflectionResult(callId, callerNumber, success)
+                            } catch (e: Exception) {
+                                log.e(tag = TAG2) { "Error notifying deflection result: ${e.message}" }
+                            }
+                        }
+                    }
+                )
+
+                log.d(tag = TAG) { "Assistant Manager initialized successfully" }
+            }
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error setting up Assistant Manager: ${e.message}" }
+            assistantManager = null
+        }
+    }
+    /**
+     * Deshabilita y limpia completamente el Assistant Manager
+     */
+    fun shutdownAssistant(): Boolean {
+        checkInitialized()
+
+        return try {
+            assistantManager?.let { manager ->
+                // Desactivar todas las configuraciones antes de limpiar
+                CoroutineScope(Dispatchers.IO).launch {
+                    try {
+                        val activeConfigs = manager.activeConfigsFlow.value.keys
+                        activeConfigs.forEach { accountKey ->
+                            manager.disableAssistant(accountKey)
+                        }
+                    } catch (e: Exception) {
+                        log.e(tag = TAG) { "Error disabling active configurations: ${e.message}" }
+                    }
+                }
+
+                manager.dispose()
+                assistantManager = null
+                log.d(tag = TAG) { "Assistant Manager shutdown successfully" }
+                true
+            } ?: run {
+                log.w(tag = TAG) { "Assistant not initialized, nothing to shutdown" }
+                true
+            }
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error shutting down assistant: ${e.message}" }
+            false
+        }
+    }
+
+    /**
+     * Verifica si el Assistant Manager está inicializado
+     */
+    fun isAssistantInitialized(): Boolean {
+        return assistantManager != null
+    }
+
+    /**
+     * Verifica si el asistente puede ser inicializado (requiere base de datos)
+     */
+    fun canInitializeAssistant(): Boolean {
+        checkInitialized()
+        return databaseManager != null
+    }
+
+    /**
+     * Obtiene el manager del asistente
+     */
+    fun getAssistantManager(): AssistantManager? {
+        checkInitialized()
+        return assistantManager
+    }
+
+    /**
+     * Activa el asistente para una cuenta específica
+     */
+    suspend fun enableAssistant(
+        accountKey: String,
+        mode: AssistantMode,
+        action: AssistantAction,
+        assistantNumber: String = ""
+    ): AssistantConfig? {
+        checkInitialized()
+        return try {
+            assistantManager?.enableAssistant(accountKey, mode, action, assistantNumber)
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error enabling assistant: ${e.message}" }
+            null
+        }
+    }
+
+    /**
+     * Desactiva el asistente para una cuenta específica
+     */
+    suspend fun disableAssistant(accountKey: String): Boolean {
+        checkInitialized()
+        return try {
+            assistantManager?.disableAssistant(accountKey)
+            true
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error disabling assistant: ${e.message}" }
+            false
+        }
+    }
+
+    /**
+     * Obtiene configuración del asistente para una cuenta
+     */
+    suspend fun getAssistantConfig(accountKey: String): AssistantConfig? {
+        checkInitialized()
+        return try {
+            assistantManager?.getAssistantConfig(accountKey)
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error getting assistant config: ${e.message}" }
+            null
+        }
+    }
+
+    /**
+     * Añade un número a la lista negra
+     */
+    suspend fun addToBlacklist(
+        accountKey: String,
+        phoneNumber: String,
+        displayName: String? = null,
+        reason: String? = null
+    ): BlacklistEntry? {
+        checkInitialized()
+        return try {
+            assistantManager?.addToBlacklist(accountKey, phoneNumber, displayName, reason)
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error adding to blacklist: ${e.message}" }
+            null
+        }
+    }
+
+    /**
+     * Remueve un número de la lista negra
+     */
+    suspend fun removeFromBlacklist(accountKey: String, phoneNumber: String): Boolean {
+        checkInitialized()
+        return try {
+            assistantManager?.removeFromBlacklist(accountKey, phoneNumber)
+            true
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error removing from blacklist: ${e.message}" }
+            false
+        }
+    }
+
+    /**
+     * Obtiene la lista negra para una cuenta
+     */
+    fun getBlacklist(accountKey: String): Flow<List<BlacklistEntry>>? {
+        checkInitialized()
+        return try {
+            assistantManager?.getBlacklist(accountKey)
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error getting blacklist: ${e.message}" }
+            null
+        }
+    }
+
+    /**
+     * Verifica si un número está en la lista negra
+     */
+    suspend fun isPhoneNumberBlacklisted(accountKey: String, phoneNumber: String): Boolean {
+        checkInitialized()
+        return try {
+            assistantManager?.isPhoneNumberBlacklisted(accountKey, phoneNumber) ?: false
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error checking blacklist: ${e.message}" }
+            false
+        }
+    }
+
+    /**
+     * Actualiza el modo del asistente
+     */
+    suspend fun updateAssistantMode(accountKey: String, mode: AssistantMode): Boolean {
+        checkInitialized()
+        return try {
+            assistantManager?.updateAssistantMode(accountKey, mode)
+            true
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error updating assistant mode: ${e.message}" }
+            false
+        }
+    }
+
+    /**
+     * Actualiza la acción del asistente
+     */
+    suspend fun updateAssistantAction(accountKey: String, action: AssistantAction): Boolean {
+        checkInitialized()
+        return try {
+            assistantManager?.updateAssistantAction(accountKey, action)
+            true
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error updating assistant action: ${e.message}" }
+            false
+        }
+    }
+
+    /**
+     * Actualiza el número del asistente
+     */
+    suspend fun updateAssistantNumber(accountKey: String, assistantNumber: String): Boolean {
+        checkInitialized()
+        return try {
+            assistantManager?.updateAssistantNumber(accountKey, assistantNumber)
+            true
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error updating assistant number: ${e.message}" }
+            false
+        }
+    }
+
+    /**
+     * Verifica si el asistente está activo para una cuenta
+     */
+    fun isAssistantActive(accountKey: String): Boolean {
+        checkInitialized()
+        return assistantManager?.isAssistantActive(accountKey) ?: false
+    }
+
+    /**
+     * Obtiene estadísticas del asistente para una cuenta
+     */
+    suspend fun getAssistantStatistics(accountKey: String): AssistantStatistics? {
+        checkInitialized()
+        return try {
+            assistantManager?.getAssistantStatistics(accountKey)
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error getting assistant statistics: ${e.message}" }
+            null
+        }
+    }
+
+    /**
+     * Obtiene historial de llamadas procesadas por el asistente
+     */
+    fun getAssistantCallLogs(accountKey: String): Flow<List<AssistantCallLog>>? {
+        checkInitialized()
+        return try {
+            assistantManager?.getAssistantCallLogs(accountKey)
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error getting assistant call logs: ${e.message}" }
+            null
+        }
+    }
+
+    /**
+     * Obtiene todas las configuraciones activas del asistente
+     */
+    fun getActiveAssistantConfigurations(): Flow<List<AssistantConfig>>? {
+        checkInitialized()
+        return try {
+            assistantManager?.getActiveConfigurations()
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error getting active assistant configurations: ${e.message}" }
+            null
+        }
+    }
+
+    /**
+     * Flow para observar configuraciones activas del asistente
+     */
+    fun getActiveAssistantConfigsFlow(): StateFlow<Map<String, AssistantConfig>>? {
+        checkInitialized()
+        return assistantManager?.activeConfigsFlow
+    }
+
+    /**
+     * Flow para observar el estado de procesamiento del asistente
+     */
+    fun getAssistantProcessingStateFlow(): StateFlow<Boolean>? {
+        checkInitialized()
+        return assistantManager?.isProcessingFlow
+    }
+
+    /**
+     * Configura contactos manualmente para el asistente
+     */
+    fun setAssistantManualContacts(contacts: List<Contact>) {
+        checkInitialized()
+        assistantManager?.setManualContacts(contacts)
+    }
+
+    /**
+     * Configura el asistente para usar contactos del dispositivo
+     */
+    fun useAssistantDeviceContacts(config: ContactExtractionConfig = ContactExtractionConfig()) {
+        checkInitialized()
+        assistantManager?.useDeviceContacts(config)
+    }
+
+    /**
+     * Obtiene información de diagnóstico del asistente
+     */
+    fun getAssistantDiagnosticInfo(): String {
+        checkInitialized()
+        return assistantManager?.getDiagnosticInfo() ?: "Assistant not initialized"
+    }
+
+
+    fun dispose() {
+        if (isInitialized) {
+            log.d(tag = TAG) { "Disposing EddysSipLibrary" }
+
+            // NUEVO: Limpiar Assistant Manager
+            assistantManager?.dispose()
+            assistantManager = null
+
+            // Limpiar integración de base de datos primero
+            databaseIntegration?.dispose()
+            databaseIntegration = null
+
+            // Cerrar base de datos de forma segura
+            databaseManager?.closeDatabase()
+            databaseManager = null
+
+            // Resto del cleanup
+            sipCoreManager?.dispose()
+            sipCoreManager = null
+            pushModeManager?.dispose()
+            pushModeManager = null
+            listeners.clear()
+
+            registrationListener = null
+            callListener = null
+            incomingCallListener = null
+            networkStatusListener = null
+            autoReconnectionListener = null
+
+            isInitialized = false
+            log.d(tag = TAG) { "EddysSipLibrary disposed completely" }
+        }
+    }
+
+    // === DIAGNÓSTICO COMPLETO ===
+
+    fun getCompleteDiagnostic(): String {
+        checkInitialized()
+        return buildString {
+            appendLine("=== COMPLETE SIP LIBRARY DIAGNOSTIC ===")
+            appendLine("Library initialized: $isInitialized")
+            appendLine("SipCore Manager: ${sipCoreManager != null}")
+            appendLine("Database Manager: ${databaseManager != null}")
+            appendLine("Assistant Manager: ${assistantManager != null}")
+            appendLine("Push Mode Manager: ${pushModeManager != null}")
+
+            appendLine("\n--- Assistant Status ---")
+            if (assistantManager != null) {
+                appendLine("Assistant available: Yes")
+                appendLine("Processing calls: ${assistantManager?.isProcessingFlow?.value ?: false}")
+                val activeConfigs = assistantManager?.activeConfigsFlow?.value ?: emptyMap()
+                appendLine("Active configurations: ${activeConfigs.size}")
+                activeConfigs.forEach { (account, config) ->
+                    appendLine("  $account: ${config.mode} -> ${config.action}")
+                }
+            } else {
+                appendLine("Assistant available: No")
+            }
+
+            appendLine("\n--- Registration States ---")
+            getAllRegistrationStates().forEach { (account, state) ->
+                appendLine("$account: $state")
+            }
+
+            appendLine("\n--- Call State ---")
+            appendLine("Current state: ${getCurrentCallState().state}")
+            appendLine("Active calls: ${getAllCalls().size}")
+
+            appendLine("\n--- Push Mode ---")
+            appendLine("Current mode: ${getCurrentPushMode()}")
+            appendLine("In push mode: ${isInPushMode()}")
+        }
+    }
 
 }
