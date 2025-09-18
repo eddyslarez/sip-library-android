@@ -24,7 +24,8 @@ import kotlinx.coroutines.launch
  * 
  * @author Eddys Larez
  */
-class AssistantManager(
+class
+AssistantManager(
     private val application: Application,
     private val databaseManager: DatabaseManager
 ) {

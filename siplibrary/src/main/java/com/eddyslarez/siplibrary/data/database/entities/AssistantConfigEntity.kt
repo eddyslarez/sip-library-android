@@ -32,7 +32,7 @@ data class AssistantConfigEntity(
     @PrimaryKey
     val id: String,
     val accountId: String,
-    val accountKey: String, // username@domain para referencia rápida
+    val accountKey: String,
     val isEnabled: Boolean = false,
     val mode: AssistantMode = AssistantMode.DISABLED,
     val action: AssistantAction = AssistantAction.REJECT_IMMEDIATELY,

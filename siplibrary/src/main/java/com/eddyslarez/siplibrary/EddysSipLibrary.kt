@@ -58,7 +58,7 @@ class EddysSipLibrary private constructor() {
     private val pushSimulator = PushNotificationSimulator()
     private var databaseIntegration: DatabaseAutoIntegration? = null
     private var databaseManager: DatabaseManager? = null
-    private var assistantManager: AssistantManager? = null
+     private var assistantManager: AssistantManager? = null
 
     // Push Mode Manager
     private var pushModeManager: PushModeManager? = null
@@ -2755,9 +2755,11 @@ class EddysSipLibrary private constructor() {
             }
         }
     }
+
     fun deflectIncomingCall(redirectToNumber: String, callId: String? = null) {
     sipCoreManager?.deflectIncomingCall(redirectToNumber, callId)
     }
+
     fun transferIncomingCallImmediately(transferTo: String) {
         sipCoreManager?.transferIncomingCallImmediately(transferTo)
     }
@@ -2810,7 +2812,6 @@ class EddysSipLibrary private constructor() {
                         // Usar el método de deflección del SipCoreManager
                         val success = sipCoreManager?.deflectIncomingCall(assistantNumber) ?: false
 
-                        // Notificar el resultado al AssistantManager
                         CoroutineScope(Dispatchers.IO).launch {
                             try {
                                 val callerNumber = getCurrentCallInfo()?.phoneNumber ?: ""
