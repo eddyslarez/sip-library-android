@@ -1,5 +1,6 @@
 package com.eddyslarez.siplibrary.utils
 
+import com.eddyslarez.siplibrary.core.SipCoreManager
 import com.eddyslarez.siplibrary.data.models.*
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -90,9 +91,9 @@ class PushModeManager(
             }
         }
     }
-//    /**
+    //    /**
 //     * Notifica que la aplicación pasó a segundo plano
-//     */
+//     /
 //    fun onAppBackgrounded(registeredAccounts: Set<String>) {
 //        log.d(tag = TAG) { "App backgrounded with ${registeredAccounts.size} accounts" }
 //
@@ -100,9 +101,9 @@ class PushModeManager(
 //            scheduleTransitionToPush(registeredAccounts, PushModeReasons.APP_BACKGROUNDED)
 //        }
 //    }
-    /**
-     * Notifica que la aplicación pasó a primer plano
-     */
+    /*
+    * Notifica que la aplicación pasó a primer plano
+    */
     fun onAppForegrounded(registeredAccounts: Set<String>) {
         log.d(tag = TAG1) {
             "=== APP FOREGROUNDED EVENT ===" +
@@ -122,7 +123,6 @@ class PushModeManager(
             log.w(tag = TAG1) { "Transition to foreground NOT executed - strategy: ${config.strategy}" }
         }
     }
-
 //    /**
 //     * Notifica que la aplicación pasó a primer plano
 //     */
@@ -144,7 +144,7 @@ class PushModeManager(
         log.d(tag = TAG) { "Incoming call received, current mode: ${getCurrentMode()}" }
 
         val currentState = _pushModeStateFlow.value
-        
+
         // Recordar si estábamos en modo push antes de la llamada
         if (currentState.currentMode == PushMode.PUSH) {
             wasInPushBeforeCall = true
@@ -165,7 +165,7 @@ class PushModeManager(
     /**
      * Notifica que una llamada terminó
      */
-    // Y modifica el método onCallEnded:
+// Y modifica el método onCallEnded:
     fun onCallEnded(registeredAccounts: Set<String>) {
         log.d(tag = TAG) { "Call ended, was in push before call: $wasInPushBeforeCall" }
 
@@ -234,13 +234,13 @@ class PushModeManager(
      */
     private fun transitionSpecificAccountToForeground(accountKey: String, reason: String) {
         val currentState = _pushModeStateFlow.value
-        
+
         log.d(tag = TAG1) { "Transitioning specific account to FOREGROUND: $accountKey, reason: $reason" }
 
         // Crear nuevo estado manteniendo las otras cuentas en push
         val updatedAccountsInPush = currentState.accountsInPushMode.toMutableSet()
         updatedAccountsInPush.remove(accountKey)
-        
+
         val newState = PushModeState(
             currentMode = if (updatedAccountsInPush.isEmpty()) PushMode.FOREGROUND else PushMode.PUSH,
             previousMode = currentState.currentMode,
@@ -441,14 +441,14 @@ class PushModeManager(
     private fun scheduleReturnToPushAfterCall(accounts: Set<String>) {
         cancelCallEndTransition()
 
-      //  callEndTransitionJob =
-            scope.launch {
+        //  callEndTransitionJob =
+        scope.launch {
             try {
                 // Delay más corto para retorno después de llamada
                 val returnDelay = 2000L
                 log.d(tag = TAG) { "Scheduling return to push in ${returnDelay}ms after call end" }
                 delay(returnDelay)
-                
+
                 // Verificar que no hay nueva llamada activa
                 if (!isCallActive) {
                     transitionToPush(accounts, PushModeReasons.CALL_ENDED)
@@ -508,7 +508,6 @@ class PushModeManager(
             log.e(tag = TAG1) { "Error in transition callbacks: ${e.message}" }
         }
     }
-
 //    private fun transitionToPush(accounts: Set<String>, reason: String) {
 //        val currentState = _pushModeStateFlow.value
 //
@@ -636,7 +635,7 @@ class PushModeManager(
         }
     }
 
-    // === MÉTODOS DE CONSULTA ===
+// === MÉTODOS DE CONSULTA ===
 
     fun getCurrentMode(): PushMode = _pushModeStateFlow.value.currentMode
     fun getCurrentState(): PushModeState = _pushModeStateFlow.value

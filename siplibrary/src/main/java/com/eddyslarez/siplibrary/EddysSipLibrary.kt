@@ -146,7 +146,7 @@ class EddysSipLibrary private constructor() {
         this.networkStateCallbacks = callbacks
 
         // Configurar listener en SipCoreManager
-        sipCoreManager?.setNetworkConnectivityListener(object : NetworkConnectivityListener {
+        sipCoreManager?.networkManager?.setConnectivityListener(object : NetworkConnectivityListener {
             override fun onNetworkLost() {
                 callbacks?.onNetworkLost()
             }
@@ -1918,7 +1918,7 @@ class EddysSipLibrary private constructor() {
 
         fun getCallLogs(limit: Int = 50): List<CallLog> {
             checkInitialized()
-            return sipCoreManager?.callLogs(limit) ?: emptyList()
+            return sipCoreManager?.callLogs() ?: emptyList()
         }
 
         fun getMissedCalls(): List<CallLog> {
@@ -2152,11 +2152,11 @@ class EddysSipLibrary private constructor() {
             checkInitialized()
             sipCoreManager?.enterPushMode(token)
         }
-
-        fun getSystemHealthReport(): String {
-            checkInitialized()
-            return sipCoreManager?.getSystemHealthReport() ?: "Library not initialized"
-        }
+//
+//        fun getSystemHealthReport(): String {
+//            checkInitialized()
+//            return sipCoreManager?.getSystemHealthReport() ?: "Library not initialized"
+//        }
 
         fun isSystemHealthy(): Boolean {
             checkInitialized()

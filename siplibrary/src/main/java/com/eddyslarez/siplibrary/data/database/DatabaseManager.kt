@@ -15,6 +15,7 @@ import com.eddyslarez.siplibrary.data.database.repository.GeneralStatistics
 import com.eddyslarez.siplibrary.data.models.*
 import com.eddyslarez.siplibrary.utils.log
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.first
 
 /**
  * Gestor principal de base de datos para la librería SIP
@@ -62,6 +63,82 @@ class DatabaseManager private constructor(application: Application) {
     }
 
     // === OPERACIONES DE CUENTAS SIP ===
+    /**
+     * NUEVO: Obtiene cuentas que deberían estar registradas pero pueden estar desconectadas
+     */
+    suspend fun getAccountsForRecovery(): List<SipAccountEntity> {
+        return try {
+            val activeAccounts = getActiveSipAccounts().first()
+            val now = System.currentTimeMillis()
+
+            // Filtrar cuentas que:
+            // 1. Están activas
+            // 2. No han expirado (si tienen expiry)
+            // 3. O su último registro fue reciente (menos de 2 horas)
+            activeAccounts.filter { account ->
+                account.isActive &&
+                        (account.registrationExpiry == null || account.registrationExpiry > now) &&
+                        (now - account.updatedAt) < (2 * 60 * 60 * 1000) // 2 horas
+            }
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error getting accounts for recovery: ${e.message}" }
+            emptyList()
+        }
+    }
+
+    /**
+     * NUEVO: Marca una cuenta como necesitando reconexión
+     */
+    suspend fun markAccountForReconnection(accountId: String, reason: String? = null) {
+        try {
+            repository.updateRegistrationState(
+                accountId = accountId,
+                state = RegistrationState.FAILED,
+                expiry = null
+            )
+
+            log.d(tag = TAG) { "Account marked for reconnection: $accountId, reason: $reason" }
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error marking account for reconnection: ${e.message}" }
+        }
+    }
+
+    /**
+     * NUEVO: Obtiene estadísticas de conectividad de cuentas
+     */
+    suspend fun getAccountConnectivityStats(): Map<String, Any> {
+        return try {
+            val activeAccounts = getActiveSipAccounts().first()
+            val registeredAccounts = getRegisteredSipAccounts().first()
+            val now = System.currentTimeMillis()
+
+            val stats = activeAccounts.groupBy { account ->
+                when {
+                    account.registrationState == RegistrationState.OK &&
+                            (account.registrationExpiry == null || account.registrationExpiry > now) -> "registered"
+
+                    account.registrationState == RegistrationState.IN_PROGRESS -> "connecting"
+                    account.registrationState == RegistrationState.FAILED -> "failed"
+                    else -> "disconnected"
+                }
+            }
+
+            mapOf(
+                "total" to activeAccounts.size,
+                "registered" to (stats["registered"]?.size ?: 0),
+                "connecting" to (stats["connecting"]?.size ?: 0),
+                "failed" to (stats["failed"]?.size ?: 0),
+                "disconnected" to (stats["disconnected"]?.size ?: 0),
+                "lastUpdate" to now
+            )
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error getting connectivity stats: ${e.message}" }
+            mapOf("error" to e.message)
+        } as Map<String, Any>
+    }
+
+
+
 
     /**
      * Crea o actualiza una cuenta SIP

@@ -209,6 +209,29 @@ class AccountInfo(
         }
         return "${randomPart}_${timestamp}@$domain"
     }
+
+    fun isWebSocketHealthy(): Boolean {
+        return try {
+            this.webSocketClient?.let { ws ->
+                ws.isConnected() && this.isRegistered
+            } ?: false
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    fun requiresReconnection(): Boolean {
+        return try {
+            val wsConnected = this.webSocketClient?.isConnected() ?: false
+            val shouldBeRegistered = this.isRegistered
+
+            // Necesita reconexión si debería estar registrado pero el WS no está conectado
+            shouldBeRegistered && !wsConnected
+        } catch (e: Exception) {
+            true // Si hay error, asumir que necesita reconexión
+        }
+    }
+
     /**
      * NUEVO: Actualiza CSeq desde fuente externa (ej. mensaje SIP recibido)
      * Solo actualiza si el nuevo valor es mayor que el actual

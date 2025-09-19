@@ -550,7 +550,8 @@ class SipMessageHandler(private val sipCoreManager: SipCoreManager) {
                 accountInfo.webSocketClient?.send(ringingResponse)
 
                 delay(200)
-                sipCoreManager.audioManager.playRingtone()
+
+                sipCoreManager.audioManager.playIncomingRingtone(syncVibration = true)
             }
 
             log.d(tag = TAG) { "Incoming call setup completed for ${callData.callId}" }
@@ -806,7 +807,7 @@ class SipMessageHandler(private val sipCoreManager: SipCoreManager) {
                 sipCoreManager.currentAccountInfo?.resetCallState()
 
                 // Limpiar DTMF
-                sipCoreManager.clearDtmfQueue()
+                sipCoreManager.callManager.clearDtmfQueue()
 
                 log.d(tag = TAG) { "Call cleanup completed for ${callData.callId}" }
 
