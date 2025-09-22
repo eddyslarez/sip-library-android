@@ -2,7 +2,6 @@ package com.eddyslarez.siplibrary.data.services.audio
 import android.app.Application
 import android.content.Context
 import android.media.AudioAttributes
-import android.media.AudioManager
 import android.media.MediaPlayer
 import android.media.RingtoneManager
 import android.net.Uri
@@ -24,7 +23,7 @@ import kotlinx.coroutines.isActive
  * AudioManager corregido con reproducción continua de ringtones y vibración
  * @author Eddys Larez
  */
-class AudioManager(private val application: Application) {
+class AudioRingtoneManager(private val application: Application) {
 
     private var outgoingRingtoneJob: Job? = null
     private var incomingRingtoneJob: Job? = null

@@ -9,9 +9,7 @@ import com.eddyslarez.siplibrary.data.database.converters.toCallLogs
 import com.eddyslarez.siplibrary.data.database.entities.AppConfigEntity
 import com.eddyslarez.siplibrary.data.models.*
 import com.eddyslarez.siplibrary.data.services.audio.AudioDevice
-import com.eddyslarez.siplibrary.data.services.audio.AudioDeviceManager
-import com.eddyslarez.siplibrary.data.services.audio.CallHoldManager
-import com.eddyslarez.siplibrary.data.services.audio.AudioManager
+import com.eddyslarez.siplibrary.data.services.audio.AudioRingtoneManager
 import com.eddyslarez.siplibrary.data.services.audio.WebRtcConnectionState
 import com.eddyslarez.siplibrary.data.services.audio.WebRtcEventListener
 import com.eddyslarez.siplibrary.data.services.audio.WebRtcManagerFactory
@@ -33,7 +31,6 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.datetime.Clock
 import java.util.concurrent.ConcurrentHashMap
-import kotlin.math.pow
 
 /**
  * Gestor principal del core SIP - Optimizado sin estados legacy
@@ -157,10 +154,10 @@ class SipCoreManager private constructor(
 
     private fun initializeAudioManager() {
         try {
-            val systemAudioManager = AudioManager(application)
+            val systemAudioRingtoneManager = AudioRingtoneManager(application)
             audioManager = SipAudioManager(
                 application = application,
-                audioManager = systemAudioManager,
+                audioRingtoneManager = systemAudioRingtoneManager,
                 webRtcManager = webRtcManager
             )
             audioManager.initialize()
@@ -562,6 +559,10 @@ class SipCoreManager private constructor(
             override fun onAudioDeviceChanged(device: AudioDevice?) {
                 log.d(tag = TAG) { "Audio device changed: ${device?.name}" }
                 audioManager.refreshAudioDevices()
+            }
+
+            override fun onAudioDevicesChanged(devices: List<AudioDevice>) {
+                log.d(tag = TAG) { "Audio device changed: ${devices}" }
             }
         })
     }

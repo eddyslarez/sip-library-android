@@ -7,7 +7,7 @@ import com.eddyslarez.siplibrary.data.database.entities.AppConfigEntity
 import com.eddyslarez.siplibrary.data.models.AccountInfo
 import com.eddyslarez.siplibrary.data.services.audio.AudioDevice
 import com.eddyslarez.siplibrary.data.services.audio.AudioDeviceManager
-import com.eddyslarez.siplibrary.data.services.audio.AudioManager
+import com.eddyslarez.siplibrary.data.services.audio.AudioRingtoneManager
 import com.eddyslarez.siplibrary.data.services.audio.WebRtcConnectionState
 import com.eddyslarez.siplibrary.data.services.audio.WebRtcEventListener
 import com.eddyslarez.siplibrary.data.services.audio.WebRtcManager
@@ -19,7 +19,7 @@ import kotlinx.coroutines.launch
 
 class SipAudioManager(
     private val application: Application,
-    private val audioManager: AudioManager,
+    private val audioRingtoneManager: AudioRingtoneManager,
     private val webRtcManager: WebRtcManager
 ) {
     private val audioDeviceManager = AudioDeviceManager()
@@ -58,6 +58,10 @@ class SipAudioManager(
             override fun onAudioDeviceChanged(device: AudioDevice?) {
                 log.d(tag = TAG) { "Audio device changed: ${device?.name}" }
                 refreshAudioDevices()
+            }
+
+            override fun onAudioDevicesChanged(devices: List<AudioDevice>) {
+                log.d(tag = TAG) { "Audio devices changed: ${devices}" }
             }
         })
     }
@@ -153,35 +157,35 @@ class SipAudioManager(
      * Detener todos los ringtones
      */
     fun stopAllRingtones() {
-        audioManager.stopAllRingtones()
+        audioRingtoneManager.stopAllRingtones()
     }
 
     /**
      * Reproducir ringtone de llamada entrante
      */
     fun playIncomingRingtone(syncVibration: Boolean = true) {
-        audioManager.playRingtone(syncVibration)
+        audioRingtoneManager.playRingtone(syncVibration)
     }
 
     /**
      * Reproducir ringtone de llamada saliente
      */
     fun playOutgoingRingtone() {
-        audioManager.playOutgoingRingtone()
+        audioRingtoneManager.playOutgoingRingtone()
     }
 
     /**
      * Detener ringtone específico
      */
     fun stopRingtone() {
-        audioManager.stopRingtone()
+        audioRingtoneManager.stopRingtone()
     }
 
     /**
      * Detener ringtone de llamada saliente
      */
     fun stopOutgoingRingtone() {
-        audioManager.stopOutgoingRingtone()
+        audioRingtoneManager.stopOutgoingRingtone()
     }
 
     /**
@@ -191,7 +195,7 @@ class SipAudioManager(
         try {
             CoroutineScope(Dispatchers.IO).launch {
                 databaseManager?.updateIncomingRingtoneUri(uri)
-                audioManager.setIncomingRingtone(uri)
+                audioRingtoneManager.setIncomingRingtone(uri)
                 log.d(tag = TAG) { "Incoming ringtone URI saved to database: $uri" }
             }
         } catch (e: Exception) {
@@ -206,7 +210,7 @@ class SipAudioManager(
         try {
             CoroutineScope(Dispatchers.IO).launch {
                 databaseManager?.updateOutgoingRingtoneUri(uri)
-                audioManager.setOutgoingRingtone(uri)
+                audioRingtoneManager.setOutgoingRingtone(uri)
                 log.d(tag = TAG) { "Outgoing ringtone URI saved to database: $uri" }
             }
         } catch (e: Exception) {
@@ -221,8 +225,8 @@ class SipAudioManager(
         try {
             databaseManager?.updateRingtoneUris(incomingUri, outgoingUri)
 
-            incomingUri?.let { audioManager.setIncomingRingtone(it) }
-            outgoingUri?.let { audioManager.setOutgoingRingtone(it) }
+            incomingUri?.let { audioRingtoneManager.setIncomingRingtone(it) }
+            outgoingUri?.let { audioRingtoneManager.setOutgoingRingtone(it) }
 
             log.d(tag = TAG) { "Both ringtone URIs saved to database - Incoming: $incomingUri, Outgoing: $outgoingUri" }
         } catch (e: Exception) {
@@ -240,7 +244,7 @@ class SipAudioManager(
             appConfig.incomingRingtoneUri?.let { uriString ->
                 try {
                     val uri = Uri.parse(uriString)
-                    audioManager.setIncomingRingtone(uri)
+                    audioRingtoneManager.setIncomingRingtone(uri)
                     log.d(tag = TAG) { "Loaded incoming ringtone from DB: $uriString" }
                 } catch (e: Exception) {
                     log.e(tag = TAG) { "Error loading incoming ringtone URI: ${e.message}" }
@@ -250,7 +254,7 @@ class SipAudioManager(
             appConfig.outgoingRingtoneUri?.let { uriString ->
                 try {
                     val uri = Uri.parse(uriString)
-                    audioManager.setOutgoingRingtone(uri)
+                    audioRingtoneManager.setOutgoingRingtone(uri)
                     log.d(tag = TAG) { "Loaded outgoing ringtone from DB: $uriString" }
                 } catch (e: Exception) {
                     log.e(tag = TAG) { "Error loading outgoing ringtone URI: ${e.message}" }
@@ -275,7 +279,7 @@ class SipAudioManager(
      * Limpiar recursos de audio
      */
     fun dispose() {
-        audioManager.stopAllRingtones()
+        audioRingtoneManager.stopAllRingtones()
         webRtcManager.dispose()
     }
 
