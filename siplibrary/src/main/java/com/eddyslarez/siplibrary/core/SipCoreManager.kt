@@ -31,6 +31,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.datetime.Clock
@@ -697,39 +698,133 @@ class SipCoreManager private constructor(
         provider: String,
         token: String
     ) {
-        try {
-            val accountKey = "$username@$domain"
+        val accountKey = "$username@$domain"
 
-            // Crear o actualizar en BD primero
+        try {
+            // Actualizar o crear en la base de datos en un Coroutine separado
             CoroutineScope(Dispatchers.IO).launch {
                 try {
-                    val dbManager = getDatabaseManager()
-                    dbManager?.createOrUpdateSipAccount(
+                    val dbManager = getDatabaseManager() ?: return@launch
+
+                    // Obtener la cuenta existente de la BD si existe
+                    val dbAccounts = dbManager.getRegisteredSipAccounts().first()
+                    val existingAccount = dbAccounts.firstOrNull { it.username == username && it.domain == domain }
+
+
+                    // Determinar qué valores usar: los nuevos si no son nulos/vacíos, si no usar los de BD
+                    val finalPassword = if (!password.isNullOrEmpty()) password else existingAccount?.password ?: ""
+                    val finalToken = if (!token.isNullOrEmpty()) token else existingAccount?.pushToken ?: ""
+                    val finalProvider = if (!provider.isNullOrEmpty()) provider else existingAccount?.pushProvider ?: "fcm"
+
+                    // Crear o actualizar en BD
+                    dbManager.createOrUpdateSipAccount(
                         username = username,
-                        password = password,
+                        password = finalPassword,
                         domain = domain,
-                        pushToken = token,
-                        pushProvider = provider
+                        pushToken = finalToken,
+                        pushProvider = finalProvider
                     )
+
                     log.d(tag = TAG) { "Account saved to database: $accountKey" }
+
                 } catch (e: Exception) {
                     log.e(tag = TAG) { "Error saving account to database: ${e.message}" }
                 }
             }
 
             // Crear AccountInfo y registrar en memoria
-            val accountInfo = AccountInfo(username, password, domain)
-            activeAccounts[accountKey] = accountInfo
+            val accountInfo = AccountInfo(
+                username = username,
+                password = if (!password.isNullOrEmpty()) password else "",
+                domain = domain
+            )
 
-            accountInfo.token = token
-            accountInfo.provider = provider
+            // Asignar valores de token y proveedor (usar los valores recibidos si existen)
+            accountInfo.token = if (!token.isNullOrEmpty()) token else ""
+            accountInfo.provider = if (!provider.isNullOrEmpty()) provider else "fcm"
             accountInfo.userAgent = userAgent()
 
+            // Guardar en memoria
+            activeAccounts[accountKey] = accountInfo
+
+            // Actualizar estado y registrar en WebSocket
             updateRegistrationState(accountKey, RegistrationState.IN_PROGRESS)
             connectWebSocketAndRegister(accountInfo)
 
         } catch (e: Exception) {
-            val accountKey = "$username@$domain"
+            updateRegistrationState(accountKey, RegistrationState.FAILED)
+            throw Exception("Registration error: ${e.message}")
+        }
+    }
+    // Métodos de registro
+    fun register2(
+        username: String,
+        password: String,
+        domain: String,
+        provider: String,
+        token: String
+    ) {
+        val accountKey = "$username@$domain"
+
+        try {
+            // Actualizar o crear en la base de datos en un Coroutine separado
+            CoroutineScope(Dispatchers.IO).launch {
+                try {
+                    val dbManager = getDatabaseManager() ?: return@launch
+
+                    // Obtener la cuenta existente de la BD si existe
+                    val dbAccounts = dbManager.getRegisteredSipAccounts().first()
+                    val existingAccount = dbAccounts.firstOrNull { it.username == username && it.domain == domain }
+
+                    // Determinar qué valores usar: los nuevos si no son nulos/vacíos, si no usar los de BD
+                    val finalPassword = if (!password.isNullOrEmpty()) password else existingAccount?.password ?: ""
+                    val finalToken = if (!token.isNullOrEmpty()) token else existingAccount?.pushToken ?: ""
+                    val finalProvider = if (!provider.isNullOrEmpty()) provider else existingAccount?.pushProvider ?: "fcm"
+
+                    // Crear o actualizar en BD
+                    dbManager.createOrUpdateSipAccount(
+                        username = username,
+                        password = finalPassword,
+                        domain = domain,
+                        pushToken = finalToken,
+                        pushProvider = finalProvider
+                    )
+
+                    log.d(tag = TAG) { "Account saved to database: $accountKey" }
+
+                } catch (e: Exception) {
+                    log.e(tag = TAG) { "Error saving account to database: ${e.message}" }
+                }
+            }
+
+            // Crear AccountInfo y registrar en memoria
+            val accountInfo = AccountInfo(
+                username = username,
+                password = if (!password.isNullOrEmpty()) password else "",
+                domain = domain
+            )
+
+            // **FORZAR MODO PUSH** - Cambios específicos para register2
+            accountInfo.token = if (!token.isNullOrEmpty()) token else ""
+            accountInfo.provider = if (!provider.isNullOrEmpty()) provider else "fcm"
+
+            // **CRÍTICO: Forzar User-Agent específico para push**
+            accountInfo.userAgent = "${userAgent()} Push"
+
+            isAppInBackground = true
+
+            // Guardar en memoria
+            activeAccounts[accountKey] = accountInfo
+
+            // Actualizar estado y registrar en WebSocket
+            updateRegistrationState(accountKey, RegistrationState.IN_PROGRESS)
+
+            // **CONECTAR EN MODO PUSH** - Usar safeRegister con push forzado
+            CoroutineScope(Dispatchers.IO).launch {
+                safeRegister(accountInfo, isBackground = true) // Siempre en background/push
+            }
+
+        } catch (e: Exception) {
             updateRegistrationState(accountKey, RegistrationState.FAILED)
             throw Exception("Registration error: ${e.message}")
         }
@@ -738,7 +833,7 @@ class SipCoreManager private constructor(
     /**
      * NUEVO: Registro seguro de cuenta
      */
-    private suspend fun register2(
+    private suspend fun register3(
         username: String,
         password: String,
         domain: String,

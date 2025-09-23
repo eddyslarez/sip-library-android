@@ -1439,13 +1439,13 @@ class EddysSipLibrary private constructor() {
         suspend fun registerAccount(
             username: String,
             password: String,
-            domain: String? = null,
+            domain: String,
             pushToken: String? = null,
             pushProvider: String = "fcm"
         ) {
             checkInitialized()
 
-            val finalDomain = domain ?: sipCoreManager?.getDefaultDomain() ?: "mcn.ru"
+            val finalDomain = domain
             val finalToken = pushToken ?: ""
 
             log.d(tag = TAG) { "Registering account: $username@$finalDomain" }
@@ -1458,6 +1458,32 @@ class EddysSipLibrary private constructor() {
                 token = finalToken
             )
         }
+
+    /**
+     * Registra una cuenta SIP
+     */
+    suspend fun registerAccount2(
+        username: String,
+        password: String,
+        domain: String,
+        pushToken: String? = null,
+        pushProvider: String = "fcm"
+    ) {
+        checkInitialized()
+
+        val finalDomain = domain
+        val finalToken = pushToken ?: ""
+
+        log.d(tag = TAG) { "Registering account: $username@$finalDomain" }
+
+        sipCoreManager?.register2(
+            username = username,
+            password = password,
+            domain = finalDomain,
+            provider = pushProvider,
+            token = finalToken
+        )
+    }
 
         /**
          * Desregistra una cuenta SIP específica

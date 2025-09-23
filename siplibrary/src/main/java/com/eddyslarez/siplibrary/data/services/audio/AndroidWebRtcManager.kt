@@ -490,14 +490,14 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
                 AudioDeviceType.WIRED_HEADSET
             }
             // Prioridad 3: Speaker (corneta del dispositivo)
-            availableDevices.contains(AudioDeviceType.SPEAKER_PHONE) -> {
+            availableDevices.contains(AudioDeviceType.EARPIECE) -> {
                 log.d(TAG) { "✅ Selecting Speaker as priority device" }
-                AudioDeviceType.SPEAKER_PHONE
+                AudioDeviceType.EARPIECE
             }
             // Prioridad 4: Earpiece (altavoz)
             else -> {
                 log.d(TAG) { "✅ Selecting Earpiece as default device" }
-                AudioDeviceType.EARPIECE
+                AudioDeviceType.SPEAKER_PHONE
             }
         }
 
