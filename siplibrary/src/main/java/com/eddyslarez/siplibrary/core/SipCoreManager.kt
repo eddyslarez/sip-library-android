@@ -12,6 +12,8 @@ import com.eddyslarez.siplibrary.data.services.audio.AudioDevice
 import com.eddyslarez.siplibrary.data.services.audio.AudioDeviceManager
 import com.eddyslarez.siplibrary.data.services.audio.CallHoldManager
 import com.eddyslarez.siplibrary.data.services.audio.AudioManager
+import com.eddyslarez.siplibrary.data.services.audio.AudioUnit
+import com.eddyslarez.siplibrary.data.services.audio.AudioUnitTypes
 import com.eddyslarez.siplibrary.data.services.audio.WebRtcConnectionState
 import com.eddyslarez.siplibrary.data.services.audio.WebRtcEventListener
 import com.eddyslarez.siplibrary.data.services.audio.WebRtcManagerFactory
@@ -143,6 +145,27 @@ class SipCoreManager private constructor(
         CallStateManager.initialize()
 
         log.d(tag = TAG) { "SIP Core initialization completed" }
+    }
+
+
+
+    fun prepareAudioForCall(){
+        webRtcManager.prepareAudioForCall()
+    }
+    fun onBluetoothConnectionChanged(isConnected: Boolean){
+        webRtcManager.onBluetoothConnectionChanged(isConnected)
+    }
+    fun refreshAudioDevicesWithBluetoothPriority(){
+        webRtcManager.refreshAudioDevicesWithBluetoothPriority()
+    }
+    fun applyAudioRouteChange(audioUnitType: AudioUnitTypes): Boolean{
+        return webRtcManager.applyAudioRouteChange(audioUnitType)
+    }
+    fun getAvailableAudioUnits(): Set<AudioUnit>{
+       return webRtcManager.getAvailableAudioUnits()
+    }
+    fun getCurrentActiveAudioUnit(): AudioUnit?{
+       return webRtcManager.getCurrentActiveAudioUnit()
     }
 
     private fun initializeNetworkManager() {

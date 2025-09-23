@@ -53,7 +53,12 @@ interface WebRtcManager {
     fun changeAudioInputDeviceDuringCall(device: AudioDevice): Boolean
     fun getCurrentInputDevice(): AudioDevice?
     fun getCurrentOutputDevice(): AudioDevice?
-
+    fun onBluetoothConnectionChanged(isConnected: Boolean)
+    fun refreshAudioDevicesWithBluetoothPriority()
+    fun applyAudioRouteChange(audioUnitType: AudioUnitTypes): Boolean
+    fun getAvailableAudioUnits(): Set<AudioUnit>
+    fun getCurrentActiveAudioUnit(): AudioUnit?
+    fun setBluetoothAutoPriority(enabled: Boolean)
     /**
      * Enable or disable the local audio track
      * @param enabled Whether audio should be enabled
@@ -64,7 +69,7 @@ interface WebRtcManager {
     fun isMuted(): Boolean
     fun getLocalDescription(): String?
     fun diagnoseAudioIssues(): String
-    
+    fun prepareAudioForCall()
     /**
      * Get current connection state
      * @return The connection state

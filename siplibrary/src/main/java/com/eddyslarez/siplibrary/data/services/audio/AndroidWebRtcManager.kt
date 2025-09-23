@@ -21,6 +21,8 @@ import android.media.AudioDeviceInfo
 import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import androidx.annotation.RequiresApi
 import androidx.annotation.RequiresPermission
 import androidx.core.content.ContextCompat
@@ -90,6 +92,9 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
     private val _availableAudioDevices = MutableStateFlow<List<AudioDeviceType>>(emptyList())
     val availableAudioDevices: StateFlow<List<AudioDeviceType>> = _availableAudioDevices
 
+    private val _isBluetoothPriorityEnabled = MutableStateFlow(true)
+    val isBluetoothPriorityEnabled: StateFlow<Boolean> = _isBluetoothPriorityEnabled
+
     enum class AudioDeviceType {
         SPEAKER_PHONE, WIRED_HEADSET, EARPIECE, BLUETOOTH, NONE
     }
@@ -109,20 +114,22 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
         log.d(TAG) { "Disposing WebRTC Manager resources..." }
 
         try {
-            // Stop audio and restore settings
             stopAudioManager()
-
-            // Clean up WebRTC resources
             cleanupCall()
-
-            // Reset state
             isInitialized = false
             isLocalAudioReady = false
             currentInputDevice = null
             currentOutputDevice = null
-
         } catch (e: Exception) {
             log.e(TAG) { "Error during disposal: ${e.message}" }
+        }
+    }
+
+   override fun setBluetoothAutoPriority(enabled: Boolean) {
+        _isBluetoothPriorityEnabled.value = enabled
+        if (enabled) {
+            // Aplicar inmediatamente si está habilitado
+            ensureBluetoothPriorityIfAvailable()
         }
     }
 
@@ -249,12 +256,11 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
         // Built-in microphone (always available)
         inputDevices.add(createBuiltinMicDevice())
 
-        // Add wired headset mic if connected
+        // Add other input devices based on availability
         if (_availableAudioDevices.value.contains(AudioDeviceType.WIRED_HEADSET)) {
             inputDevices.add(createWiredHeadsetMicDevice())
         }
 
-        // Add Bluetooth mic if connected
         if (_availableAudioDevices.value.contains(AudioDeviceType.BLUETOOTH)) {
             inputDevices.add(createBluetoothMicDevice())
         }
@@ -301,6 +307,7 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
         }
     }
 
+
     override fun changeAudioInputDeviceDuringCall(device: AudioDevice): Boolean {
         log.d(TAG) { "Changing audio input to: ${device.name}" }
 
@@ -312,7 +319,7 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
             val success = when {
                 device.descriptor.startsWith("bluetooth") -> selectAudioDevice(AudioDeviceType.BLUETOOTH)
                 device.descriptor == "wired_headset_mic" -> selectAudioDevice(AudioDeviceType.WIRED_HEADSET)
-                else -> selectAudioDevice(AudioDeviceType.EARPIECE) // Built-in mic uses earpiece mode
+                else -> selectAudioDevice(AudioDeviceType.EARPIECE)
             }
 
             if (success) {
@@ -326,6 +333,7 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
             false
         }
     }
+
 
     override fun getCurrentInputDevice(): AudioDevice? {
         return currentInputDevice ?: when (_currentAudioDevice.value) {
@@ -445,9 +453,9 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
         // Set communication mode
         audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
 
-        // Update available devices and select default
+        // Update available devices and select with priority
         updateAvailableAudioDevices()
-        selectDefaultAudioDevice()
+        selectDefaultAudioDeviceWithPriority()
     }
 
     fun stopAudioManager() {
@@ -463,6 +471,70 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
 
         _currentAudioDevice.value = AudioDeviceType.NONE
     }
+
+    private fun selectDefaultAudioDeviceWithPriority() {
+        val availableDevices = _availableAudioDevices.value
+
+        log.d(TAG) { "Selecting audio device with priority. Available: $availableDevices" }
+        log.d(TAG) { "Bluetooth priority enabled: ${_isBluetoothPriorityEnabled.value}" }
+
+        val defaultDevice = when {
+            // Prioridad 1: Bluetooth (si la auto-prioridad está habilitada)
+            _isBluetoothPriorityEnabled.value && availableDevices.contains(AudioDeviceType.BLUETOOTH) -> {
+                log.d(TAG) { "✅ Selecting Bluetooth as priority device" }
+                AudioDeviceType.BLUETOOTH
+            }
+            // Prioridad 2: Wired headset (audífonos por cable)
+            availableDevices.contains(AudioDeviceType.WIRED_HEADSET) -> {
+                log.d(TAG) { "✅ Selecting Wired Headset as priority device" }
+                AudioDeviceType.WIRED_HEADSET
+            }
+            // Prioridad 3: Speaker (corneta del dispositivo)
+            availableDevices.contains(AudioDeviceType.SPEAKER_PHONE) -> {
+                log.d(TAG) { "✅ Selecting Speaker as priority device" }
+                AudioDeviceType.SPEAKER_PHONE
+            }
+            // Prioridad 4: Earpiece (altavoz)
+            else -> {
+                log.d(TAG) { "✅ Selecting Earpiece as default device" }
+                AudioDeviceType.EARPIECE
+            }
+        }
+
+        val success = selectAudioDevice(defaultDevice)
+        if (success) {
+            log.d(TAG) { "✅ Audio device selected successfully: $defaultDevice" }
+        } else {
+            log.e(TAG) { "❌ Failed to select audio device: $defaultDevice" }
+        }
+    }
+
+//    /**
+//     * Selección de dispositivo por defecto con prioridad mejorada
+//     */
+//    private fun selectDefaultAudioDeviceWithPriority() {
+//        val availableDevices = _availableAudioDevices.value
+//
+//        val defaultDevice = when {
+//            // Prioridad 1: Bluetooth (si la auto-prioridad está habilitada)
+//            _isBluetoothPriorityEnabled.value && availableDevices.contains(AudioDeviceType.BLUETOOTH) -> {
+//                log.d(TAG) { "Selecting Bluetooth as default (auto-priority enabled)" }
+//                AudioDeviceType.BLUETOOTH
+//            }
+//            // Prioridad 2: Wired headset
+//            availableDevices.contains(AudioDeviceType.WIRED_HEADSET) -> {
+//                log.d(TAG) { "Selecting Wired Headset as default" }
+//                AudioDeviceType.WIRED_HEADSET
+//            }
+//            // Prioridad 3: Earpiece
+//            else -> {
+//                log.d(TAG) { "Selecting Earpiece as default" }
+//                AudioDeviceType.EARPIECE
+//            }
+//        }
+//
+//        selectAudioDevice(defaultDevice)
+//    }
 
     private fun requestAudioFocus() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -480,6 +552,7 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
                             log.d(TAG) { "Audio focus gained" }
                             setAudioEnabled(true)
                         }
+
                         AudioManager.AUDIOFOCUS_LOSS -> {
                             log.d(TAG) { "Audio focus lost" }
                         }
@@ -537,6 +610,7 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
                     AudioDeviceInfo.TYPE_BLUETOOTH_A2DP -> {
                         if (!devices.contains(AudioDeviceType.BLUETOOTH)) {
                             devices.add(AudioDeviceType.BLUETOOTH)
+                            log.d(TAG) { "Bluetooth device detected: ${deviceInfo.productName}" }
                         }
                     }
                 }
@@ -548,13 +622,59 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
             }
             if (audioManager.isBluetoothScoAvailableOffCall) {
                 devices.add(AudioDeviceType.BLUETOOTH)
+                log.d(TAG) { "Bluetooth SCO available" }
             }
         }
 
+        val oldDevices = _availableAudioDevices.value
         _availableAudioDevices.value = devices
-        log.d(TAG) { "Available audio devices: $devices" }
+
+        // Log cambios
+        if (oldDevices != devices) {
+            log.d(TAG) { "Audio devices changed from $oldDevices to $devices" }
+
+            // Si Bluetooth se conectó y no estaba antes, activar auto-prioridad
+            if (devices.contains(AudioDeviceType.BLUETOOTH) &&
+                !oldDevices.contains(AudioDeviceType.BLUETOOTH)) {
+                log.d(TAG) { "New Bluetooth device detected" }
+                onBluetoothConnectionChanged(true)
+            }
+        }
     }
 
+    /**
+     * Función simplificada que SipManagerImpl puede usar
+     * Maneja automáticamente la prioridad de Bluetooth
+     */
+  override  fun applyAudioRouteChange(audioUnitType: AudioUnitTypes): Boolean {
+        log.d(TAG) { "Applying audio route change to: $audioUnitType" }
+
+        val deviceType = when (audioUnitType) {
+            AudioUnitTypes.BLUETOOTH -> AudioDeviceType.BLUETOOTH
+            AudioUnitTypes.SPEAKER -> AudioDeviceType.SPEAKER_PHONE
+            AudioUnitTypes.HEADSET -> AudioDeviceType.WIRED_HEADSET
+            AudioUnitTypes.EARPIECE -> AudioDeviceType.EARPIECE
+            else -> AudioDeviceType.EARPIECE
+        }
+
+        return selectAudioDevice(deviceType)
+    }
+
+    /**
+     * Obtiene el dispositivo actualmente activo en formato AudioUnit
+     */
+   override fun getCurrentActiveAudioUnit(): AudioUnit? {
+        val currentDevice = getCurrentOutputDevice() ?: getCurrentInputDevice()
+        return currentDevice?.audioUnit
+    }
+
+    /**
+     * Obtiene todos los dispositivos disponibles en formato AudioUnit
+     */
+   override fun getAvailableAudioUnits(): Set<AudioUnit> {
+        val (inputDevices, outputDevices) = getAllAudioDevices()
+        return (inputDevices + outputDevices).map { it.audioUnit }.toSet()
+    }
     private fun selectDefaultAudioDevice() {
         val availableDevices = _availableAudioDevices.value
 
@@ -616,6 +736,90 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
             audioManager.stopBluetoothSco()
             log.d(TAG) { "Bluetooth SCO stopped" }
         }
+    }
+
+    /**
+     * Verifica y activa automáticamente Bluetooth si está disponible y la prioridad está habilitada
+     */
+    private fun ensureBluetoothPriorityIfAvailable() {
+        if (!_isBluetoothPriorityEnabled.value) {
+            log.d(TAG) { "Bluetooth auto-priority is disabled" }
+            return
+        }
+
+        try {
+            updateAvailableAudioDevices()
+
+            if (_availableAudioDevices.value.contains(AudioDeviceType.BLUETOOTH) &&
+                _currentAudioDevice.value != AudioDeviceType.BLUETOOTH
+            ) {
+
+                log.d(TAG) { "Bluetooth available and priority enabled, switching automatically" }
+
+                val success = selectAudioDevice(AudioDeviceType.BLUETOOTH)
+                if (success) {
+                    log.d(TAG) { "Successfully switched to Bluetooth with auto-priority" }
+
+                    // Actualizar dispositivos actuales
+                    currentInputDevice = createBluetoothMicDevice()
+                    currentOutputDevice = createBluetoothDevice()
+
+                    // Notificar cambio
+                    webRtcEventListener?.onAudioDeviceChanged(createBluetoothDevice())
+                } else {
+                    log.w(TAG) { "Failed to auto-switch to Bluetooth" }
+                }
+            }
+        } catch (e: Exception) {
+            log.e(TAG) { "Error in ensureBluetoothPriorityIfAvailable: ${e.message}" }
+        }
+    }
+
+    /**
+     * Función pública para forzar verificación de prioridad Bluetooth
+     * Esta es la que puede ser llamada desde SipManagerImpl
+     */
+   override fun refreshAudioDevicesWithBluetoothPriority() {
+        log.d(TAG) { "Refreshing audio devices with Bluetooth priority check" }
+        updateAvailableAudioDevices()
+        ensureBluetoothPriorityIfAvailable()
+    }
+
+    /**
+     * Función llamada cuando se inicia una llamada para asegurar el mejor dispositivo
+     */
+    override fun prepareAudioForCall() {
+        log.d(TAG) { "Preparing audio for call with device prioritization" }
+        startAudioManager()
+        ensureBluetoothPriorityIfAvailable()
+    }
+
+    /**
+     * Función para ser llamada cuando el estado de Bluetooth cambia
+     */
+   override fun onBluetoothConnectionChanged(isConnected: Boolean) {
+        log.d(TAG) { "Bluetooth connection changed: $isConnected" }
+
+        if (isConnected && _isBluetoothPriorityEnabled.value) {
+            // Pequeño delay para asegurar que el dispositivo esté listo
+            Handler(Looper.getMainLooper()).postDelayed({
+                refreshAudioDevicesWithBluetoothPriority()
+            }, 300)
+        } else if (!isConnected) {
+            // Si Bluetooth se desconecta, cambiar a siguiente mejor opción
+            selectNextBestAudioDevice()
+        }
+    }
+
+    private fun selectNextBestAudioDevice() {
+        updateAvailableAudioDevices()
+
+        val nextBestDevice = when {
+            _availableAudioDevices.value.contains(AudioDeviceType.WIRED_HEADSET) -> AudioDeviceType.WIRED_HEADSET
+            else -> AudioDeviceType.EARPIECE
+        }
+
+        selectAudioDevice(nextBestDevice)
     }
 
     fun toggleSpeaker() {
@@ -687,7 +891,8 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
                 isCurrent = _currentAudioDevice.value == AudioDeviceType.BLUETOOTH,
                 isDefault = false
             ),
-            connectionState = DeviceConnectionState.CONNECTED,
+            connectionState = if (_availableAudioDevices.value.contains(AudioDeviceType.BLUETOOTH))
+                DeviceConnectionState.CONNECTED else DeviceConnectionState.DISCONNECTED,
             isWireless = true,
             supportsHDVoice = false,
             latency = 150,
@@ -767,7 +972,8 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
                 isCurrent = _currentAudioDevice.value == AudioDeviceType.BLUETOOTH,
                 isDefault = false
             ),
-            connectionState = DeviceConnectionState.CONNECTED,
+            connectionState = if (_availableAudioDevices.value.contains(AudioDeviceType.BLUETOOTH))
+                DeviceConnectionState.CONNECTED else DeviceConnectionState.DISCONNECTED,
             isWireless = true,
             supportsHDVoice = false,
             latency = 150,
@@ -836,11 +1042,13 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
                     setAudioEnabled(true)
                     audioManager.isMicrophoneMute = false
                 }
+
                 PeerConnectionState.Disconnected,
                 PeerConnectionState.Failed,
                 PeerConnectionState.Closed -> {
                     stopAudioManager()
                 }
+
                 else -> {}
             }
             webRtcEventListener?.onConnectionStateChange(mapConnectionState(state))

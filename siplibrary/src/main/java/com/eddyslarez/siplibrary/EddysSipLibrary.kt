@@ -29,6 +29,8 @@ import com.eddyslarez.siplibrary.data.database.entities.SipAccountEntity
 import com.eddyslarez.siplibrary.data.database.repository.CallLogWithContact
 import com.eddyslarez.siplibrary.data.database.repository.GeneralStatistics
 import com.eddyslarez.siplibrary.data.database.setupDatabaseIntegration
+import com.eddyslarez.siplibrary.data.services.audio.AudioUnit
+import com.eddyslarez.siplibrary.data.services.audio.AudioUnitTypes
 import com.eddyslarez.siplibrary.utils.PushNotificationSimulator
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.map
@@ -568,6 +570,16 @@ class EddysSipLibrary private constructor() {
 //        }
 //    }
 
+    fun setBluetoothAutoPriority(enabled: Boolean) {
+        checkInitialized()
+        try {
+            sipCoreManager?.webRtcManager?.setBluetoothAutoPriority(enabled)
+            log.d(tag = TAG) { "Bluetooth auto priority set to: $enabled" }
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error setting Bluetooth auto priority: ${e.message}" }
+        }
+    }
+
     private fun setupInternalListeners() {
         sipCoreManager?.let { manager ->
 
@@ -1057,6 +1069,26 @@ class EddysSipLibrary private constructor() {
 //            }
 //        }
 //    }
+    fun prepareAudioForCall(){
+        sipCoreManager?.prepareAudioForCall()
+    }
+    fun onBluetoothConnectionChanged(isConnected: Boolean){
+        sipCoreManager?.onBluetoothConnectionChanged(isConnected)
+    }
+    fun refreshAudioDevicesWithBluetoothPriority(){
+        sipCoreManager?.refreshAudioDevicesWithBluetoothPriority()
+    }
+    fun applyAudioRouteChange(audioUnitType: AudioUnitTypes): Boolean{
+        return sipCoreManager?.applyAudioRouteChange(audioUnitType) == true
+    }
+    fun getAvailableAudioUnits(): Set<AudioUnit>? {
+        return sipCoreManager?.getAvailableAudioUnits()
+    }
+    fun getCurrentActiveAudioUnit(): AudioUnit?{
+        return sipCoreManager?.getCurrentActiveAudioUnit()
+    }
+
+
     private fun notifyCallStateChanged(stateInfo: CallStateInfo) {
         // Verificar si el estado realmente cambió
         val lastState = lastNotifiedCallState.get()
