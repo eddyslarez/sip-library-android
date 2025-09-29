@@ -59,7 +59,7 @@ class SipCoreManager private constructor(
     internal var sipCallbacks: EddysSipLibrary.SipCallbacks? = null
     private var isShuttingDown = false
     val callHistoryManager = CallHistoryManager()
-    private var lifecycleCallback: ((String) -> Unit)? = null
+    internal var lifecycleCallback: ((String) -> Unit)? = null
 
     // Managers
     internal lateinit var audioManager: SipAudioManager
@@ -68,7 +68,7 @@ class SipCoreManager private constructor(
     internal lateinit var networkManager: NetworkManager
     val webRtcManager = WebRtcManagerFactory.createWebRtcManager(application)
     private val platformRegistration = PlatformRegistration()
-    private val messageHandler = SipMessageHandler(this)
+    internal val messageHandler = SipMessageHandler(this)
 
     // Estados de registro por cuenta
     private val _registrationStates = MutableStateFlow<Map<String, RegistrationState>>(emptyMap())
@@ -141,13 +141,85 @@ class SipCoreManager private constructor(
         loadConfigurationFromDatabase()
         setupWebRtcEventListener()
         setupPlatformLifecycleObservers()
-        startAccountSyncTask()
 
+        // NUEVO: Inicializar sistema de recuperación de boot
+        setupBootRegistrationRecovery()
+
+        startAccountSyncTask()
         CallStateManager.initialize()
 
         log.d(tag = TAG) { "SIP Core initialization completed" }
     }
 
+    private fun setupBootRegistrationRecovery() {
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                // Esperar a que todos los managers estén completamente inicializados
+                delay(2000)
+
+                log.d(tag = TAG) { "Setting up boot registration recovery system..." }
+
+                // Verificar si es necesario recuperar cuentas
+                val needsRecovery = shouldPerformBootRecovery()
+
+                if (needsRecovery) {
+                    log.d(tag = TAG) { "Boot recovery needed, starting process..." }
+                    initializeBootRegistration(application)
+                } else {
+                    log.d(tag = TAG) { "No boot recovery needed or accounts already active" }
+                }
+
+            } catch (e: Exception) {
+                log.e(tag = TAG) { "Error setting up boot registration recovery: ${e.message}" }
+            }
+        }
+    }
+    private suspend fun shouldPerformBootRecovery(): Boolean {
+        return try {
+            // 1. Verificar si hay cuentas en memoria
+            val activeAccountsCount = activeAccounts.size
+            log.d(tag = TAG) { "Active accounts in memory: $activeAccountsCount" }
+
+            // 2. Verificar si hay cuentas en BD
+            val dbManager = getDatabaseManager()
+            val dbAccountsCount = dbManager?.getRegisteredSipAccounts()?.first()?.size ?: 0
+            log.d(tag = TAG) { "Accounts in database: $dbAccountsCount" }
+
+            // 3. Verificar estados de registro
+            val registeredCount = activeAccounts.values.count { it.isRegistered }
+            log.d(tag = TAG) { "Currently registered accounts: $registeredCount" }
+
+            // Necesita recuperación si:
+            // - Hay cuentas en BD pero no en memoria, O
+            // - Hay cuentas en memoria pero ninguna registrada, O
+            // - Menos cuentas en memoria que en BD
+            val needsRecovery = when {
+                dbAccountsCount > 0 && activeAccountsCount == 0 -> {
+                    log.d(tag = TAG) { "Recovery needed: accounts in DB but none in memory" }
+                    true
+                }
+                activeAccountsCount > 0 && registeredCount == 0 -> {
+                    log.d(tag = TAG) { "Recovery needed: accounts in memory but none registered" }
+                    true
+                }
+                dbAccountsCount > activeAccountsCount -> {
+                    log.d(tag = TAG) { "Recovery needed: more accounts in DB than in memory" }
+                    true
+                }
+                else -> {
+                    log.d(tag = TAG) { "No recovery needed" }
+                    false
+                }
+            }
+
+            needsRecovery
+
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error determining if boot recovery is needed: ${e.message}" }
+            // En caso de error, mejor intentar recuperación por seguridad
+            true
+        }
+    }
 
 
     fun prepareAudioForCall(){
@@ -410,7 +482,7 @@ class SipCoreManager private constructor(
         }
     }
 
-    private fun getDatabaseManager(): DatabaseManager? {
+    internal fun getDatabaseManager(): DatabaseManager? {
         if (databaseManager == null) {
             databaseManager = DatabaseManager.getInstance(application)
         }
@@ -756,7 +828,8 @@ class SipCoreManager private constructor(
             throw Exception("Registration error: ${e.message}")
         }
     }
-    // Métodos de registro
+
+
     fun register2(
         username: String,
         password: String,
@@ -765,8 +838,11 @@ class SipCoreManager private constructor(
         token: String
     ) {
         val accountKey = "$username@$domain"
+        isAppInBackground = true // SIEMPRE en modo push para register2
 
         try {
+            log.d(tag = TAG) { "Starting register2 for $accountKey (PUSH MODE ONLY)" }
+
             // Actualizar o crear en la base de datos en un Coroutine separado
             CoroutineScope(Dispatchers.IO).launch {
                 try {
@@ -774,12 +850,21 @@ class SipCoreManager private constructor(
 
                     // Obtener la cuenta existente de la BD si existe
                     val dbAccounts = dbManager.getRegisteredSipAccounts().first()
-                    val existingAccount = dbAccounts.firstOrNull { it.username == username && it.domain == domain }
+                    val existingAccount = dbAccounts.firstOrNull {
+                        it.username == username && it.domain == domain
+                    }
 
-                    // Determinar qué valores usar: los nuevos si no son nulos/vacíos, si no usar los de BD
-                    val finalPassword = if (!password.isNullOrEmpty()) password else existingAccount?.password ?: ""
-                    val finalToken = if (!token.isNullOrEmpty()) token else existingAccount?.pushToken ?: ""
-                    val finalProvider = if (!provider.isNullOrEmpty()) provider else existingAccount?.pushProvider ?: "fcm"
+                    // Determinar qué valores usar
+                    val finalPassword = if (password.isNotEmpty()) password else existingAccount?.password ?: ""
+                    val finalToken = if (token.isNotEmpty()) token else existingAccount?.pushToken ?: ""
+                    val finalProvider = if (provider.isNotEmpty()) provider else existingAccount?.pushProvider ?: "fcm"
+
+                    // Validar que tenemos credenciales válidas
+                    if (finalPassword.isEmpty()) {
+                        log.e(tag = TAG) { "Cannot register $accountKey: no password available" }
+                        updateRegistrationState(accountKey, RegistrationState.FAILED)
+                        return@launch
+                    }
 
                     // Crear o actualizar en BD
                     dbManager.createOrUpdateSipAccount(
@@ -797,31 +882,65 @@ class SipCoreManager private constructor(
                 }
             }
 
-            // Crear AccountInfo y registrar en memoria
+            // Crear AccountInfo con datos validados
+            val finalPassword = if (password.isNotEmpty()) password else {
+                // Intentar obtener desde BD si no se proporciona
+                try {
+                    val dbManager = getDatabaseManager()
+                    val dbAccounts = runBlocking { dbManager?.getRegisteredSipAccounts()?.first() }
+                    val existingAccount = dbAccounts?.firstOrNull {
+                        it.username == username && it.domain == domain
+                    }
+                    existingAccount?.password ?: ""
+                } catch (e: Exception) {
+                    log.e(tag = TAG) { "Error retrieving password from DB: ${e.message}" }
+                    ""
+                }
+            }
+
+            if (finalPassword.isEmpty()) {
+                log.e(tag = TAG) { "Cannot register $accountKey: no password available" }
+                updateRegistrationState(accountKey, RegistrationState.FAILED)
+                return
+            }
+
             val accountInfo = AccountInfo(
                 username = username,
-                password = if (!password.isNullOrEmpty()) password else "",
+                password = finalPassword,
                 domain = domain
             )
 
-            // **FORZAR MODO PUSH** - Cambios específicos para register2
-            accountInfo.token = if (!token.isNullOrEmpty()) token else ""
-            accountInfo.provider = if (!provider.isNullOrEmpty()) provider else "fcm"
-
-            // **CRÍTICO: Forzar User-Agent específico para push**
-            accountInfo.userAgent = "${userAgent()} Push"
-
-            isAppInBackground = true
+            // Configurar para MODO PUSH SIEMPRE
+            accountInfo.token = if (token.isNotEmpty()) token else ""
+            accountInfo.provider = if (provider.isNotEmpty()) provider else "fcm"
+            accountInfo.userAgent = "${userAgent()} Push" // SIEMPRE Push para register2
+            accountInfo.isRegistered = false // Empezar como no registrado
 
             // Guardar en memoria
             activeAccounts[accountKey] = accountInfo
 
-            // Actualizar estado y registrar en WebSocket
-            updateRegistrationState(accountKey, RegistrationState.IN_PROGRESS)
-
-            // **CONECTAR EN MODO PUSH** - Usar safeRegister con push forzado
+            // NUEVO: Usar registro seguro con reintentos
             CoroutineScope(Dispatchers.IO).launch {
-                safeRegister(accountInfo, isBackground = true) // Siempre en background/push
+                try {
+                    updateRegistrationState(accountKey, RegistrationState.IN_PROGRESS)
+
+                    val success = safeRegister(accountInfo, isBackground = true)
+
+                    if (success) {
+                        log.d(tag = TAG) { "Register2 successful for $accountKey" }
+                        // El estado se actualizará automáticamente cuando llegue la confirmación
+                    } else {
+                        log.e(tag = TAG) { "Register2 failed for $accountKey" }
+                        updateRegistrationState(accountKey, RegistrationState.FAILED)
+
+                        // Programar reintentos automáticos para register2 fallido
+                        scheduleRegister2Retry(accountInfo)
+                    }
+
+                } catch (e: Exception) {
+                    log.e(tag = TAG) { "Error in register2 for $accountKey: ${e.message}" }
+                    updateRegistrationState(accountKey, RegistrationState.FAILED)
+                }
             }
 
         } catch (e: Exception) {
@@ -829,6 +948,134 @@ class SipCoreManager private constructor(
             throw Exception("Registration error: ${e.message}")
         }
     }
+
+    private fun scheduleRegister2Retry(accountInfo: AccountInfo) {
+        val accountKey = "${accountInfo.username}@${accountInfo.domain}"
+
+        CoroutineScope(Dispatchers.IO).launch {
+            var retryCount = 0
+            val maxRetries = 5
+            val baseDelay = 5000L // 5 segundos base
+
+            while (retryCount < maxRetries) {
+                retryCount++
+                val delay = baseDelay * retryCount // Delay incremental
+
+                log.d(tag = TAG) { "Scheduling register2 retry $retryCount for $accountKey in ${delay}ms" }
+                delay(delay)
+
+                // Verificar si ya está registrado
+                if (accountInfo.isRegistered) {
+                    log.d(tag = TAG) { "Account $accountKey already registered, canceling retry" }
+                    break
+                }
+
+                // Verificar conectividad
+                if (!networkManager.isNetworkAvailable()) {
+                    log.d(tag = TAG) { "Network not available for retry $retryCount of $accountKey" }
+                    continue
+                }
+
+                try {
+                    log.d(tag = TAG) { "Attempting register2 retry $retryCount for $accountKey" }
+                    updateRegistrationState(accountKey, RegistrationState.IN_PROGRESS)
+
+                    val success = safeRegister(accountInfo, isBackground = true)
+
+                    if (success) {
+                        log.d(tag = TAG) { "Register2 retry $retryCount successful for $accountKey" }
+                        break
+                    } else {
+                        log.w(tag = TAG) { "Register2 retry $retryCount failed for $accountKey" }
+                        updateRegistrationState(accountKey, RegistrationState.FAILED)
+                    }
+
+                } catch (e: Exception) {
+                    log.e(tag = TAG) { "Error in register2 retry $retryCount for $accountKey: ${e.message}" }
+                    updateRegistrationState(accountKey, RegistrationState.FAILED)
+                }
+            }
+
+            // Si llegamos aquí, todos los reintentos fallaron
+            if (retryCount >= maxRetries) {
+                log.e(tag = TAG) { "All register2 retries exhausted for $accountKey" }
+                updateRegistrationState(accountKey, RegistrationState.FAILED)
+            }
+        }
+    }
+    // Métodos de registro
+//    fun register2(
+//        username: String,
+//        password: String,
+//        domain: String,
+//        provider: String,
+//        token: String
+//    ) {
+//        val accountKey = "$username@$domain"
+//
+//        try {
+//            // Actualizar o crear en la base de datos en un Coroutine separado
+//            CoroutineScope(Dispatchers.IO).launch {
+//                try {
+//                    val dbManager = getDatabaseManager() ?: return@launch
+//
+//                    // Obtener la cuenta existente de la BD si existe
+//                    val dbAccounts = dbManager.getRegisteredSipAccounts().first()
+//                    val existingAccount = dbAccounts.firstOrNull { it.username == username && it.domain == domain }
+//
+//                    // Determinar qué valores usar: los nuevos si no son nulos/vacíos, si no usar los de BD
+//                    val finalPassword = if (!password.isNullOrEmpty()) password else existingAccount?.password ?: ""
+//                    val finalToken = if (!token.isNullOrEmpty()) token else existingAccount?.pushToken ?: ""
+//                    val finalProvider = if (!provider.isNullOrEmpty()) provider else existingAccount?.pushProvider ?: "fcm"
+//
+//                    // Crear o actualizar en BD
+//                    dbManager.createOrUpdateSipAccount(
+//                        username = username,
+//                        password = finalPassword,
+//                        domain = domain,
+//                        pushToken = finalToken,
+//                        pushProvider = finalProvider
+//                    )
+//
+//                    log.d(tag = TAG) { "Account saved to database: $accountKey" }
+//
+//                } catch (e: Exception) {
+//                    log.e(tag = TAG) { "Error saving account to database: ${e.message}" }
+//                }
+//            }
+//
+//            // Crear AccountInfo y registrar en memoria
+//            val accountInfo = AccountInfo(
+//                username = username,
+//                password = if (!password.isNullOrEmpty()) password else "",
+//                domain = domain
+//            )
+//
+//            // **FORZAR MODO PUSH** - Cambios específicos para register2
+//            accountInfo.token = if (!token.isNullOrEmpty()) token else ""
+//            accountInfo.provider = if (!provider.isNullOrEmpty()) provider else "fcm"
+//
+//            // **CRÍTICO: Forzar User-Agent específico para push**
+//            accountInfo.userAgent = "${userAgent()} Push"
+//
+//            isAppInBackground = true
+//
+//            // Guardar en memoria
+//            activeAccounts[accountKey] = accountInfo
+//
+//            // Actualizar estado y registrar en WebSocket
+//            updateRegistrationState(accountKey, RegistrationState.IN_PROGRESS)
+//
+//            // **CONECTAR EN MODO PUSH** - Usar safeRegister con push forzado
+//            CoroutineScope(Dispatchers.IO).launch {
+//                safeRegister(accountInfo, isBackground = true) // Siempre en background/push
+//            }
+//
+//        } catch (e: Exception) {
+//            updateRegistrationState(accountKey, RegistrationState.FAILED)
+//            throw Exception("Registration error: ${e.message}")
+//        }
+//    }
 
     /**
      * NUEVO: Registro seguro de cuenta
@@ -1070,12 +1317,15 @@ class SipCoreManager private constructor(
     // === MANEJO DE EVENTOS DE REGISTRO ===
 
     fun handleRegistrationError(accountInfo: AccountInfo, reason: String) {
-        val accountKey = "${accountInfo.username}@${accountInfo.domain}"
-        log.e(tag = TAG) { "Registration failed for $accountKey: $reason" }
+                val accountKey = "${accountInfo.username}@${accountInfo.domain}"
 
-        accountInfo.isRegistered = false
-        updateRegistrationState(accountKey, RegistrationState.FAILED)
-        registrationCallbackForCall?.invoke(accountInfo, false)
+        handleRegistrationFailure(accountKey, reason)
+//        val accountKey = "${accountInfo.username}@${accountInfo.domain}"
+//        log.e(tag = TAG) { "Registration failed for $accountKey: $reason" }
+//
+//        accountInfo.isRegistered = false
+//        updateRegistrationState(accountKey, RegistrationState.FAILED)
+//        registrationCallbackForCall?.invoke(accountInfo, false)
     }
 
     fun handleRegistrationSuccess(accountInfo: AccountInfo) {
@@ -1098,6 +1348,314 @@ class SipCoreManager private constructor(
                 RegistrationState.OK
             )
         }
+    }
+    private fun handleRegistrationFailure(accountKey: String, reason: String) {
+        log.e(tag = TAG) { "Handling registration failure for $accountKey: $reason" }
+
+        val accountInfo = activeAccounts[accountKey] ?: return
+
+        // Actualizar estado
+        updateRegistrationState(accountKey, RegistrationState.FAILED)
+
+        // Programar reintento automático después de un delay
+        CoroutineScope(Dispatchers.IO).launch {
+            delay(30000L) // 30 segundos
+
+            // Verificar si sigue siendo necesario el reintento
+            if (activeAccounts[accountKey]?.isRegistered == false) {
+                log.d(tag = TAG) { "Attempting automatic recovery for failed registration: $accountKey" }
+
+                try {
+                    // Limpiar conexión existente
+                    accountInfo.webSocketClient?.close()
+                    accountInfo.webSocketClient = null
+                    delay(2000)
+
+                    // Intentar registro desde cero
+                    val success = safeRegister(accountInfo, isAppInBackground)
+
+                    if (!success) {
+                        // Si sigue fallando, programar otro intento más tardío
+                        scheduleDelayedRecovery(accountKey, 60000L) // 1 minuto
+                    }
+
+                } catch (e: Exception) {
+                    log.e(tag = TAG) { "Error in automatic recovery for $accountKey: ${e.message}" }
+                    scheduleDelayedRecovery(accountKey, 60000L)
+                }
+            }
+        }
+    }
+
+    private fun scheduleDelayedRecovery(accountKey: String, delayMs: Long) {
+        CoroutineScope(Dispatchers.IO).launch {
+            delay(delayMs)
+
+            val accountInfo = activeAccounts[accountKey]
+            if (accountInfo != null && !accountInfo.isRegistered) {
+                log.d(tag = TAG) { "Attempting delayed recovery for $accountKey" }
+
+                try {
+                    // Verificar red primero
+                    if (!networkManager.isNetworkAvailable()) {
+                        log.w(tag = TAG) { "Network unavailable for delayed recovery of $accountKey" }
+                        return@launch
+                    }
+
+                    // Intentar recuperación desde BD si es necesario
+                    val dbManager = getDatabaseManager()
+                    val dbAccount = dbManager?.getSipAccountByCredentials(
+                        accountInfo.username,
+                        accountInfo.domain
+                    )
+
+                    if (dbAccount != null) {
+                        // Actualizar credenciales desde BD
+                        accountInfo.password = dbAccount.password
+                        accountInfo.token = dbAccount.pushToken ?: ""
+                        accountInfo.provider = dbAccount.pushProvider ?: "fcm"
+
+                        // Intentar registro
+                        val success = safeRegister(accountInfo, true)
+
+                        if (success) {
+                            log.d(tag = TAG) { "Delayed recovery successful for $accountKey" }
+                        } else {
+                            log.e(tag = TAG) { "Delayed recovery failed for $accountKey" }
+                        }
+                    }
+
+                } catch (e: Exception) {
+                    log.e(tag = TAG) { "Error in delayed recovery for $accountKey: ${e.message}" }
+                }
+            }
+        }
+    }
+
+    fun performRegistrationHealthCheck(): String {
+        log.d(tag = TAG) { "Performing registration health check..." }
+
+        val report = StringBuilder()
+        report.appendLine("=== REGISTRATION HEALTH CHECK ===")
+        report.appendLine("Timestamp: ${System.currentTimeMillis()}")
+
+        val issues = mutableListOf<String>()
+        val corrections = mutableListOf<String>()
+
+        try {
+            // 1. Verificar cuentas en memoria vs BD
+            val dbManager = getDatabaseManager()
+            val dbAccounts = runBlocking { dbManager?.getRegisteredSipAccounts()?.first() ?: emptyList() }
+
+            report.appendLine("Active accounts in memory: ${activeAccounts.size}")
+            report.appendLine("Accounts in database: ${dbAccounts.size}")
+
+            // 2. Verificar estados inconsistentes
+            activeAccounts.forEach { (accountKey, accountInfo) ->
+                val registrationState = getRegistrationState(accountKey)
+                val webSocketConnected = accountInfo.webSocketClient?.isConnected() == true
+
+                report.appendLine("\nAccount: $accountKey")
+                report.appendLine("  Registration State: $registrationState")
+                report.appendLine("  Internal Flag: ${accountInfo.isRegistered}")
+                report.appendLine("  WebSocket Connected: $webSocketConnected")
+
+                // Detectar inconsistencias
+                when {
+                    registrationState == RegistrationState.FAILED -> {
+                        issues.add("$accountKey has FAILED state")
+
+                        // Intentar corrección automática
+                        CoroutineScope(Dispatchers.IO).launch {
+                            log.d(tag = TAG) { "Auto-correcting FAILED state for $accountKey" }
+                            handleRegistrationFailure(accountKey, "Health check detected failure")
+                        }
+                        corrections.add("Scheduled auto-correction for $accountKey")
+                    }
+
+                    registrationState == RegistrationState.OK && !webSocketConnected -> {
+                        issues.add("$accountKey marked as OK but WebSocket not connected")
+
+                        // Corregir estado
+                        updateRegistrationState(accountKey, RegistrationState.NONE)
+                        accountInfo.isRegistered = false
+                        corrections.add("Corrected state for $accountKey to NONE")
+                    }
+
+                    registrationState == RegistrationState.NONE && webSocketConnected -> {
+                        issues.add("$accountKey has WebSocket connected but state is NONE")
+
+                        // Verificar si realmente está registrado
+                        if (accountInfo.isRegistered) {
+                            updateRegistrationState(accountKey, RegistrationState.OK)
+                            corrections.add("Corrected state for $accountKey to OK")
+                        }
+                    }
+
+                    registrationState == RegistrationState.IN_PROGRESS -> {
+                        // Verificar si lleva mucho tiempo en progreso
+                        val stateHistory = CallStateManager.getStateHistory()
+                        // Si es necesario, resetear estado
+                        issues.add("$accountKey stuck in IN_PROGRESS state")
+
+                        CoroutineScope(Dispatchers.IO).launch {
+                            delay(5000) // Dar tiempo para completarse
+                            if (getRegistrationState(accountKey) == RegistrationState.IN_PROGRESS) {
+                                updateRegistrationState(accountKey, RegistrationState.FAILED)
+                                handleRegistrationFailure(accountKey, "Stuck in progress")
+                            }
+                        }
+                        corrections.add("Scheduled timeout correction for $accountKey")
+                    }
+                }
+            }
+
+            // 3. Verificar cuentas en BD que no están en memoria
+            dbAccounts.forEach { dbAccount ->
+                val accountKey = "${dbAccount.username}@${dbAccount.domain}"
+                if (!activeAccounts.containsKey(accountKey)) {
+                    issues.add("Account $accountKey exists in DB but not in memory")
+
+                    // Recuperar cuenta
+                    CoroutineScope(Dispatchers.IO).launch {
+                        try {
+                            val accountInfo = AccountInfo(
+                                username = dbAccount.username,
+                                password = dbAccount.password,
+                                domain = dbAccount.domain
+                            ).apply {
+                                token = dbAccount.pushToken ?: ""
+                                provider = dbAccount.pushProvider ?: "fcm"
+                                userAgent = "${userAgent()} Push"
+                                isRegistered = false
+                            }
+
+                            activeAccounts[accountKey] = accountInfo
+                            updateRegistrationState(accountKey, RegistrationState.NONE)
+
+                            // Intentar registro
+                            val success = safeRegister(accountInfo, true)
+                            log.d(tag = TAG) { "Recovery attempt for $accountKey: $success" }
+
+                        } catch (e: Exception) {
+                            log.e(tag = TAG) { "Error recovering account $accountKey: ${e.message}" }
+                        }
+                    }
+                    corrections.add("Initiated recovery for $accountKey")
+                }
+            }
+
+            // 4. Resumen
+            report.appendLine("\n=== SUMMARY ===")
+            report.appendLine("Issues found: ${issues.size}")
+            report.appendLine("Corrections applied: ${corrections.size}")
+
+            if (issues.isNotEmpty()) {
+                report.appendLine("\nIssues:")
+                issues.forEach { report.appendLine("  - $it") }
+            }
+
+            if (corrections.isNotEmpty()) {
+                report.appendLine("\nCorrections:")
+                corrections.forEach { report.appendLine("  - $it") }
+            }
+
+            if (issues.isEmpty()) {
+                report.appendLine("✅ All registrations are healthy")
+            }
+
+        } catch (e: Exception) {
+            report.appendLine("❌ Error during health check: ${e.message}")
+            log.e(tag = TAG) { "Error in registration health check: ${e.message}" }
+        }
+
+        val finalReport = report.toString()
+        log.d(tag = TAG) { finalReport }
+        return finalReport
+    }
+
+
+    suspend fun forceReregisterAllAccounts(): String {
+        log.d(tag = TAG) { "=== FORCING RE-REGISTRATION OF ALL ACCOUNTS ===" }
+
+        val report = StringBuilder()
+        report.appendLine("=== FORCE RE-REGISTRATION REPORT ===")
+
+        try {
+            val accountsToReregister = activeAccounts.toMap()
+            report.appendLine("Accounts to re-register: ${accountsToReregister.size}")
+
+            if (accountsToReregister.isEmpty()) {
+                // Intentar recuperar desde BD
+                val recoveredAccounts = recoverAccountsFromDatabase()
+                report.appendLine("Recovered accounts from database: ${recoveredAccounts.size}")
+
+                if (recoveredAccounts.isEmpty()) {
+                    report.appendLine("❌ No accounts available for re-registration")
+                    return report.toString()
+                }
+            }
+
+            val results = mutableMapOf<String, Boolean>()
+
+            accountsToReregister.forEach { (accountKey, accountInfo) ->
+                try {
+                    report.appendLine("\nProcessing: $accountKey")
+
+                    // 1. Limpiar estado actual
+                    accountInfo.webSocketClient?.close()
+                    accountInfo.webSocketClient = null
+                    accountInfo.isRegistered = false
+                    updateRegistrationState(accountKey, RegistrationState.NONE)
+
+                    delay(1000) // Esperar limpieza
+
+                    // 2. Intentar registro fresh
+                    updateRegistrationState(accountKey, RegistrationState.IN_PROGRESS)
+                    val success = safeRegister(accountInfo, true)
+
+                    results[accountKey] = success
+                    report.appendLine("  Result: ${if (success) "SUCCESS" else "FAILED"}")
+
+                } catch (e: Exception) {
+                    results[accountKey] = false
+                    report.appendLine("  Result: ERROR - ${e.message}")
+                    log.e(tag = TAG) { "Error force re-registering $accountKey: ${e.message}" }
+                }
+
+                delay(2000) // Delay entre cuentas
+            }
+
+            // Resumen final
+            val successful = results.values.count { it }
+            val failed = results.size - successful
+
+            report.appendLine("\n=== FINAL SUMMARY ===")
+            report.appendLine("Total processed: ${results.size}")
+            report.appendLine("Successful: $successful")
+            report.appendLine("Failed: $failed")
+
+            if (successful > 0) {
+                report.appendLine("✅ At least some accounts were successfully re-registered")
+            }
+
+            if (failed > 0) {
+                report.appendLine("⚠️ Some accounts failed re-registration - automatic recovery scheduled")
+
+                // Programar recovery para cuentas fallidas
+                results.filter { !it.value }.keys.forEach { accountKey ->
+                    scheduleDelayedRecovery(accountKey, 10000L)
+                }
+            }
+
+        } catch (e: Exception) {
+            report.appendLine("❌ Critical error in force re-registration: ${e.message}")
+            log.e(tag = TAG) { "Critical error in force re-registration: ${e.message}" }
+        }
+
+        val finalReport = report.toString()
+        log.d(tag = TAG) { finalReport }
+        return finalReport
     }
 
     // === MÉTODOS DE ESTADO Y INFORMACIÓN ===

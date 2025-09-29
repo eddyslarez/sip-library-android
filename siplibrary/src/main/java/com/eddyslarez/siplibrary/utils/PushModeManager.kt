@@ -207,9 +207,10 @@ class PushModeManager(
         log.d(tag = TAG1) { "specificAccount : $specificAccount" }
 
         val currentState = _pushModeStateFlow.value
+        log.d(tag = TAG1) { "currentState : $currentState" }
 
         // Si estamos en modo push, cambiar a foreground solo la cuenta específica o todas
-        if (currentState.currentMode == PushMode.PUSH) {
+        //if (currentState.currentMode == PushMode.PUSH) {
 
             if (specificAccount != null) {
                 // CORREGIDO: Recordar estado push ANTES de cambiar
@@ -226,7 +227,7 @@ class PushModeManager(
                 }
                 transitionToForeground(allRegisteredAccounts, PushModeReasons.PUSH_NOTIFICATION_RECEIVED)
             }
-        }
+     //   }
     }
 
     /**

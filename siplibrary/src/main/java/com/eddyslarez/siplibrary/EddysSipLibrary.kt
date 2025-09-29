@@ -31,8 +31,11 @@ import com.eddyslarez.siplibrary.data.database.repository.GeneralStatistics
 import com.eddyslarez.siplibrary.data.database.setupDatabaseIntegration
 import com.eddyslarez.siplibrary.data.services.audio.AudioUnit
 import com.eddyslarez.siplibrary.data.services.audio.AudioUnitTypes
+import com.eddyslarez.siplibrary.utils.BootRegistrationManager
 import com.eddyslarez.siplibrary.utils.PushNotificationSimulator
+import com.eddyslarez.siplibrary.utils.RegistrationRecoveryResult
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.runBlocking
 import java.util.concurrent.atomic.AtomicReference
@@ -336,6 +339,141 @@ class EddysSipLibrary private constructor() {
 //        }
 //    }
 
+    suspend fun forceBootRecovery(): String {
+        checkInitialized()
+
+        return try {
+            log.d(tag = TAG) { "Manual boot recovery initiated" }
+
+            sipCoreManager?.let { coreManager ->
+                val application = coreManager.application
+
+                // Verificar si ya se está ejecutando un proceso de recovery
+                val dbManager = coreManager.getDatabaseManager()
+                if (dbManager == null) {
+                    return "❌ Database manager not available for boot recovery"
+                }
+
+                val bootManager = BootRegistrationManager(coreManager, dbManager)
+                val result = bootManager.recoverAndRegisterAllAccounts()
+
+                buildString {
+                    appendLine("=== MANUAL BOOT RECOVERY RESULT ===")
+                    when (result) {
+                        is RegistrationRecoveryResult.AllSuccessful -> {
+                            appendLine("✅ All ${result.results.size} accounts recovered successfully")
+                            result.results.forEach { (account, state) ->
+                                appendLine("  $account: $state")
+                            }
+                        }
+                        is RegistrationRecoveryResult.PartialSuccess -> {
+                            appendLine("⚠️ Partial recovery: ${result.successful} successful, ${result.failed} failed")
+                            result.results.forEach { (account, state) ->
+                                val status = if (state == RegistrationState.OK) "✅" else "❌"
+                                appendLine("  $status $account: $state")
+                            }
+                        }
+                        is RegistrationRecoveryResult.AllFailed -> {
+                            appendLine("❌ All accounts failed recovery")
+                            result.results.forEach { (account, state) ->
+                                appendLine("  ❌ $account: $state")
+                            }
+                        }
+                        is RegistrationRecoveryResult.NetworkUnavailable -> {
+                            appendLine("🌐 Network unavailable for recovery")
+                        }
+                        is RegistrationRecoveryResult.NoAccounts -> {
+                            appendLine("ℹ️ No accounts found in database")
+                        }
+                        is RegistrationRecoveryResult.InProgress -> {
+                            appendLine("🔄 Recovery already in progress")
+                        }
+                        is RegistrationRecoveryResult.CriticalError -> {
+                            appendLine("💥 Critical error: ${result.error}")
+                        }
+                    }
+                }
+
+            } ?: "❌ SipCoreManager not initialized"
+
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error in manual boot recovery: ${e.message}" }
+            "❌ Error in boot recovery: ${e.message}"
+        }
+    }
+
+
+    suspend fun registerAccountForBoot(
+        username: String,
+        password: String,
+        domain: String,
+        pushToken: String? = null,
+        pushProvider: String = "fcm"
+    ): String {
+        checkInitialized()
+
+        val accountKey = "$username@$domain"
+
+        return try {
+            log.d(tag = TAG) { "Registering account for boot: $accountKey" }
+
+            // Usar register2 que está optimizado para modo push
+            sipCoreManager?.register2(
+                username = username,
+                password = password,
+                domain = domain,
+                provider = pushProvider,
+                token = pushToken ?: ""
+            )
+
+            // Esperar un poco para que se complete el proceso
+            delay(3000)
+
+            // Verificar resultado
+            val state = getRegistrationState(username, domain)
+
+            buildString {
+                appendLine("=== BOOT REGISTRATION RESULT ===")
+                appendLine("Account: $accountKey")
+                appendLine("State: $state")
+                appendLine("Mode: PUSH (Boot optimized)")
+
+                when (state) {
+                    RegistrationState.OK -> {
+                        appendLine("✅ Registration successful")
+                        appendLine("Account ready for push notifications")
+                    }
+                    RegistrationState.IN_PROGRESS -> {
+                        appendLine("🔄 Registration in progress")
+                        appendLine("This is normal for boot registration")
+                    }
+                    RegistrationState.FAILED -> {
+                        appendLine("❌ Registration failed")
+                        appendLine("Automatic retries are scheduled")
+                    }
+                    else -> {
+                        appendLine("ℹ️ Registration state: $state")
+                    }
+                }
+            }
+
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error in boot registration: ${e.message}" }
+            "❌ Boot registration error: ${e.message}"
+        }
+    }
+
+    fun performRegistrationHealthCheck(): String {
+        checkInitialized()
+
+        return try {
+            sipCoreManager?.performRegistrationHealthCheck()
+                ?: "❌ SipCoreManager not available"
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error in health check: ${e.message}" }
+            "❌ Health check error: ${e.message}"
+        }
+    }
     /**
      * NUEVO: Limpia estados iniciales erróneos
      */
@@ -457,8 +595,250 @@ class EddysSipLibrary private constructor() {
             }
         }
     }
+    suspend fun forceReregisterAll(): String {
+        checkInitialized()
+
+        return try {
+            log.d(tag = TAG) { "Force re-registration initiated" }
+
+            sipCoreManager?.forceReregisterAllAccounts()
+                ?: "❌ SipCoreManager not available"
+
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error in force re-registration: ${e.message}" }
+            "❌ Force re-registration error: ${e.message}"
+        }
+    }
+
+    /**
+     * NUEVO: Diagnóstico completo del estado de registro después del boot
+     */
+    fun getBootRegistrationDiagnostic(): String {
+        checkInitialized()
+
+        return buildString {
+            appendLine("=== BOOT REGISTRATION DIAGNOSTIC ===")
+            appendLine("Timestamp: ${System.currentTimeMillis()}")
+
+            try {
+                sipCoreManager?.let { coreManager ->
+                    appendLine("Library initialized: $isInitialized")
+                    appendLine("SipCore healthy: ${coreManager.isSipCoreManagerHealthy()}")
+                    appendLine("Network available: ${coreManager.networkManager.isNetworkAvailable()}")
+                    appendLine("App in background: ${coreManager.isAppInBackground}")
+
+                    appendLine("\n--- Accounts Status ---")
+                    val allStates = getAllRegistrationStates()
+                    appendLine("Total accounts: ${allStates.size}")
+
+                    if (allStates.isEmpty()) {
+                        appendLine("⚠️ No accounts found in memory")
+
+                        // Verificar BD
+                        try {
+                            val dbManager = coreManager.getDatabaseManager()
+                            val dbAccounts = runBlocking {
+                                dbManager?.getRegisteredSipAccounts()?.first() ?: emptyList()
+                            }
+                            appendLine("Accounts in database: ${dbAccounts.size}")
+
+                            if (dbAccounts.isNotEmpty()) {
+                                appendLine("❌ ISSUE: Accounts exist in DB but not loaded in memory")
+                                appendLine("💡 SOLUTION: Run forceBootRecovery()")
+                            }
+                        } catch (e: Exception) {
+                            appendLine("❌ Error checking database: ${e.message}")
+                        }
+                    } else {
+                        allStates.forEach { (account, state) ->
+                            val emoji = when (state) {
+                                RegistrationState.OK -> "✅"
+                                RegistrationState.FAILED -> "❌"
+                                RegistrationState.IN_PROGRESS -> "🔄"
+                                RegistrationState.NONE -> "⚪"
+                                else -> "❓"
+                            }
+                            appendLine("$emoji $account: $state")
+                        }
+
+                        // Estadísticas
+                        val successful = allStates.values.count { it == RegistrationState.OK }
+                        val failed = allStates.values.count { it == RegistrationState.FAILED }
+                        val inProgress = allStates.values.count { it == RegistrationState.IN_PROGRESS }
+
+                        appendLine("\n--- Summary ---")
+                        appendLine("Successful: $successful")
+                        appendLine("Failed: $failed")
+                        appendLine("In Progress: $inProgress")
+
+                        if (failed > 0) {
+                            appendLine("\n❌ ISSUE: $failed account(s) have FAILED state")
+                            appendLine("💡 SOLUTION: Run performRegistrationHealthCheck() or forceReregisterAll()")
+                        }
+
+                        if (successful == 0 && allStates.isNotEmpty()) {
+                            appendLine("\n⚠️ WARNING: No accounts successfully registered")
+                            appendLine("💡 This is critical for boot scenarios")
+                        }
+                    }
+
+                    appendLine("\n--- Push Mode Status ---")
+                    val pushMode = getCurrentPushMode()
+                    val isInPush = isInPushMode()
+                    appendLine("Current mode: $pushMode")
+                    appendLine("Is in push: $isInPush")
+
+                    if (!isInPush && coreManager.isAppInBackground) {
+                        appendLine("⚠️ WARNING: App is in background but not in push mode")
+                        appendLine("💡 This may indicate a problem with push mode transitions")
+                    }
+
+                    appendLine("\n--- Recommendations ---")
+                    when {
+                        allStates.isEmpty() -> {
+                            appendLine("1. Run forceBootRecovery() to recover accounts from database")
+                            appendLine("2. If no accounts in DB, re-register using registerAccountForBoot()")
+                        }
+//                        failed > 0 -> {
+//                            appendLine("1. Run performRegistrationHealthCheck() first")
+//                            appendLine("2. If issues persist, run forceReregisterAll()")
+//                            appendLine("3. Check network connectivity")
+//                        }
+//                        successful > 0 -> {
+//                            appendLine("✅ System appears healthy")
+//                            if (!isInPush && coreManager.isAppInBackground) {
+//                                appendLine("Consider switching to push mode manually")
+//                            }
+//                        }
+                        else -> {
+                            appendLine("1. Check network connectivity")
+                            appendLine("2. Verify account credentials in database")
+                            appendLine("3. Consider complete re-initialization")
+                        }
+                    }
+
+                } ?: appendLine("❌ SipCoreManager not initialized")
+
+            } catch (e: Exception) {
+                appendLine("❌ Error generating diagnostic: ${e.message}")
+            }
+        }
+    }
+
+    fun initializeForBoot(
+        application: Application,
+        config: SipConfig = SipConfig(),
+        autoRecoverAccounts: Boolean = true
+    ) {
+        try {
+            log.d(tag = TAG) { "Initializing EddysSipLibrary for boot scenario" }
+
+            // Inicialización normal
+            initialize(application, config, enableDatabase = true)
+
+            if (autoRecoverAccounts) {
+                // Programar recuperación automática después de un delay
+                CoroutineScope(Dispatchers.IO).launch {
+                    delay(5000) // 5 segundos para que todo se inicialice
+
+                    try {
+                        log.d(tag = TAG) { "Starting automatic account recovery after boot initialization" }
+                        val result = forceBootRecovery()
+                        log.d(tag = TAG) { "Boot recovery completed: $result" }
+                    } catch (e: Exception) {
+                        log.e(tag = TAG) { "Error in automatic boot recovery: ${e.message}" }
+                    }
+                }
+            }
+
+            log.d(tag = TAG) { "Boot initialization completed" }
+
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error in boot initialization: ${e.message}" }
+            throw SipLibraryException("Failed to initialize for boot", e)
+        }
+    }
 
 
+    fun isPushReadyForBoot(): Pair<Boolean, String> {
+        checkInitialized()
+
+        return try {
+            val allStates = getAllRegistrationStates()
+            val registeredCount = allStates.values.count { it == RegistrationState.OK }
+            val isInPushMode = isInPushMode()
+            val networkAvailable = sipCoreManager?.networkManager?.isNetworkAvailable() ?: false
+
+            val isReady = registeredCount > 0 && isInPushMode && networkAvailable
+
+            val message = buildString {
+                appendLine("Push readiness check:")
+                appendLine("- Registered accounts: $registeredCount")
+                appendLine("- Push mode active: $isInPushMode")
+                appendLine("- Network available: $networkAvailable")
+                appendLine("- Overall ready: $isReady")
+
+                if (!isReady) {
+                    appendLine("\nIssues:")
+                    if (registeredCount == 0) appendLine("- No accounts registered")
+                    if (!isInPushMode) appendLine("- Not in push mode")
+                    if (!networkAvailable) appendLine("- Network not available")
+                }
+            }
+
+            Pair(isReady, message)
+
+        } catch (e: Exception) {
+            val error = "Error checking push readiness: ${e.message}"
+            log.e(tag = TAG) { error }
+            Pair(false, error)
+        }
+    }
+
+    data class BootConfiguration(
+        val autoRecoverAccounts: Boolean = true,
+        val maxRecoveryRetries: Int = 5,
+        val recoveryDelayMs: Long = 5000L,
+        val forcesPushMode: Boolean = true,
+        val networkWaitTimeoutMs: Long = 30000L,
+        val enableHealthCheck: Boolean = true,
+        val healthCheckIntervalMs: Long = 60000L
+    )
+
+    /**
+     * NUEVO: Aplica configuración específica para boot
+     */
+    fun applyBootConfiguration(bootConfig: BootConfiguration) {
+        log.d(tag = TAG) { "Applying boot configuration: $bootConfig" }
+
+        // Si se requiere forzar modo push
+        if (bootConfig.forcesPushMode) {
+            switchToPushMode()
+        }
+
+        // Si se habilita health check automático
+        if (bootConfig.enableHealthCheck) {
+            CoroutineScope(Dispatchers.IO).launch {
+                while (isInitialized) {
+                    try {
+                        delay(bootConfig.healthCheckIntervalMs)
+
+                        val healthResult = performRegistrationHealthCheck()
+                        log.d(tag = TAG) { "Scheduled health check completed" }
+
+                        // Si encuentra muchos problemas, ejecutar corrección
+                        if (healthResult.contains("❌")) {
+                            log.w(tag = TAG) { "Health check found issues, attempting correction" }
+                            forceReregisterAll()
+                        }
+
+                    } catch (e: Exception) {
+                        log.e(tag = TAG) { "Error in scheduled health check: ${e.message}" }
+                    }
+                }
+            }
+        }
+    }
     /**
      * Método setupInternalListeners() COMPLETO con reconexión automática
      */
