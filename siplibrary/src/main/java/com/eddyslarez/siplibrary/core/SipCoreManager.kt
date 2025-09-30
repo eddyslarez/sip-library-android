@@ -69,6 +69,7 @@ class SipCoreManager private constructor(
     val webRtcManager = WebRtcManagerFactory.createWebRtcManager(application)
     private val platformRegistration = PlatformRegistration()
     internal val messageHandler = SipMessageHandler(this)
+    private lateinit var registrationGuardian: RegistrationGuardianManager
 
     // Estados de registro por cuenta
     private val _registrationStates = MutableStateFlow<Map<String, RegistrationState>>(emptyMap())
@@ -144,13 +145,26 @@ class SipCoreManager private constructor(
 
         // NUEVO: Inicializar sistema de recuperación de boot
         setupBootRegistrationRecovery()
+        initializeRegistrationGuardian()
 
         startAccountSyncTask()
         CallStateManager.initialize()
 
         log.d(tag = TAG) { "SIP Core initialization completed" }
     }
-
+    private fun initializeRegistrationGuardian() {
+        try {
+            registrationGuardian = RegistrationGuardianManager(
+                sipCoreManager = this,
+                networkManager = networkManager,
+                databaseManager = getDatabaseManager()!!
+            )
+            registrationGuardian.initialize()
+            log.d(tag = TAG) { "RegistrationGuardian initialized successfully" }
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error initializing RegistrationGuardian: ${e.message}" }
+        }
+    }
     private fun setupBootRegistrationRecovery() {
         CoroutineScope(Dispatchers.IO).launch {
             try {
@@ -1349,6 +1363,24 @@ class SipCoreManager private constructor(
             )
         }
     }
+    suspend fun forceGuardianRecovery(): String {
+        return try {
+            registrationGuardian.forceRecoverAllAccounts()
+        } catch (e: Exception) {
+            "Error in guardian recovery: ${e.message}"
+        }
+    }
+
+    // NUEVO: Diagnóstico del guardian
+    fun getGuardianDiagnostic(): String {
+        return try {
+            registrationGuardian.getDiagnosticInfo()
+        } catch (e: Exception) {
+            "Guardian not available: ${e.message}"
+        }
+    }
+
+
     private fun handleRegistrationFailure(accountKey: String, reason: String) {
         log.e(tag = TAG) { "Handling registration failure for $accountKey: $reason" }
 
@@ -1357,35 +1389,46 @@ class SipCoreManager private constructor(
         // Actualizar estado
         updateRegistrationState(accountKey, RegistrationState.FAILED)
 
-        // Programar reintento automático después de un delay
-        CoroutineScope(Dispatchers.IO).launch {
-            delay(30000L) // 30 segundos
-
-            // Verificar si sigue siendo necesario el reintento
-            if (activeAccounts[accountKey]?.isRegistered == false) {
-                log.d(tag = TAG) { "Attempting automatic recovery for failed registration: $accountKey" }
-
-                try {
-                    // Limpiar conexión existente
-                    accountInfo.webSocketClient?.close()
-                    accountInfo.webSocketClient = null
-                    delay(2000)
-
-                    // Intentar registro desde cero
-                    val success = safeRegister(accountInfo, isAppInBackground)
-
-                    if (!success) {
-                        // Si sigue fallando, programar otro intento más tardío
-                        scheduleDelayedRecovery(accountKey, 60000L) // 1 minuto
-                    }
-
-                } catch (e: Exception) {
-                    log.e(tag = TAG) { "Error in automatic recovery for $accountKey: ${e.message}" }
-                    scheduleDelayedRecovery(accountKey, 60000L)
-                }
-            }
-        }
+        // El Guardian se encargará automáticamente del reintento
+        // No hacer nada más aquí - dejar que el health check lo detecte
     }
+//    private fun handleRegistrationFailure(accountKey: String, reason: String) {
+//        log.e(tag = TAG) { "Handling registration failure for $accountKey: $reason" }
+//
+//        val accountInfo = activeAccounts[accountKey] ?: return
+//
+//        // Actualizar estado
+//        updateRegistrationState(accountKey, RegistrationState.FAILED)
+//
+//        // Programar reintento automático después de un delay
+//        CoroutineScope(Dispatchers.IO).launch {
+//            delay(30000L) // 30 segundos
+//
+//            // Verificar si sigue siendo necesario el reintento
+//            if (activeAccounts[accountKey]?.isRegistered == false) {
+//                log.d(tag = TAG) { "Attempting automatic recovery for failed registration: $accountKey" }
+//
+//                try {
+//                    // Limpiar conexión existente
+//                    accountInfo.webSocketClient?.close()
+//                    accountInfo.webSocketClient = null
+//                    delay(2000)
+//
+//                    // Intentar registro desde cero
+//                    val success = safeRegister(accountInfo, isAppInBackground)
+//
+//                    if (!success) {
+//                        // Si sigue fallando, programar otro intento más tardío
+//                        scheduleDelayedRecovery(accountKey, 60000L) // 1 minuto
+//                    }
+//
+//                } catch (e: Exception) {
+//                    log.e(tag = TAG) { "Error in automatic recovery for $accountKey: ${e.message}" }
+//                    scheduleDelayedRecovery(accountKey, 60000L)
+//                }
+//            }
+//        }
+//    }
 
     private fun scheduleDelayedRecovery(accountKey: String, delayMs: Long) {
         CoroutineScope(Dispatchers.IO).launch {
@@ -1933,8 +1976,13 @@ class SipCoreManager private constructor(
     fun dispose() {
         isShuttingDown = true
 
-        // Cancelar tareas
         accountSyncJob?.cancel()
+
+        try {
+            registrationGuardian.dispose()
+        } catch (e: Exception) {
+            log.e(tag = TAG) { "Error disposing guardian: ${e.message}" }
+        }
 
         audioManager.dispose()
         reconnectionManager.dispose()
@@ -1947,7 +1995,6 @@ class SipCoreManager private constructor(
         CallStateManager.resetToIdle()
         CallStateManager.clearHistory()
 
-        // Cerrar base de datos si es necesario
         databaseManager?.closeDatabase()
     }
 

@@ -291,6 +291,28 @@ class EddysSipLibrary private constructor() {
             throw SipLibraryException("Failed to initialize library", e)
         }
     }
+
+    // NUEVO: Método para forzar recuperación desde la UI
+    suspend fun forceGuardianRecovery(): String {
+        checkInitialized()
+        return try {
+            sipCoreManager?.forceGuardianRecovery()
+                ?: "❌ SipCoreManager not available"
+        } catch (e: Exception) {
+            "❌ Guardian recovery error: ${e.message}"
+        }
+    }
+
+    // NUEVO: Diagnóstico del guardian
+    fun getGuardianDiagnostic(): String {
+        checkInitialized()
+        return try {
+            sipCoreManager?.getGuardianDiagnostic()
+                ?: "❌ SipCoreManager not available"
+        } catch (e: Exception) {
+            "❌ Error getting guardian diagnostic: ${e.message}"
+        }
+    }
 //    fun initialize(
 //        application: Application,
 //        config: SipConfig = SipConfig(),
@@ -626,7 +648,8 @@ class EddysSipLibrary private constructor() {
                     appendLine("SipCore healthy: ${coreManager.isSipCoreManagerHealthy()}")
                     appendLine("Network available: ${coreManager.networkManager.isNetworkAvailable()}")
                     appendLine("App in background: ${coreManager.isAppInBackground}")
-
+                    appendLine("\n--- Registration Guardian Status ---")
+                    appendLine(coreManager.getGuardianDiagnostic())
                     appendLine("\n--- Accounts Status ---")
                     val allStates = getAllRegistrationStates()
                     appendLine("Total accounts: ${allStates.size}")
