@@ -27,6 +27,17 @@ enum class AudioUnitTypes {
 enum class AudioUnitCompatibilities {
     PLAY, RECORD, ALL, UNKNOWN
 }
+// Agregar extensión para conversión más limpia
+fun AudioDevice.toSimpleDescriptor(): String {
+    return when {
+        isBluetooth -> "bluetooth"
+        audioUnit.type == AudioUnitTypes.SPEAKER -> "speaker"
+        audioUnit.type == AudioUnitTypes.HEADSET ||
+                audioUnit.type == AudioUnitTypes.HEADPHONES -> "headset"
+        audioUnit.type == AudioUnitTypes.EARPIECE -> "earpiece"
+        else -> "unknown"
+    }
+}
 
 data class AudioDevice(
     val name: String,                    // Display name

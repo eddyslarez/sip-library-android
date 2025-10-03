@@ -125,7 +125,7 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
         }
     }
 
-   override fun setBluetoothAutoPriority(enabled: Boolean) {
+    override fun setBluetoothAutoPriority(enabled: Boolean) {
         _isBluetoothPriorityEnabled.value = enabled
         if (enabled) {
             // Aplicar inmediatamente si está habilitado
@@ -371,6 +371,53 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
         return peerConnection?.localDescription?.sdp
     }
 
+    override fun setActiveAudioRoute(audioUnitType: AudioUnitTypes): Boolean {
+        log.d(TAG) { "Setting active audio route to: $audioUnitType" }
+
+        val deviceType = when (audioUnitType) {
+            AudioUnitTypes.BLUETOOTH, AudioUnitTypes.BLUETOOTHA2DP -> AudioDeviceType.BLUETOOTH
+            AudioUnitTypes.SPEAKER -> AudioDeviceType.SPEAKER_PHONE
+            AudioUnitTypes.HEADSET, AudioUnitTypes.HEADPHONES -> AudioDeviceType.WIRED_HEADSET
+            AudioUnitTypes.EARPIECE -> AudioDeviceType.EARPIECE
+            else -> {
+                log.w(TAG) { "Unsupported audio unit type: $audioUnitType" }
+                return false
+            }
+        }
+
+        return selectAudioDevice(deviceType)
+    }
+
+    override fun getActiveAudioRoute(): AudioUnitTypes? {
+        val currentDevice = _currentAudioDevice.value
+
+        return when (currentDevice) {
+            AudioDeviceType.BLUETOOTH -> AudioUnitTypes.BLUETOOTH
+            AudioDeviceType.SPEAKER_PHONE -> AudioUnitTypes.SPEAKER
+            AudioDeviceType.WIRED_HEADSET -> AudioUnitTypes.HEADSET
+            AudioDeviceType.EARPIECE -> AudioUnitTypes.EARPIECE
+            AudioDeviceType.NONE -> null
+        }
+    }
+
+    override fun getAvailableAudioRoutes(): Set<AudioUnitTypes> {
+        updateAvailableAudioDevices()
+
+        return _availableAudioDevices.value.mapNotNull { deviceType ->
+            when (deviceType) {
+                AudioDeviceType.BLUETOOTH -> AudioUnitTypes.BLUETOOTH
+                AudioDeviceType.SPEAKER_PHONE -> AudioUnitTypes.SPEAKER
+                AudioDeviceType.WIRED_HEADSET -> AudioUnitTypes.HEADSET
+                AudioDeviceType.EARPIECE -> AudioUnitTypes.EARPIECE
+                AudioDeviceType.NONE -> null
+            }
+        }.toSet()
+    }
+
+    override fun enableBluetoothAutoSwitch(enabled: Boolean) {
+        setBluetoothAutoPriority(enabled)
+    }
+
     override fun diagnoseAudioIssues(): String {
         return buildString {
             appendLine("=== AUDIO DIAGNOSIS ===")
@@ -606,6 +653,7 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
                             devices.add(AudioDeviceType.WIRED_HEADSET)
                         }
                     }
+
                     AudioDeviceInfo.TYPE_BLUETOOTH_SCO,
                     AudioDeviceInfo.TYPE_BLUETOOTH_A2DP -> {
                         if (!devices.contains(AudioDeviceType.BLUETOOTH)) {
@@ -635,7 +683,8 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
 
             // Si Bluetooth se conectó y no estaba antes, activar auto-prioridad
             if (devices.contains(AudioDeviceType.BLUETOOTH) &&
-                !oldDevices.contains(AudioDeviceType.BLUETOOTH)) {
+                !oldDevices.contains(AudioDeviceType.BLUETOOTH)
+            ) {
                 log.d(TAG) { "New Bluetooth device detected" }
                 onBluetoothConnectionChanged(true)
             }
@@ -646,35 +695,53 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
      * Función simplificada que SipManagerImpl puede usar
      * Maneja automáticamente la prioridad de Bluetooth
      */
-  override  fun applyAudioRouteChange(audioUnitType: AudioUnitTypes): Boolean {
-        log.d(TAG) { "Applying audio route change to: $audioUnitType" }
-
-        val deviceType = when (audioUnitType) {
-            AudioUnitTypes.BLUETOOTH -> AudioDeviceType.BLUETOOTH
-            AudioUnitTypes.SPEAKER -> AudioDeviceType.SPEAKER_PHONE
-            AudioUnitTypes.HEADSET -> AudioDeviceType.WIRED_HEADSET
-            AudioUnitTypes.EARPIECE -> AudioDeviceType.EARPIECE
-            else -> AudioDeviceType.EARPIECE
-        }
-
-        return selectAudioDevice(deviceType)
+//    override fun applyAudioRouteChange(audioUnitType: AudioUnitTypes): Boolean {
+//        log.d(TAG) { "Applying audio route change to: $audioUnitType" }
+//
+//        val deviceType = when (audioUnitType) {
+//            AudioUnitTypes.BLUETOOTH -> AudioDeviceType.BLUETOOTH
+//            AudioUnitTypes.SPEAKER -> AudioDeviceType.SPEAKER_PHONE
+//            AudioUnitTypes.HEADSET -> AudioDeviceType.WIRED_HEADSET
+//            AudioUnitTypes.EARPIECE -> AudioDeviceType.EARPIECE
+//            else -> AudioDeviceType.EARPIECE
+//        }
+//
+//        return selectAudioDevice(deviceType)
+//    }
+    override fun applyAudioRouteChange(audioUnitType: AudioUnitTypes): Boolean {
+        return setActiveAudioRoute(audioUnitType)
     }
-
     /**
      * Obtiene el dispositivo actualmente activo en formato AudioUnit
      */
-   override fun getCurrentActiveAudioUnit(): AudioUnit? {
-        val currentDevice = getCurrentOutputDevice() ?: getCurrentInputDevice()
-        return currentDevice?.audioUnit
+    override fun getCurrentActiveAudioUnit(): AudioUnit? {
+        val activeRoute = getActiveAudioRoute() ?: return null
+
+        return AudioUnit(
+            type = activeRoute,
+            capability = AudioUnitCompatibilities.ALL,
+            isCurrent = true,
+            isDefault = activeRoute == AudioUnitTypes.EARPIECE
+        )
     }
 
     /**
      * Obtiene todos los dispositivos disponibles en formato AudioUnit
      */
-   override fun getAvailableAudioUnits(): Set<AudioUnit> {
-        val (inputDevices, outputDevices) = getAllAudioDevices()
-        return (inputDevices + outputDevices).map { it.audioUnit }.toSet()
+    override fun getAvailableAudioUnits(): Set<AudioUnit> {
+        val routes = getAvailableAudioRoutes()
+        val currentRoute = getActiveAudioRoute()
+
+        return routes.map { type ->
+            AudioUnit(
+                type = type,
+                capability = AudioUnitCompatibilities.ALL,
+                isCurrent = type == currentRoute,
+                isDefault = type == AudioUnitTypes.EARPIECE
+            )
+        }.toSet()
     }
+
     private fun selectDefaultAudioDevice() {
         val availableDevices = _availableAudioDevices.value
 
@@ -701,18 +768,22 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
                     audioManager.isSpeakerphoneOn = true
                     stopBluetoothSco()
                 }
+
                 AudioDeviceType.EARPIECE -> {
                     audioManager.isSpeakerphoneOn = false
                     stopBluetoothSco()
                 }
+
                 AudioDeviceType.WIRED_HEADSET -> {
                     audioManager.isSpeakerphoneOn = false
                     stopBluetoothSco()
                 }
+
                 AudioDeviceType.BLUETOOTH -> {
                     audioManager.isSpeakerphoneOn = false
                     startBluetoothSco()
                 }
+
                 AudioDeviceType.NONE -> return false
             }
 
@@ -779,7 +850,7 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
      * Función pública para forzar verificación de prioridad Bluetooth
      * Esta es la que puede ser llamada desde SipManagerImpl
      */
-   override fun refreshAudioDevicesWithBluetoothPriority() {
+    override fun refreshAudioDevicesWithBluetoothPriority() {
         log.d(TAG) { "Refreshing audio devices with Bluetooth priority check" }
         updateAvailableAudioDevices()
         ensureBluetoothPriorityIfAvailable()
@@ -797,7 +868,7 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
     /**
      * Función para ser llamada cuando el estado de Bluetooth cambia
      */
-   override fun onBluetoothConnectionChanged(isConnected: Boolean) {
+    override fun onBluetoothConnectionChanged(isConnected: Boolean) {
         log.d(TAG) { "Bluetooth connection changed: $isConnected" }
 
         if (isConnected && _isBluetoothPriorityEnabled.value) {

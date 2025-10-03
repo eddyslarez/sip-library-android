@@ -440,12 +440,13 @@ class EddysSipLibrary private constructor() {
             log.d(tag = TAG) { "Registering account for boot: $accountKey" }
 
             // Usar register2 que está optimizado para modo push
-            sipCoreManager?.register2(
+            sipCoreManager?.register(
                 username = username,
                 password = password,
                 domain = domain,
                 provider = pushProvider,
-                token = pushToken ?: ""
+                token = pushToken ?: "",
+                forcePushMode= true
             )
 
             // Esperar un poco para que se complete el proceso
@@ -1844,51 +1845,27 @@ class EddysSipLibrary private constructor() {
             password: String,
             domain: String,
             pushToken: String? = null,
-            pushProvider: String = "fcm"
+            pushProvider: String = "fcm",
+            forcePushMode: Boolean = false
         ) {
             checkInitialized()
 
             val finalDomain = domain
             val finalToken = pushToken ?: ""
 
-            log.d(tag = TAG) { "Registering account: $username@$finalDomain" }
+            log.d(tag = TAG) { "Registering account: $username@$finalDomain (push=$forcePushMode)" }
 
             sipCoreManager?.register(
                 username = username,
                 password = password,
                 domain = finalDomain,
                 provider = pushProvider,
-                token = finalToken
+                token = finalToken,
+                forcePushMode = forcePushMode
             )
         }
 
     /**
-     * Registra una cuenta SIP
-     */
-    suspend fun registerAccount2(
-        username: String,
-        password: String,
-        domain: String,
-        pushToken: String? = null,
-        pushProvider: String = "fcm"
-    ) {
-        checkInitialized()
-
-        val finalDomain = domain
-        val finalToken = pushToken ?: ""
-
-        log.d(tag = TAG) { "Registering account: $username@$finalDomain" }
-
-        sipCoreManager?.register2(
-            username = username,
-            password = password,
-            domain = finalDomain,
-            provider = pushProvider,
-            token = finalToken
-        )
-    }
-
-        /**
          * Desregistra una cuenta SIP específica
          */
 //  suspend  fun unregisterAccount(username: String, domain: String) {
