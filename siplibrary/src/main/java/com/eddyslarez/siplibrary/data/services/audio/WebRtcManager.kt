@@ -24,17 +24,12 @@ interface WebRtcManager {
      */
     suspend fun createOffer(): String
 
-    // NUEVO: Método simplificado para cambio de audio
     fun setActiveAudioRoute(audioUnitType: AudioUnitTypes): Boolean
 
-    // NUEVO: Obtener dispositivo activo directamente
     fun getActiveAudioRoute(): AudioUnitTypes?
 
-    // NUEVO: Obtener rutas disponibles (simplificado)
     fun getAvailableAudioRoutes(): Set<AudioUnitTypes>
 
-    // NUEVO: Auto-gestión de Bluetooth
-    fun enableBluetoothAutoSwitch(enabled: Boolean)
 
     /**
      * Create an SDP answer in response to an offer
@@ -70,7 +65,6 @@ interface WebRtcManager {
     fun applyAudioRouteChange(audioUnitType: AudioUnitTypes): Boolean
     fun getAvailableAudioUnits(): Set<AudioUnit>
     fun getCurrentActiveAudioUnit(): AudioUnit?
-    fun setBluetoothAutoPriority(enabled: Boolean)
     /**
      * Enable or disable the local audio track
      * @param enabled Whether audio should be enabled

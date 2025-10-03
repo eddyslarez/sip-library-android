@@ -92,8 +92,6 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
     private val _availableAudioDevices = MutableStateFlow<List<AudioDeviceType>>(emptyList())
     val availableAudioDevices: StateFlow<List<AudioDeviceType>> = _availableAudioDevices
 
-    private val _isBluetoothPriorityEnabled = MutableStateFlow(true)
-    val isBluetoothPriorityEnabled: StateFlow<Boolean> = _isBluetoothPriorityEnabled
 
     enum class AudioDeviceType {
         SPEAKER_PHONE, WIRED_HEADSET, EARPIECE, BLUETOOTH, NONE
@@ -122,14 +120,6 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
             currentOutputDevice = null
         } catch (e: Exception) {
             log.e(TAG) { "Error during disposal: ${e.message}" }
-        }
-    }
-
-    override fun setBluetoothAutoPriority(enabled: Boolean) {
-        _isBluetoothPriorityEnabled.value = enabled
-        if (enabled) {
-            // Aplicar inmediatamente si está habilitado
-            ensureBluetoothPriorityIfAvailable()
         }
     }
 
@@ -414,9 +404,6 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
         }.toSet()
     }
 
-    override fun enableBluetoothAutoSwitch(enabled: Boolean) {
-        setBluetoothAutoPriority(enabled)
-    }
 
     override fun diagnoseAudioIssues(): String {
         return buildString {
@@ -522,12 +509,11 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
     private fun selectDefaultAudioDeviceWithPriority() {
         val availableDevices = _availableAudioDevices.value
 
-        log.d(TAG) { "Selecting audio device with priority. Available: $availableDevices" }
-        log.d(TAG) { "Bluetooth priority enabled: ${_isBluetoothPriorityEnabled.value}" }
+        log.d(TAG) { "Selecting audio device with Bluetooth priority. Available: $availableDevices" }
 
         val defaultDevice = when {
-            // Prioridad 1: Bluetooth (si la auto-prioridad está habilitada)
-            _isBluetoothPriorityEnabled.value && availableDevices.contains(AudioDeviceType.BLUETOOTH) -> {
+            // Prioridad 1: Bluetooth (SIEMPRE tiene máxima prioridad)
+            availableDevices.contains(AudioDeviceType.BLUETOOTH) -> {
                 log.d(TAG) { "✅ Selecting Bluetooth as priority device" }
                 AudioDeviceType.BLUETOOTH
             }
@@ -538,12 +524,12 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
             }
             // Prioridad 3: Speaker (corneta del dispositivo)
             availableDevices.contains(AudioDeviceType.EARPIECE) -> {
-                log.d(TAG) { "✅ Selecting Speaker as priority device" }
+                log.d(TAG) { "✅ Selecting Earpiece as priority device" }
                 AudioDeviceType.EARPIECE
             }
-            // Prioridad 4: Earpiece (altavoz)
+            // Prioridad 4: Speaker como fallback
             else -> {
-                log.d(TAG) { "✅ Selecting Earpiece as default device" }
+                log.d(TAG) { "✅ Selecting Speaker as default device" }
                 AudioDeviceType.SPEAKER_PHONE
             }
         }
@@ -813,11 +799,6 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
      * Verifica y activa automáticamente Bluetooth si está disponible y la prioridad está habilitada
      */
     private fun ensureBluetoothPriorityIfAvailable() {
-        if (!_isBluetoothPriorityEnabled.value) {
-            log.d(TAG) { "Bluetooth auto-priority is disabled" }
-            return
-        }
-
         try {
             updateAvailableAudioDevices()
 
@@ -825,11 +806,11 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
                 _currentAudioDevice.value != AudioDeviceType.BLUETOOTH
             ) {
 
-                log.d(TAG) { "Bluetooth available and priority enabled, switching automatically" }
+                log.d(TAG) { "Bluetooth available, switching automatically (priority always enabled)" }
 
                 val success = selectAudioDevice(AudioDeviceType.BLUETOOTH)
                 if (success) {
-                    log.d(TAG) { "Successfully switched to Bluetooth with auto-priority" }
+                    log.d(TAG) { "Successfully switched to Bluetooth with automatic priority" }
 
                     // Actualizar dispositivos actuales
                     currentInputDevice = createBluetoothMicDevice()
@@ -860,7 +841,7 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
      * Función llamada cuando se inicia una llamada para asegurar el mejor dispositivo
      */
     override fun prepareAudioForCall() {
-        log.d(TAG) { "Preparing audio for call with device prioritization" }
+        log.d(TAG) { "Preparing audio for call with Bluetooth prioritization" }
         startAudioManager()
         ensureBluetoothPriorityIfAvailable()
     }
@@ -871,7 +852,7 @@ class AndroidWebRtcManager(private val application: Application) : WebRtcManager
     override fun onBluetoothConnectionChanged(isConnected: Boolean) {
         log.d(TAG) { "Bluetooth connection changed: $isConnected" }
 
-        if (isConnected && _isBluetoothPriorityEnabled.value) {
+        if (isConnected) {
             // Pequeño delay para asegurar que el dispositivo esté listo
             Handler(Looper.getMainLooper()).postDelayed({
                 refreshAudioDevicesWithBluetoothPriority()

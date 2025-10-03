@@ -974,16 +974,6 @@ class EddysSipLibrary private constructor() {
 //        }
 //    }
 
-    fun setBluetoothAutoPriority(enabled: Boolean) {
-        checkInitialized()
-        try {
-            sipCoreManager?.webRtcManager?.setBluetoothAutoPriority(enabled)
-            log.d(tag = TAG) { "Bluetooth auto priority set to: $enabled" }
-        } catch (e: Exception) {
-            log.e(tag = TAG) { "Error setting Bluetooth auto priority: ${e.message}" }
-        }
-    }
-
     private fun setupInternalListeners() {
         sipCoreManager?.let { manager ->
 
